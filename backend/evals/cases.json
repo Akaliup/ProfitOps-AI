@@ -1,0 +1,7 @@
+[
+  {"id":"ad-led-divergence","previous":{"sales":100000,"cogs":30000,"ad_spend":10000,"fulfillment":10000,"platform_fees":5000},"current":{"sales":120000,"cogs":36000,"ad_spend":45000,"fulfillment":14000,"platform_fees":6000},"expected_anomaly":true,"expected_primary":"ad_spend","expected_profit_delta":-26000},
+  {"id":"healthy-growth","previous":{"sales":100000,"cogs":30000,"ad_spend":10000},"current":{"sales":120000,"cogs":34000,"ad_spend":11000},"expected_anomaly":false,"expected_primary":"cogs","expected_profit_delta":15000},
+  {"id":"logistics-pressure","previous":{"sales":100000,"cogs":30000,"fulfillment":10000},"current":{"sales":110000,"cogs":33000,"fulfillment":30000},"expected_anomaly":true,"expected_primary":"fulfillment","expected_profit_delta":-13000},
+  {"id":"zero-baseline","previous":{},"current":{"sales":10000,"cogs":5000,"ad_spend":1000},"expected_anomaly":false,"expected_primary":"cogs","expected_profit_delta":4000},
+  {"id":"refund-pressure","previous":{"sales":100000,"refunds":1000},"current":{"sales":110000,"refunds":25000},"expected_anomaly":true,"expected_primary":"refunds","expected_profit_delta":-14000}
+]
