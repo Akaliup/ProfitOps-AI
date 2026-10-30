@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -117,10 +117,81 @@ class DriverReport(StrictModel):
     bridge_total: int
 
 
+ShortText = Annotated[str, Field(min_length=2, max_length=300)]
+LongText = Annotated[str, Field(min_length=2, max_length=800)]
+
+
+class LLMRootCause(StrictModel):
+    cause: ShortText
+    reasoning: LongText
+    evidence_ids: list[str] = Field(min_length=1, max_length=8)
+
+
+class LLMRecommendation(StrictModel):
+    action: ShortText
+    rationale: LongText
+    evidence_ids: list[str] = Field(min_length=1, max_length=8)
+    priority: Literal["high", "medium", "low"]
+
+
+class LLMExpectedImpact(StrictModel):
+    direction: Literal["improve", "neutral", "uncertain"]
+    horizon_days: int = Field(ge=1, le=90)
+    explanation: LongText
+
+
+class LLMAnalysisOutput(StrictModel):
+    summary: LongText
+    root_causes: list[LLMRootCause] = Field(min_length=1, max_length=5)
+    evidence_references: list[str] = Field(min_length=1, max_length=8)
+    recommendations: list[LLMRecommendation] = Field(min_length=1, max_length=5)
+    expected_impact: LLMExpectedImpact
+    risks: list[ShortText] = Field(max_length=6)
+    missing_information: list[ShortText] = Field(max_length=6)
+    confidence: float = Field(ge=0, le=1)
+
+
+class LLMUsage(StrictModel):
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    cached_tokens: int | None = Field(default=None, ge=0)
+
+
+class LLMErrorInfo(StrictModel):
+    code: str
+    message: str
+    retryable: bool = False
+
+
+class LLMRun(StrictModel):
+    status: Literal["llm_success", "deterministic_fallback", "llm_failed", "not_requested"]
+    configured: bool = False
+    provider: str = "deepseek"
+    model: str = "deepseek-flash"
+    reason: str | None = None
+    attempts: int = Field(default=0, ge=0, le=10)
+    latency_ms: float | None = Field(default=None, ge=0)
+    usage: LLMUsage | None = None
+    output: LLMAnalysisOutput | None = None
+    error: LLMErrorInfo | None = None
+
+    @model_validator(mode="after")
+    def validate_status(self):
+        if self.status == "llm_success" and self.output is None:
+            raise ValueError("llm_success 必须包含结构化输出")
+        if self.status == "llm_success" and self.error is not None:
+            raise ValueError("llm_success 不能同时包含错误")
+        if self.status == "llm_failed" and self.error is None:
+            raise ValueError("llm_failed 必须包含错误信息")
+        return self
+
+
 class RecommendationInput(StrictModel):
     analysis_id: str
     report: MetricsReport
     findings: DriverReport
+    llm: LLMRun | None = None
 
 
 class RecommendationOutput(StrictModel):

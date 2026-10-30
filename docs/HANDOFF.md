@@ -117,7 +117,7 @@ docker compose -f compose.yaml config --quiet
 ### 明确未实现
 
 - 真实 MCP Server（README 未声称已接入）。
-- 付费 LLM Provider；当前是确定性规则引擎，不需要 API Key。
+- DeepSeek Provider 已实现（Phase 2A）；Phase 2B 已建立 4 个合成案例的评测系统并完成真实调用，最新 `max_tokens=4000` 三次重复为 9/9 `llm_success`，详见 `docs/EVALUATION.md`。仍未做人工语义标注和跨模型对比。
 - 生产身份（OIDC）、租户隔离、权限后台、速率限制、密钥轮换。
 - Alembic 增量迁移；当前是 `create_all` + 版本化 Seed。
 - 持久化任务队列；分析使用 FastAPI BackgroundTasks，进程重启会把中断分析标记为 failed。
@@ -129,7 +129,7 @@ docker compose -f compose.yaml config --quiet
 1. **Git 基线已建立**：接管时仓库零 commit、全部文件未跟踪；用户随后明确要求提交，已在 `master` 建立根提交（67 个文件）。后续提交仍须遵守 `AGENTS.md`：由用户明确要求后才提交。
 2. **Docker/PostgreSQL 路径未实测**：这是交付清单里唯一明确未完成的运行项，也是面试时最容易被追问的环境问题。需要一台 Docker 可用的机器跑一次 `docker compose up --build`。
 3. **演示认证不是生产安全方案**：`/api/demo` 会返回公开演示 token；没有租户隔离、限流、审计防篡改。文档已明确标注，不能把它说成生产能力。
-4. **规则引擎不是 LLM**：建议文案和归因由确定性规则生成。这是为了可复现和“不让 LLM 编数字”，但如果面试官期待“LLM Agent”，需要主动解释边界与可替换 Provider 的设计。
+4. **LLM 已有门禁评测，但样本仍小**：Phase 2A 实现了 DeepSeek Provider、结构化输出和证据引用校验；Phase 2B 增加了 4 个合成案例、离线负向对照和真实三次重复（见 `docs/EVALUATION.md`）。最新 4000 复测为 9/9 通过，但只有 3 个异常案例、每个 3 次，没有人工语义标注或跨模型对比；面试时仍不能把规则输出说成 LLM 输出，应展示 `llm_success` 与降级状态的区分。
 5. **没有增量迁移**：修改模型后旧数据库不会自动加列/加约束；当前依赖删除数据库重建。生产化前必须补 Alembic。
 6. **后台任务是进程内的**：多 worker 部署时 BackgroundTasks 不会跨进程协调；重启会中断分析。MVP 可接受，生产需要队列 + worker。
 7. **单租户视图**：所有身份共享分析/建议/审计列表；没有按 actor 或 tenant 过滤。
@@ -150,8 +150,8 @@ docker compose -f compose.yaml config --quiet
 
 ### P2：Agent 能力
 
-7. 抽象 `ExplanationProvider` 接口：默认规则实现，可选接入真实 LLM；LLM 只负责解释与文案，数字仍来自确定性工具。
-8. 增加第二种演示场景（退款/履约驱动），让规则引擎的泛化能力在 UI 上可见。
+7. ~~抽象 LLM Provider 并接入真实 DeepSeek~~（Phase 2A 已完成真实调用；Phase 2B 已完成 4 案例门禁评测与数值一致性校验，剩余扩大样本、人工语义标注和跨模型对比）。
+8. 增加第二种演示场景（退款/履约驱动），让规则引擎与 LLM 的泛化能力在 UI 上可见。
 9. 增加 MCP Server（如果面试岗位强调工具协议），复用现有 Tool Registry 的 Schema。
 10. 增加利润计算的属性测试与更多边界样本。
 
@@ -210,3 +210,43 @@ python scripts/dev.py
 演示身份：`demo-analyst`（分析师）/ `demo-approver`（审批负责人）。所有执行均为 simulation，不调用真实广告、采购或支付系统。
 
 完整演示脚本与面试问答见 `docs/INTERVIEW.md`。
+
+## 12. Phase 2A：接入 DeepSeek 真实 LLM（2026-10-31）
+
+分支 `feat/deepseek-llm-agent`，基于 `4285afe`。本轮没有重写 Agent，而是在现有 LangGraph 工作流中增加 LLM 推理层。
+
+### 实际修改
+
+- 新增 `backend/app/llm.py`：统一 Provider 语义、`DeepSeekProvider`（OpenAI 兼容 `/chat/completions`、JSON mode、超时、有界重试、Token、耗时、稳定错误码）、JSON 容错解析。
+- 新增 `backend/app/llm_analysis.py`：中文系统提示词、确定性输入构造、证据引用校验。
+- `backend/app/schemas.py`：`LLMAnalysisOutput`、`LLMRun`、`LLMUsage`、`LLMErrorInfo` 等严格 Schema。
+- `backend/app/workflow.py`：新增 `llm_root_cause_analysis`、`verify_llm_evidence` 节点；降级/失败/未触发状态持久化与审计。
+- `backend/app/services.py`：提取确定性 `plan_action`；LLM 成功时仅替换问题描述并附加分析，动作与影响数字保持确定性。
+- `backend/app/config.py`、`.env.example`：`LLM_*` 环境变量；Key 使用 SecretStr；`.env` 继续被 Git 忽略。
+- `backend/app/main.py`、`views.py`：Provider 注入、`/health` 与 `/api/demo` 的 LLM 元数据、`result.engine`。
+- 前端 `types.ts`、`format.ts`、`App.tsx`、`styles.css`、`fixtures.ts`、`App.test.tsx`：LLM 面板、状态/原因标签、Token 仅在真实返回时显示、降级说明、建议详情与审计降级标记。
+- 新增 `backend/tests/test_llm.py`（19 项）与 `scripts/llm_check.py`；更新工作流测试、conftest、Playwright 配置。
+- 真实调用首次因 `max_tokens=1400` 截断返回 `llm_invalid_json`；修复为 3000、收紧提示词长度、记录 `finish_reason`，新增截断回归测试后重跑成功。Phase 2B 后续把默认值改为可配置的 `LLM_MAX_TOKENS=4000`，上面的 3000 是 Phase 2A 历史记录。
+
+### 验证结果
+
+```
+后端 pytest：52 passed
+前端 Vitest：8 passed
+生产构建：通过（Vite 6.4.5，14.45s）
+HTTP 冒烟：11/11（独立数据库、8011 端口）
+浏览器 E2E：2/2（强制无 Key，确定性路径，19.8s）
+真实 DeepSeek：llm_success；deepseek-flash；15467.974 ms；4801 tokens；证据引用全部有效；退出码 0
+```
+
+真实调用详情见 `docs/LLM_LIVE_CHECK.md`。脚本使用临时数据库，不会触碰运行库；只有 `llm_success` 才以 0 退出。当前未提交 Git，未推送远端。
+
+### 未完成
+
+真实 DeepSeek 调用和 Phase 2B 的 4 案例门禁评测均已完成；尚未完成的是更大规模案例、人工语义标注、跨模型对比，以及对任意文本的逐字数字核对（当前所有进入建议和计算的金额仍来自确定性代码）。
+
+### 下一阶段建议
+
+1. 扩大 LLM 评测案例数量，并做人工语义抽样与跨模型对比。
+2. 在现有数值/单位/证据门禁上继续补充边界案例，不把门禁通过说成语义准确率。
+3. 再评估 MCP Server、持久化队列或多租户，不在本轮提前实现。

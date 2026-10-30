@@ -1,8 +1,10 @@
 export interface Period { start_date: string; end_date: string }
 export interface Identity { id: string; name: string; role: 'analyst' | 'approver'; token: string }
+export interface LLMConfig { configured: boolean; provider: string; model: string; fallback_policy: string }
 export interface Demo {
   demo_mode: boolean; simulation: boolean; currency: string; identities: Identity[];
   stores: { id: string; name: string; marketplace: string }[]; data_range: Period | null;
+  llm?: LLMConfig;
 }
 export interface Totals {
   sales: number; discounts: number; refunds: number; cogs: number; ad_spend: number;
@@ -27,9 +29,32 @@ export interface Step {
   name: string; label: string; status: string; started_at: string; request_id: string;
   phase: string; duration_ms?: number; summary?: string;
 }
+export interface LLMUsage {
+  prompt_tokens: number | null; completion_tokens: number | null;
+  total_tokens: number | null; cached_tokens?: number | null;
+}
+export interface LLMRootCause { cause: string; reasoning: string; evidence_ids: string[] }
+export interface LLMRecommendation {
+  action: string; rationale: string; evidence_ids: string[];
+  priority: 'high' | 'medium' | 'low';
+}
+export interface LLMExpectedImpact {
+  direction: 'improve' | 'neutral' | 'uncertain'; horizon_days: number; explanation: string;
+}
+export interface LLMOutput {
+  summary: string; root_causes: LLMRootCause[]; evidence_references: string[];
+  recommendations: LLMRecommendation[]; expected_impact: LLMExpectedImpact;
+  risks: string[]; missing_information: string[]; confidence: number;
+}
+export interface LLMRun {
+  status: 'llm_success' | 'deterministic_fallback' | 'llm_failed' | 'not_requested';
+  configured: boolean; provider: string; model: string; reason: string | null;
+  attempts: number; latency_ms: number | null; usage: LLMUsage | null;
+  output: LLMOutput | null; error: { code: string; message: string; retryable: boolean } | null;
+}
 export interface Analysis {
   id: string; status: string; request: { period: Period; store_id: string | null };
-  steps: Step[]; result: { metrics: Metrics; findings: { conclusion: string; evidence: Evidence[]; primary_driver: Driver | null }; engine: string } | null;
+  steps: Step[]; result: { metrics: Metrics; findings: { conclusion: string; evidence: Evidence[]; primary_driver: Driver | null }; engine: string; llm?: LLMRun | null } | null;
   error: { code: string; message: string } | null; recommendation_id: string | null;
   request_id: string; created_at: string; replayed?: boolean;
 }
@@ -42,6 +67,7 @@ export interface Recommendation {
   id: string; analysis_id: string; status: string; title: string;
   body: {
     problem: string; period: Period; previous_period: Period; store_id: string | null; currency: string; engine: string;
+    llm?: LLMRun | null;
     evidence: Evidence[]; primary_driver: Driver; recommendation: string;
     expected_impact: { kind: string; horizon_days: number; profit_improvement_min: number; profit_improvement_max: number; explanation: string };
     risks: string[]; missing_information: string[]; assumptions: string[]; source: string;

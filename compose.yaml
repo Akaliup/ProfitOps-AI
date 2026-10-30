@@ -21,6 +21,16 @@ services:
       PROFITOPS_DATABASE_URL: postgresql+psycopg://profitops_demo:local_demo_only@db:5432/profitops
       PROFITOPS_DEMO_MODE: "true"
       PROFITOPS_AUTO_SEED: "true"
+      # Optional DeepSeek configuration, interpolated from the project-local .env.
+      # Leave LLM_API_KEY empty to keep the deterministic rules engine.
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-flash}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-20}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4000}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-1}
+      LLM_FALLBACK_POLICY: ${LLM_FALLBACK_POLICY:-rules}
     ports:
       - "127.0.0.1:8010:8000"
     depends_on:

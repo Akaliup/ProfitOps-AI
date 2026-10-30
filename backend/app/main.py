@@ -16,6 +16,7 @@ from .audit import record, record_separately
 from .config import Settings, get_settings
 from .db import build_engine, initialize_database, make_session_factory
 from .errors import DomainError
+from .llm import build_llm_provider
 from .metrics import build_report, fetch_metrics, resolve_scope
 from .models import Analysis, AuditLog, DailyOperation, Execution, Recommendation, Store, new_id
 from .schemas import AnalysisRequest, DecisionRequest
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None):
     engine = build_engine(settings.database_url)
     factory = make_session_factory(engine)
     registry = build_registry()
+    llm = build_llm_provider(settings)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -74,6 +76,7 @@ def create_app(settings: Settings | None = None):
         description="确定性利润分析与 LangGraph 工作流；本地演示认证；所有执行仅为 simulation。金额单位 USD 美分。",
     )
     app.state.settings, app.state.engine, app.state.factory, app.state.registry = settings, engine, factory, registry
+    app.state.llm = llm
 
     @app.middleware("http")
     async def request_context(request, call_next):
@@ -114,7 +117,11 @@ def create_app(settings: Settings | None = None):
     def health():
         with factory() as session:
             session.execute(text("SELECT 1"))
-        return {"status": "ok", "database": "connected", "simulation": True, "engine": "deterministic-rules-v1"}
+        return {
+            "status": "ok", "database": "connected", "simulation": True,
+            "engine": "deterministic-rules-v1",
+            "llm": {"configured": bool(llm), "provider": settings.llm_provider, "model": settings.llm_model},
+        }
 
     @app.get("/api/demo", tags=["demo"])
     def demo():
@@ -127,6 +134,10 @@ def create_app(settings: Settings | None = None):
             "identities": [{"id": "demo-analyst", "name": "经营分析师", "role": "analyst", "token": settings.analyst_token}, {"id": "demo-approver", "name": "审批负责人", "role": "approver", "token": settings.approver_token}] if settings.demo_mode else [],
             "stores": [{"id": store.id, "name": store.name, "marketplace": store.marketplace} for store in stores],
             "data_range": {"start_date": str(minimum), "end_date": str(maximum)} if minimum else None,
+            "llm": {
+                "configured": bool(llm), "provider": settings.llm_provider, "model": settings.llm_model,
+                "fallback_policy": settings.llm_fallback_policy,
+            },
         }
 
     @app.post("/api/demo/seed", tags=["demo"])
@@ -175,7 +186,7 @@ def create_app(settings: Settings | None = None):
                 if row.request != scope or row.actor != actor.id:
                     raise DomainError("idempotency_conflict", "该请求键已绑定不同的分析或身份", 409)
                 return analysis_view(row, replayed=True)
-        background_tasks.add_task(run_analysis, factory, registry, response["id"], settings.step_timeout_seconds)
+        background_tasks.add_task(run_analysis, factory, registry, response["id"], settings, app.state.llm)
         return response
 
     @app.get("/api/analyses", tags=["agent"])

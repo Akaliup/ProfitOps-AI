@@ -16,8 +16,8 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 ## 数据模型
 
 - stores、products、orders、daily_operations：业务事实；daily_operations 为每日覆盖依据。
-- analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID；idempotency_key 全局唯一且绑定请求内容与创建者。
-- recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。
+- analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID；idempotency_key 全局唯一且绑定请求内容与创建者。`result` 包含确定性 `metrics`、`findings`、`llm` 运行元数据和 `engine`。
+- recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。`body.llm` 保存本次 LLM 运行结果（成功时含结构化输出）。
 - executions：recommendation_id 唯一，idempotency_key 唯一；模拟结果和错误诊断。
 - audit_logs：操作人、动作、对象、时间、请求 ID、结果与详情。
 - schema_versions、seed_versions：可重复初始化版本记录。
@@ -30,19 +30,34 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 
 条件 UPDATE 抢占审批或执行；执行在单个数据库事务中将 approved 变为 executing、插入唯一执行记录、模拟修改并存结果，最终 executed / execution_failed。等待竞争事务后重复调用返回同一 execution 且 replayed=true，不产生第二条模拟变更。不同建议不能复用执行 Idempotency-Key。拒绝的请求和失败同样审计。
 
-LangGraph 分析图：receive_request → get_sales_metrics → calculate_profit → analyze_profit_drivers → verify_evidence → create_recommendation → wait_for_approval → END。每个节点将状态快照提交到数据库；等待为持久化业务暂停点。审批后从数据库加载同一快照进入 LangGraph 执行图：get_approval_status → simulate_execute_approved_action → save_execution_result。不使用仅内存 checkpoint 冒充可恢复性。读快照不重跑已经完成的建议生成。节点超时预算在每次步骤前后检查，失败记录 failed/timeout；不强行终止 Python 阻塞线程。启动时将中断的 running 分析标记为 failed（restart_interrupted），保留步骤用于诊断。
+LangGraph 分析图（异常路径）：receive_request → get_sales_metrics → calculate_profit → analyze_profit_drivers → verify_evidence → llm_root_cause_analysis → verify_llm_evidence → create_recommendation → wait_for_approval → END。无异常或数据不完整时从 verify_evidence 直接进入 wait_for_approval，不调用 LLM。每个节点将状态快照提交到数据库；等待为持久化业务暂停点。审批后从数据库加载同一快照进入 LangGraph 执行图：get_approval_status → simulate_execute_approved_action → save_execution_result。不使用仅内存 checkpoint 冒充可恢复性。读快照不重跑已经完成的建议生成。节点超时预算在每次步骤前后检查，失败记录 failed/timeout；不强行终止 Python 阻塞线程。LLM 节点使用 Provider 自身的 `LLM_TIMEOUT` 与有界重试，不叠加步骤超时。启动时将中断的 running 分析标记为 failed（restart_interrupted），保留步骤用于诊断。
+
+## LLM 分析与降级
+
+配置来自后端进程环境（项目根 `.env` 或真实环境变量）：`LLM_PROVIDER`、`LLM_MODEL`（默认 `deepseek-flash`）、`LLM_API_KEY`、`LLM_BASE_URL`（默认 `https://api.deepseek.com`）、`LLM_TIMEOUT`（默认 20s）、`LLM_MAX_TOKENS`（默认 4000）、`LLM_MAX_RETRIES`（默认 1）、`LLM_FALLBACK_POLICY`（`rules` 默认 / `fail`）。`LLM_API_KEY` 使用 SecretStr，API 不返回密钥。未配置 Key 时 `llm_configured=false`，分析仍完成。
+
+LLM 在确定性利润计算、异常归因和证据校验之后调用一次，输入为已计算的周期、利润桥、主要驱动、8 项证据、SKU 摘要和已规划模拟动作；金额字段为整数美分，输入显式携带 `amount_unit`。调用使用可配置的 `LLM_MAX_TOKENS`（默认 4000）；若 `finish_reason=length` 导致 JSON 截断，错误码为 `llm_invalid_json`，错误消息与详情会标明截断。输出必须符合 `LLMAnalysisOutput`：`summary`、`root_causes[{cause,reasoning,evidence_ids}]`、`evidence_references`、`recommendations[{action,rationale,evidence_ids,priority}]`、`expected_impact{direction,horizon_days,explanation}`、`risks`、`missing_information`、`confidence`（0–1）。所有证据 ID 必须是本次 `findings.evidence` 的子集；`verify_llm_evidence` 会遍历全部引用，发现未知 ID 即判定无效，不进入审批流。LLM 不返回也不覆盖任何利润、成本、销售额数字；动作参数、预期影响金额仍由确定性 `plan_action` 计算。
+
+`result.llm.status` 取值：
+
+- `llm_success`：真实调用成功且 Schema/证据校验通过；`output` 非空，`model`、`latency_ms`、`attempts`、`usage` 来自实际响应。
+- `deterministic_fallback`：未配置 Key（`reason=not_configured`）或调用失败/证据引用无效（带 `error`）；本次建议使用确定性文案，`output=null`。
+- `llm_failed`：仅当 `LLM_FALLBACK_POLICY=fail`；分析状态 `failed`，错误码 `llm_failed`，运行元数据仍写入 `result.llm`。
+- `not_requested`：无异常（`reason=no_anomaly`）或数据不完整（`reason=insufficient_data`），LLM 未被触发。
+
+`engine` 仅在 `llm_success` 时为 `deepseek-llm-v1`，否则为 `deterministic-rules-v1`。审计动作：`analysis.llm_succeeded`、`analysis.llm_fallback`（outcome=degraded）、`analysis.llm_failed`。Provider 错误码包括 `llm_auth_failed`、`llm_insufficient_balance`、`llm_rate_limited`、`llm_server_error`、`llm_http_error`、`llm_timeout`、`llm_network_error`、`llm_invalid_json`、`llm_empty_response`、`llm_schema_invalid`、`invalid_evidence_reference`。
 
 ## API
 
 全部 JSON；`/health` 无认证，其余 API 除 `/api/demo` 外需 Bearer。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。
 
-- GET /health：数据库连通性与 simulation 标志。
-- GET /api/demo：demo mode、演示身份、可用店铺和数据日期（可空）。
+- GET /health：数据库连通性、simulation 标志，以及 `llm.{configured,provider,model}`（不含密钥）。
+- GET /api/demo：demo mode、演示身份、可用店铺和数据日期（可空），以及 `llm.{configured,provider,model,fallback_policy}`。
 - POST /api/demo/seed：analyst 可重复初始化，不清除历史。
 - GET /api/dashboard/summary：period、previous_period、current、previous、changes、trend、drivers、sku_breakdown、data_quality、anomaly。
 - GET /api/metrics：同一指标契约（支持范围/店铺）。
 - POST /api/analyses：`{start_date?,end_date?,store_id?}`，可选 Idempotency-Key；202 返回 queued 分析，FastAPI 后台启动有状态图。
-- GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据和错误。
+- GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据、错误、`result.engine` 和 `result.llm`。
 - GET /api/tools：工具输入输出 JSON Schema、权限和副作用分类。
 - GET /api/recommendations、GET /api/recommendations/{id}：建议及 simulation 动作与执行记录。
 - POST /api/recommendations/{id}/approve 或 /reject：`{reason}`，仅 pending_approval；409 表示状态冲突。
@@ -55,4 +70,4 @@ LangGraph 分析图：receive_request → get_sales_metrics → calculate_profit
 
 ## 验收
 
-pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤和 API 错误；生产构建和实际 HTTP + 浏览器演示闭环。PostgreSQL 若本机 Docker 引擎不可用需明确记录验证缺口。
+pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。LLM 测试覆盖 Provider 成功/重试/鉴权/超时/非法 JSON/空响应、环境变量读取、结构化 Schema、证据引用校验、无 Key 降级、调用失败降级、Schema 无效降级、`fail` 策略以及 LLM 成功后的审批与幂等执行；全部使用 MockTransport/FakeProvider，不消耗真实 Token。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤、API 错误和 LLM 成功/降级面板；生产构建和实际 HTTP + 浏览器演示闭环。PostgreSQL 若本机 Docker 引擎不可用需明确记录验证缺口。真实 DeepSeek 调用已通过 `scripts/llm_check.py` 完成一次：`deepseek-flash`、15467.974 ms、4801 tokens、`all_references_valid=true`，详见 `docs/LLM_LIVE_CHECK.md`。
