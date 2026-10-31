@@ -71,7 +71,7 @@
 - [x] 角色由 `PROFITOPS_MCP_ROLE` 服务端决定，拒绝客户端 `role` 注入
 - [x] 6 项 MCP 测试 + `scripts/mcp_check.py` 真实 stdio 验收
 - [x] `docs/MCP.md`、README、ARCHITECTURE、CONTRACT 同步
-- [ ] PR、CI 与 Codex Review（阶段完成后更新）
+- [x] PR #4、CI 通过；Codex Review 因账号额度失败，未产生审查结果
 
 ## 后续（核心通过后再评估）
 - [x] 实际 MCP Server（Phase 2C：只读 stdio 子集；审批/执行工具仍走 HTTP）

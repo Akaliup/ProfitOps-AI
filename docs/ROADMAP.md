@@ -11,7 +11,7 @@
 
 | 阶段 | 目标 | 优先级 | 状态 | 依赖 | 分支 / PR |
 |---|---|---|---|---|---|
-| 2C | MCP Server（stdio，只读工具） | P0（Agent 能力） | 实现完成，待 PR/CI/Review | 最新 `master` | `feat/phase-2c-mcp-server` |
+| 2C | MCP Server（stdio，只读工具） | P0（Agent 能力） | PR #4，CI 通过；Codex 额度阻塞，待人工审查 | 最新 `master` | `feat/phase-2c-mcp-server` |
 | 2D | Schema 演进与持久化任务队列 | P1（生产化前必须） | 计划 | 2C 合并 | 待定 |
 | 3 | 生产身份与多租户 | P2（对外部署前） | 计划 | 2D 合并 | 待定 |
 

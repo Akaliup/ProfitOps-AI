@@ -11,11 +11,11 @@
 | 阶段基线 | `master` @ `1134ff4`（PR #2 合并后） |
 | 规则分支 | `chore/collaboration-workflow`（PR #3） |
 | 实现分支 | `feat/phase-2c-mcp-server` |
-| 阶段状态 | Phase 2C PR #4 已创建，等待 CI 与人工审查 |
-| CI | PR #3 两项 CI 通过；Phase 2C 本地后端 80、前端 8、构建通过；PR #4 CI 进行中 |
-| Codex Review | PR #3 尝试失败：Codex 用量额度已满，未产生审查结果（SHA `512be10`）；PR #4 待确认 |
+| 阶段状态 | Phase 2C PR #4 CI 通过，等待人工审查/合并 |
+| CI | PR #4 两项 CI 通过；本地后端 80、前端 8、构建通过 |
+| Codex Review | PR #4 在 `96231c0` 尝试失败：Codex 用量额度已满；无 review、无行内评论、无审查发现 |
 | 阻塞 | Codex Review 额度受限；需要用户处理额度或确认跳过自动审查 |
-| 下一步 | 确认 PR #4 CI；检查 Codex 是否产生审查；不自动合并 |
+| 下一步 | 人工审查 PR #3 与 PR #4；不自动合并；不进入 Phase 2D |
 
 ## Phase 2C 完成情况
 
@@ -26,15 +26,15 @@
 - [x] MCP 协议与安全边界测试（6 项）
 - [x] 文档 `docs/MCP.md`
 - [x] Phase 2C PR 创建（#4）
-- [ ] Phase 2C CI 通过
-- [ ] Codex Review 与修复循环（当前被用量额度阻塞）
+- [x] Phase 2C CI 通过（Backend pytest、Frontend tests and production build）
+- [ ] Codex Review 与修复循环（两次尝试均被账号用量额度阻塞，未产生审查结果）
 
 ## 最近更新记录
 
 | 日期 | 阶段 | 分支 / PR | Commit | CI | Codex Review | 说明 |
 |---|---|---|---|---|---|---|
 | 2026-11-01 | 协作规则 | `chore/collaboration-workflow`（PR #3） | `512be10` | 通过 | 失败：额度已满 | 建立长期协作模式与路线图 |
-| 2026-11-01 | Phase 2C | `feat/phase-2c-mcp-server`（PR #4） | `bcbfa69` | 本地 80/8/构建通过；PR CI 进行中 | 待确认 | MCP Server 与 6 项测试完成 |
+| 2026-11-01 | Phase 2C | `feat/phase-2c-mcp-server`（PR #4） | `96231c0` | 通过 | 失败：额度已满（`96231c0`） | MCP Server、6 项测试与真实 stdio 验收完成 |
 
 ## 风险与待确认
 
