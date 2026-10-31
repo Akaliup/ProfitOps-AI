@@ -1,0 +1,4450 @@
+{
+  "report_version": "1",
+  "generated_at": "2026-10-30T18:31:10.416520Z",
+  "mode": "real",
+  "dataset": {
+    "dataset_id": "profitops-llm-eval-v1",
+    "source_type": "synthetic",
+    "case_dir": "E:\\ProfitOps-AI\\backend\\evals\\llm_cases",
+    "case_ids": [
+      "ad_spend_pressure",
+      "fulfillment_pressure",
+      "insufficient_data",
+      "refund_pressure"
+    ],
+    "manifest": {
+      "dataset_id": "profitops-llm-eval-v1",
+      "source_type": "synthetic",
+      "generation_method": "backend/evals/fixtures.py v1: deterministic SKU amounts allocated over 30 days; expected labels from build_report/analyze_drivers/plan_action; no LLM",
+      "synthetic_notes": "Synthetic cross-border e-commerce ledger; not real company data; no PII.",
+      "period": {
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-30"
+      },
+      "previous_period": {
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-30"
+      },
+      "stores": 2,
+      "products": [
+        {
+          "product_id": "bag",
+          "sku": "TRAVEL-BAG-01",
+          "name": "轻量旅行背包",
+          "inventory": 210,
+          "inbound_inventory": 120
+        },
+        {
+          "product_id": "bottle",
+          "sku": "THERMO-02",
+          "name": "不锈钢保温杯",
+          "inventory": 270,
+          "inbound_inventory": 120
+        },
+        {
+          "product_id": "hub",
+          "sku": "USB-HUB-03",
+          "name": "多口扩展坞",
+          "inventory": 330,
+          "inbound_inventory": 120
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "ad_spend_pressure",
+          "file": "ad_spend_pressure.json",
+          "title": "广告费用上涨导致利润下降",
+          "tags": [
+            "anomaly",
+            "ad_spend",
+            "budget_action"
+          ],
+          "risk": "high",
+          "source_type": "synthetic",
+          "expected_primary": "ad_spend",
+          "expected_action": "adjust_ad_budget",
+          "expected_llm_status": "llm_success",
+          "expected_error_code": null
+        },
+        {
+          "case_id": "fulfillment_pressure",
+          "file": "fulfillment_pressure.json",
+          "title": "物流履约费用上涨导致利润下降",
+          "tags": [
+            "anomaly",
+            "fulfillment",
+            "review_action"
+          ],
+          "risk": "high",
+          "source_type": "synthetic",
+          "expected_primary": "fulfillment",
+          "expected_action": "create_review_task",
+          "expected_llm_status": "llm_success",
+          "expected_error_code": null
+        },
+        {
+          "case_id": "refund_pressure",
+          "file": "refund_pressure.json",
+          "title": "退款上涨导致利润下降",
+          "tags": [
+            "anomaly",
+            "refunds",
+            "review_action"
+          ],
+          "risk": "high",
+          "source_type": "synthetic",
+          "expected_primary": "refunds",
+          "expected_action": "create_review_task",
+          "expected_llm_status": "llm_success",
+          "expected_error_code": null
+        },
+        {
+          "case_id": "insufficient_data",
+          "file": "insufficient_data.json",
+          "title": "经营数据不完整，禁止生成无依据建议",
+          "tags": [
+            "guardrail",
+            "insufficient_data",
+            "no_llm"
+          ],
+          "risk": "high",
+          "source_type": "synthetic",
+          "expected_primary": "ad_spend",
+          "expected_action": null,
+          "expected_llm_status": "not_requested",
+          "expected_error_code": "insufficient_data"
+        }
+      ],
+      "validation": {
+        "all_sku_totals_reconciled": true,
+        "all_bridge_totals_reconciled": true,
+        "labels_generated_by_deterministic_functions": true,
+        "llm_used_for_labels": false
+      }
+    }
+  },
+  "provider": {
+    "type": "deepseek",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "real_online": true
+  },
+  "limits": {
+    "trials": 1,
+    "max_calls": 3,
+    "calls_made": 3,
+    "fallback_policy": "rules",
+    "timeout": 60.0,
+    "max_retries": 0
+  },
+  "integrity": [
+    {
+      "case_id": "ad_spend_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "raw_metrics_schema",
+          "passed": true,
+          "detail": "RawMetrics Schema 通过",
+          "data": {}
+        },
+        {
+          "name": "source_type_synthetic",
+          "passed": true,
+          "detail": "source_type='synthetic'",
+          "data": {}
+        },
+        {
+          "name": "generation_method_present",
+          "passed": true,
+          "detail": "生成方法已记录",
+          "data": {}
+        },
+        {
+          "name": "currency_usd",
+          "passed": true,
+          "detail": "currency=USD",
+          "data": {}
+        },
+        {
+          "name": "source_mentions_synthetic",
+          "passed": true,
+          "detail": "synthetic://profitops-llm-eval-v1; 2 stores x 3 SKUs x 60 days; generated by backend/evals/fixtures.py",
+          "data": {}
+        },
+        {
+          "name": "period_length",
+          "passed": true,
+          "detail": "当前周期 30 天",
+          "data": {}
+        },
+        {
+          "name": "previous_period_adjacent",
+          "passed": true,
+          "detail": "上一周期 30 天，结束于 2026-09-30",
+          "data": {}
+        },
+        {
+          "name": "current_net_sales",
+          "passed": true,
+          "detail": "120000 vs 120000",
+          "data": {}
+        },
+        {
+          "name": "current_net_profit",
+          "passed": true,
+          "detail": "19000 vs 19000",
+          "data": {}
+        },
+        {
+          "name": "current_margin_pct",
+          "passed": true,
+          "detail": "15.83 vs 15.83",
+          "data": {}
+        },
+        {
+          "name": "previous_net_sales",
+          "passed": true,
+          "detail": "100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "previous_net_profit",
+          "passed": true,
+          "detail": "45000 vs 45000",
+          "data": {}
+        },
+        {
+          "name": "previous_margin_pct",
+          "passed": true,
+          "detail": "45.0 vs 45.0",
+          "data": {}
+        },
+        {
+          "name": "sku_rows_present",
+          "passed": true,
+          "detail": "3 个 SKU",
+          "data": {}
+        },
+        {
+          "name": "sku_ids_unique",
+          "passed": true,
+          "detail": "SKU 主键唯一且非空",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_sales",
+          "passed": true,
+          "detail": "current 120000 vs 120000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_cogs",
+          "passed": true,
+          "detail": "current 36000 vs 36000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_ad_spend",
+          "passed": true,
+          "detail": "current 45000 vs 45000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_fulfillment",
+          "passed": true,
+          "detail": "current 14000 vs 14000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_platform_fees",
+          "passed": true,
+          "detail": "current 6000 vs 6000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_orders",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_units",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_net_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "-16050 vs -16050",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "20550 vs 20550",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_THERMO-02",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_THERMO-02",
+          "passed": true,
+          "detail": "-6300 vs -6300",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_THERMO-02",
+          "passed": true,
+          "detail": "9000 vs 9000",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_THERMO-02",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_USB-HUB-03",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "-3650 vs -3650",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "5450 vs 5450",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_USB-HUB-03",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "trend_length",
+          "passed": true,
+          "detail": "60 天",
+          "data": {}
+        },
+        {
+          "name": "trend_dates_unique",
+          "passed": true,
+          "detail": "日期唯一且升序",
+          "data": {}
+        },
+        {
+          "name": "trend_current_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_previous_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_sales",
+          "passed": true,
+          "detail": "current 120000 vs 120000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_cogs",
+          "passed": true,
+          "detail": "current 36000 vs 36000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_ad_spend",
+          "passed": true,
+          "detail": "current 45000 vs 45000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_fulfillment",
+          "passed": true,
+          "detail": "current 14000 vs 14000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_platform_fees",
+          "passed": true,
+          "detail": "current 6000 vs 6000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_orders",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_units",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_daily_net_totals",
+          "passed": true,
+          "detail": "每日 net 字段可重算",
+          "data": {}
+        },
+        {
+          "name": "data_quality_expected_shape",
+          "passed": true,
+          "detail": "2 stores x 3 SKUs x 30 days x 2",
+          "data": {}
+        },
+        {
+          "name": "data_quality_observed_plus_missing",
+          "passed": true,
+          "detail": "360+0 vs 360",
+          "data": {}
+        },
+        {
+          "name": "data_quality_complete_flag",
+          "passed": true,
+          "detail": "complete=True",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_examples",
+          "passed": true,
+          "detail": "0 条示例",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_issue",
+          "passed": true,
+          "detail": "缺失数据必须说明问题",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "fulfillment_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "raw_metrics_schema",
+          "passed": true,
+          "detail": "RawMetrics Schema 通过",
+          "data": {}
+        },
+        {
+          "name": "source_type_synthetic",
+          "passed": true,
+          "detail": "source_type='synthetic'",
+          "data": {}
+        },
+        {
+          "name": "generation_method_present",
+          "passed": true,
+          "detail": "生成方法已记录",
+          "data": {}
+        },
+        {
+          "name": "currency_usd",
+          "passed": true,
+          "detail": "currency=USD",
+          "data": {}
+        },
+        {
+          "name": "source_mentions_synthetic",
+          "passed": true,
+          "detail": "synthetic://profitops-llm-eval-v1; 2 stores x 3 SKUs x 60 days; generated by backend/evals/fixtures.py",
+          "data": {}
+        },
+        {
+          "name": "period_length",
+          "passed": true,
+          "detail": "当前周期 30 天",
+          "data": {}
+        },
+        {
+          "name": "previous_period_adjacent",
+          "passed": true,
+          "detail": "上一周期 30 天，结束于 2026-09-30",
+          "data": {}
+        },
+        {
+          "name": "current_net_sales",
+          "passed": true,
+          "detail": "110000 vs 110000",
+          "data": {}
+        },
+        {
+          "name": "current_net_profit",
+          "passed": true,
+          "detail": "30500 vs 30500",
+          "data": {}
+        },
+        {
+          "name": "current_margin_pct",
+          "passed": true,
+          "detail": "27.73 vs 27.73",
+          "data": {}
+        },
+        {
+          "name": "previous_net_sales",
+          "passed": true,
+          "detail": "100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "previous_net_profit",
+          "passed": true,
+          "detail": "45000 vs 45000",
+          "data": {}
+        },
+        {
+          "name": "previous_margin_pct",
+          "passed": true,
+          "detail": "45.0 vs 45.0",
+          "data": {}
+        },
+        {
+          "name": "sku_rows_present",
+          "passed": true,
+          "detail": "3 个 SKU",
+          "data": {}
+        },
+        {
+          "name": "sku_ids_unique",
+          "passed": true,
+          "detail": "SKU 主键唯一且非空",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_sales",
+          "passed": true,
+          "detail": "current 110000 vs 110000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_cogs",
+          "passed": true,
+          "detail": "current 33000 vs 33000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_ad_spend",
+          "passed": true,
+          "detail": "current 11000 vs 11000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_fulfillment",
+          "passed": true,
+          "detail": "current 30000 vs 30000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_platform_fees",
+          "passed": true,
+          "detail": "current 5500 vs 5500; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_orders",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_units",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_net_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "-7250 vs -7250",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "500 vs 500",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_THERMO-02",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_THERMO-02",
+          "passed": true,
+          "detail": "-4350 vs -4350",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_THERMO-02",
+          "passed": true,
+          "detail": "300 vs 300",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_THERMO-02",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_USB-HUB-03",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "-2900 vs -2900",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "200 vs 200",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_USB-HUB-03",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "trend_length",
+          "passed": true,
+          "detail": "60 天",
+          "data": {}
+        },
+        {
+          "name": "trend_dates_unique",
+          "passed": true,
+          "detail": "日期唯一且升序",
+          "data": {}
+        },
+        {
+          "name": "trend_current_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_previous_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_sales",
+          "passed": true,
+          "detail": "current 110000 vs 110000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_cogs",
+          "passed": true,
+          "detail": "current 33000 vs 33000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_ad_spend",
+          "passed": true,
+          "detail": "current 11000 vs 11000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_fulfillment",
+          "passed": true,
+          "detail": "current 30000 vs 30000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_platform_fees",
+          "passed": true,
+          "detail": "current 5500 vs 5500; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_orders",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_units",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_daily_net_totals",
+          "passed": true,
+          "detail": "每日 net 字段可重算",
+          "data": {}
+        },
+        {
+          "name": "data_quality_expected_shape",
+          "passed": true,
+          "detail": "2 stores x 3 SKUs x 30 days x 2",
+          "data": {}
+        },
+        {
+          "name": "data_quality_observed_plus_missing",
+          "passed": true,
+          "detail": "360+0 vs 360",
+          "data": {}
+        },
+        {
+          "name": "data_quality_complete_flag",
+          "passed": true,
+          "detail": "complete=True",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_examples",
+          "passed": true,
+          "detail": "0 条示例",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_issue",
+          "passed": true,
+          "detail": "缺失数据必须说明问题",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "insufficient_data",
+      "passed": true,
+      "checks": [
+        {
+          "name": "raw_metrics_schema",
+          "passed": true,
+          "detail": "RawMetrics Schema 通过",
+          "data": {}
+        },
+        {
+          "name": "source_type_synthetic",
+          "passed": true,
+          "detail": "source_type='synthetic'",
+          "data": {}
+        },
+        {
+          "name": "generation_method_present",
+          "passed": true,
+          "detail": "生成方法已记录",
+          "data": {}
+        },
+        {
+          "name": "currency_usd",
+          "passed": true,
+          "detail": "currency=USD",
+          "data": {}
+        },
+        {
+          "name": "source_mentions_synthetic",
+          "passed": true,
+          "detail": "synthetic://profitops-llm-eval-v1; 2 stores x 3 SKUs x 60 days; generated by backend/evals/fixtures.py",
+          "data": {}
+        },
+        {
+          "name": "period_length",
+          "passed": true,
+          "detail": "当前周期 30 天",
+          "data": {}
+        },
+        {
+          "name": "previous_period_adjacent",
+          "passed": true,
+          "detail": "上一周期 30 天，结束于 2026-09-30",
+          "data": {}
+        },
+        {
+          "name": "current_net_sales",
+          "passed": true,
+          "detail": "120000 vs 120000",
+          "data": {}
+        },
+        {
+          "name": "current_net_profit",
+          "passed": true,
+          "detail": "19000 vs 19000",
+          "data": {}
+        },
+        {
+          "name": "current_margin_pct",
+          "passed": true,
+          "detail": "15.83 vs 15.83",
+          "data": {}
+        },
+        {
+          "name": "previous_net_sales",
+          "passed": true,
+          "detail": "100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "previous_net_profit",
+          "passed": true,
+          "detail": "45000 vs 45000",
+          "data": {}
+        },
+        {
+          "name": "previous_margin_pct",
+          "passed": true,
+          "detail": "45.0 vs 45.0",
+          "data": {}
+        },
+        {
+          "name": "sku_rows_present",
+          "passed": true,
+          "detail": "3 个 SKU",
+          "data": {}
+        },
+        {
+          "name": "sku_ids_unique",
+          "passed": true,
+          "detail": "SKU 主键唯一且非空",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_sales",
+          "passed": true,
+          "detail": "current 120000 vs 120000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_cogs",
+          "passed": true,
+          "detail": "current 36000 vs 36000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_ad_spend",
+          "passed": true,
+          "detail": "current 45000 vs 45000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_fulfillment",
+          "passed": true,
+          "detail": "current 14000 vs 14000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_platform_fees",
+          "passed": true,
+          "detail": "current 6000 vs 6000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_orders",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_units",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_net_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "-16050 vs -16050",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "20550 vs 20550",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_THERMO-02",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_THERMO-02",
+          "passed": true,
+          "detail": "-6300 vs -6300",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_THERMO-02",
+          "passed": true,
+          "detail": "9000 vs 9000",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_THERMO-02",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_USB-HUB-03",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "-3650 vs -3650",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "5450 vs 5450",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_USB-HUB-03",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "trend_length",
+          "passed": true,
+          "detail": "60 天",
+          "data": {}
+        },
+        {
+          "name": "trend_dates_unique",
+          "passed": true,
+          "detail": "日期唯一且升序",
+          "data": {}
+        },
+        {
+          "name": "trend_current_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_previous_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_sales",
+          "passed": true,
+          "detail": "current 120000 vs 120000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_refunds",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_cogs",
+          "passed": true,
+          "detail": "current 36000 vs 36000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_ad_spend",
+          "passed": true,
+          "detail": "current 45000 vs 45000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_fulfillment",
+          "passed": true,
+          "detail": "current 14000 vs 14000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_platform_fees",
+          "passed": true,
+          "detail": "current 6000 vs 6000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_orders",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_units",
+          "passed": true,
+          "detail": "current 140 vs 140; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_daily_net_totals",
+          "passed": true,
+          "detail": "每日 net 字段可重算",
+          "data": {}
+        },
+        {
+          "name": "data_quality_expected_shape",
+          "passed": true,
+          "detail": "2 stores x 3 SKUs x 30 days x 2",
+          "data": {}
+        },
+        {
+          "name": "data_quality_observed_plus_missing",
+          "passed": true,
+          "detail": "300+60 vs 360",
+          "data": {}
+        },
+        {
+          "name": "data_quality_complete_flag",
+          "passed": true,
+          "detail": "complete=False",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_examples",
+          "passed": true,
+          "detail": "10 条示例",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_issue",
+          "passed": true,
+          "detail": "缺失数据必须说明问题",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "refund_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "raw_metrics_schema",
+          "passed": true,
+          "detail": "RawMetrics Schema 通过",
+          "data": {}
+        },
+        {
+          "name": "source_type_synthetic",
+          "passed": true,
+          "detail": "source_type='synthetic'",
+          "data": {}
+        },
+        {
+          "name": "generation_method_present",
+          "passed": true,
+          "detail": "生成方法已记录",
+          "data": {}
+        },
+        {
+          "name": "currency_usd",
+          "passed": true,
+          "detail": "currency=USD",
+          "data": {}
+        },
+        {
+          "name": "source_mentions_synthetic",
+          "passed": true,
+          "detail": "synthetic://profitops-llm-eval-v1; 2 stores x 3 SKUs x 60 days; generated by backend/evals/fixtures.py",
+          "data": {}
+        },
+        {
+          "name": "period_length",
+          "passed": true,
+          "detail": "当前周期 30 天",
+          "data": {}
+        },
+        {
+          "name": "previous_period_adjacent",
+          "passed": true,
+          "detail": "上一周期 30 天，结束于 2026-09-30",
+          "data": {}
+        },
+        {
+          "name": "current_net_sales",
+          "passed": true,
+          "detail": "85000 vs 85000",
+          "data": {}
+        },
+        {
+          "name": "current_net_profit",
+          "passed": true,
+          "detail": "27000 vs 27000",
+          "data": {}
+        },
+        {
+          "name": "current_margin_pct",
+          "passed": true,
+          "detail": "31.76 vs 31.76",
+          "data": {}
+        },
+        {
+          "name": "previous_net_sales",
+          "passed": true,
+          "detail": "99000 vs 99000",
+          "data": {}
+        },
+        {
+          "name": "previous_net_profit",
+          "passed": true,
+          "detail": "44000 vs 44000",
+          "data": {}
+        },
+        {
+          "name": "previous_margin_pct",
+          "passed": true,
+          "detail": "44.44 vs 44.44",
+          "data": {}
+        },
+        {
+          "name": "sku_rows_present",
+          "passed": true,
+          "detail": "3 个 SKU",
+          "data": {}
+        },
+        {
+          "name": "sku_ids_unique",
+          "passed": true,
+          "detail": "SKU 主键唯一且非空",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_sales",
+          "passed": true,
+          "detail": "current 110000 vs 110000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_refunds",
+          "passed": true,
+          "detail": "current 25000 vs 25000; previous 1000 vs 1000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_cogs",
+          "passed": true,
+          "detail": "current 33000 vs 33000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_ad_spend",
+          "passed": true,
+          "detail": "current 10000 vs 10000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_fulfillment",
+          "passed": true,
+          "detail": "current 10000 vs 10000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_platform_fees",
+          "passed": true,
+          "detail": "current 5000 vs 5000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_orders",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_sum_units",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "sku_net_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "-8500 vs -8500",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_TRAVEL-BAG-01",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_THERMO-02",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_THERMO-02",
+          "passed": true,
+          "detail": "-5100 vs -5100",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_THERMO-02",
+          "passed": true,
+          "detail": "0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_THERMO-02",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "sku_net_USB-HUB-03",
+          "passed": true,
+          "detail": "SKU 净利润可重算",
+          "data": {}
+        },
+        {
+          "name": "sku_profit_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "-3400 vs -3400",
+          "data": {}
+        },
+        {
+          "name": "sku_ad_spend_delta_USB-HUB-03",
+          "passed": true,
+          "detail": "0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "sku_inventory_USB-HUB-03",
+          "passed": true,
+          "detail": "库存非负",
+          "data": {}
+        },
+        {
+          "name": "trend_length",
+          "passed": true,
+          "detail": "60 天",
+          "data": {}
+        },
+        {
+          "name": "trend_dates_unique",
+          "passed": true,
+          "detail": "日期唯一且升序",
+          "data": {}
+        },
+        {
+          "name": "trend_current_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_previous_days",
+          "passed": true,
+          "detail": "30 天",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_sales",
+          "passed": true,
+          "detail": "current 110000 vs 110000; previous 100000 vs 100000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_discounts",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_refunds",
+          "passed": true,
+          "detail": "current 25000 vs 25000; previous 1000 vs 1000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_cogs",
+          "passed": true,
+          "detail": "current 33000 vs 33000; previous 30000 vs 30000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_ad_spend",
+          "passed": true,
+          "detail": "current 10000 vs 10000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_fulfillment",
+          "passed": true,
+          "detail": "current 10000 vs 10000; previous 10000 vs 10000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_platform_fees",
+          "passed": true,
+          "detail": "current 5000 vs 5000; previous 5000 vs 5000",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_other_costs",
+          "passed": true,
+          "detail": "current 0 vs 0; previous 0 vs 0",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_orders",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_sum_units",
+          "passed": true,
+          "detail": "current 130 vs 130; previous 120 vs 120",
+          "data": {}
+        },
+        {
+          "name": "trend_daily_net_totals",
+          "passed": true,
+          "detail": "每日 net 字段可重算",
+          "data": {}
+        },
+        {
+          "name": "data_quality_expected_shape",
+          "passed": true,
+          "detail": "2 stores x 3 SKUs x 30 days x 2",
+          "data": {}
+        },
+        {
+          "name": "data_quality_observed_plus_missing",
+          "passed": true,
+          "detail": "360+0 vs 360",
+          "data": {}
+        },
+        {
+          "name": "data_quality_complete_flag",
+          "passed": true,
+          "detail": "complete=True",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_examples",
+          "passed": true,
+          "detail": "0 条示例",
+          "data": {}
+        },
+        {
+          "name": "data_quality_missing_issue",
+          "passed": true,
+          "detail": "缺失数据必须说明问题",
+          "data": {}
+        }
+      ]
+    }
+  ],
+  "expected_labels": [
+    {
+      "case_id": "ad_spend_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "expected_anomaly",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_driver",
+          "passed": true,
+          "detail": "expected='ad_spend'; actual='ad_spend'",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_label",
+          "passed": true,
+          "detail": "expected='广告支出'; actual='广告支出'",
+          "data": {}
+        },
+        {
+          "name": "expected_profit_delta",
+          "passed": true,
+          "detail": "expected=-26000; actual=-26000",
+          "data": {}
+        },
+        {
+          "name": "expected_bridge_verified",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_required_evidence_ids",
+          "passed": true,
+          "detail": "expected=['ev-ad_spend']; actual=['ev-ad_spend']",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_status",
+          "passed": true,
+          "detail": "expected='llm_success'; actual='llm_success'",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_reason",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_error_code",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_action",
+          "passed": true,
+          "detail": "expected={'type': 'adjust_ad_budget', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 852, 'proposed_daily_budget': 724, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 3840, 'is_budget': True}; actual={'type': 'adjust_ad_budget', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 852, 'proposed_daily_budget': 724, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 3840, 'is_budget': True}",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "fulfillment_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "expected_anomaly",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_driver",
+          "passed": true,
+          "detail": "expected='fulfillment'; actual='fulfillment'",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_label",
+          "passed": true,
+          "detail": "expected='物流履约'; actual='物流履约'",
+          "data": {}
+        },
+        {
+          "name": "expected_profit_delta",
+          "passed": true,
+          "detail": "expected=-14500; actual=-14500",
+          "data": {}
+        },
+        {
+          "name": "expected_bridge_verified",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_required_evidence_ids",
+          "passed": true,
+          "detail": "expected=['ev-fulfillment']; actual=['ev-fulfillment']",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_status",
+          "passed": true,
+          "detail": "expected='llm_success'; actual='llm_success'",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_reason",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_error_code",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_action",
+          "passed": true,
+          "detail": "expected={'type': 'create_review_task', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 184, 'proposed_daily_budget': 184, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 0, 'is_budget': False}; actual={'type': 'create_review_task', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 184, 'proposed_daily_budget': 184, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 0, 'is_budget': False}",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "insufficient_data",
+      "passed": true,
+      "checks": [
+        {
+          "name": "expected_anomaly",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_driver",
+          "passed": true,
+          "detail": "expected='ad_spend'; actual='ad_spend'",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_label",
+          "passed": true,
+          "detail": "expected='广告支出'; actual='广告支出'",
+          "data": {}
+        },
+        {
+          "name": "expected_profit_delta",
+          "passed": true,
+          "detail": "expected=-26000; actual=-26000",
+          "data": {}
+        },
+        {
+          "name": "expected_bridge_verified",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_required_evidence_ids",
+          "passed": true,
+          "detail": "expected=['ev-ad_spend']; actual=['ev-ad_spend']",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_status",
+          "passed": true,
+          "detail": "expected='not_requested'; actual='not_requested'",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_reason",
+          "passed": true,
+          "detail": "expected='insufficient_data'; actual='insufficient_data'",
+          "data": {}
+        },
+        {
+          "name": "expected_error_code",
+          "passed": true,
+          "detail": "expected='insufficient_data'; actual='insufficient_data'",
+          "data": {}
+        },
+        {
+          "name": "expected_action",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        }
+      ]
+    },
+    {
+      "case_id": "refund_pressure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "expected_anomaly",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_driver",
+          "passed": true,
+          "detail": "expected='refunds'; actual='refunds'",
+          "data": {}
+        },
+        {
+          "name": "expected_primary_label",
+          "passed": true,
+          "detail": "expected='退款'; actual='退款'",
+          "data": {}
+        },
+        {
+          "name": "expected_profit_delta",
+          "passed": true,
+          "detail": "expected=-17000; actual=-17000",
+          "data": {}
+        },
+        {
+          "name": "expected_bridge_verified",
+          "passed": true,
+          "detail": "expected=True; actual=True",
+          "data": {}
+        },
+        {
+          "name": "expected_required_evidence_ids",
+          "passed": true,
+          "detail": "expected=['ev-refunds']; actual=['ev-refunds']",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_status",
+          "passed": true,
+          "detail": "expected='llm_success'; actual='llm_success'",
+          "data": {}
+        },
+        {
+          "name": "expected_llm_reason",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_error_code",
+          "passed": true,
+          "detail": "expected=None; actual=None",
+          "data": {}
+        },
+        {
+          "name": "expected_action",
+          "passed": true,
+          "detail": "expected={'type': 'create_review_task', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 167, 'proposed_daily_budget': 167, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 0, 'is_budget': False}; actual={'type': 'create_review_task', 'target_product_id': 'bag', 'target_sku': 'TRAVEL-BAG-01', 'baseline_daily_budget': 167, 'proposed_daily_budget': 167, 'adjustment_pct': 15, 'days': 30, 'potential_cents': 0, 'is_budget': False}",
+          "data": {}
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "status": "llm_success",
+      "reason": null,
+      "configured": true,
+      "provider_type": "deepseek",
+      "model": "deepseek-flash",
+      "prompt_hash": "ed67ac388373c19d4e3c6fce99c46d64d5d314b93e5e3bc30fc04a5cc85c887a",
+      "model_params": {
+        "temperature": 0.2,
+        "max_tokens": 3000
+      },
+      "latency_ms": 9845.984,
+      "attempts": 1,
+      "usage": {
+        "prompt_tokens": 2365,
+        "completion_tokens": 1516,
+        "total_tokens": 3881,
+        "cached_tokens": 384
+      },
+      "finish_reason": "stop",
+      "raw_content": "{\"summary\":\"本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变化。\",\"root_causes\":[{\"cause\":\"广告支出大幅膨胀，超过销售增量，成为利润下滑主因\",\"reasoning\":\"广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。\",\"evidence_ids\":[\"ev-ad_spend\",\"ev-sales\"]},{\"cause\":\"采购与履约成本随销量同步上升\",\"reasoning\":\"订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。\",\"evidence_ids\":[\"ev-cogs\",\"ev-fulfillment\",\"ev-platform_fees\"]},{\"cause\":\"折扣、退款与其他成本未发生变化，非本期波动来源\",\"reasoning\":\"三项贡献均为0，说明利润恶化完全来自广告与商品、履约、平台费用端。\",\"evidence_ids\":[\"ev-discounts\",\"ev-refunds\",\"ev-other_costs\"]}],\"evidence_references\":[\"ev-ad_spend\",\"ev-sales\",\"ev-cogs\",\"ev-fulfillment\",\"ev-platform_fees\",\"ev-discounts\",\"ev-refunds\",\"ev-other_costs\"],\"recommendations\":[{\"action\":\"在模拟中把 SKU TRAVEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批\",\"rationale\":\"广告支出是利润下滑的首要因素，该SKU利润与广告变化最集中，先以模拟验证降预算效果。\",\"evidence_ids\":[\"ev-ad_spend\",\"ev-sales\"],\"priority\":\"high\"},{\"action\":\"在模拟中对比该SKU降价预算后销售额与净利润变化，验证广告效率是否回升\",\"rationale\":\"销售增量不足以覆盖广告增量，需确认广告投入产出比是否改善再决定是否推广。\",\"evidence_ids\":[\"ev-ad_spend\",\"ev-sales\"],\"priority\":\"medium\"},{\"action\":\"同步复核采购与履约单均成本，作为模拟的并行假设输入\",\"rationale\":\"采购与履约合计增10000美分，需确认是销量驱动还是单均成本上升。\",\"evidence_ids\":[\"ev-cogs\",\"ev-fulfillment\"],\"priority\":\"low\"}],\"expected_impact\":{\"direction\":\"improve\",\"horizon_days\":14,\"explanation\":\"模拟下调预算可削减广告支出，短期内改善利润率；但销售额可能同步回落，净额是否改善取决于广告效率变化。\"},\"risks\":[\"降预算可能减少销量与自然排名\",\"SKU级归因缺少独立证据ID，结论需人工核对\",\"模拟结果不代表真实市场表现\"],\"missing_information\":[\"广告花费的广告活动与关键词级拆分\",\"该SKU的ROAS、转化率与单均广告成本\",\"TRAVEL-BAG-01 的库存周转与售价结构\"],\"confidence\":0.72}",
+      "output": {
+        "summary": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变化。",
+        "root_causes": [
+          {
+            "cause": "广告支出大幅膨胀，超过销售增量，成为利润下滑主因",
+            "reasoning": "广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。",
+            "evidence_ids": [
+              "ev-ad_spend",
+              "ev-sales"
+            ]
+          },
+          {
+            "cause": "采购与履约成本随销量同步上升",
+            "reasoning": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+            "evidence_ids": [
+              "ev-cogs",
+              "ev-fulfillment",
+              "ev-platform_fees"
+            ]
+          },
+          {
+            "cause": "折扣、退款与其他成本未发生变化，非本期波动来源",
+            "reasoning": "三项贡献均为0，说明利润恶化完全来自广告与商品、履约、平台费用端。",
+            "evidence_ids": [
+              "ev-discounts",
+              "ev-refunds",
+              "ev-other_costs"
+            ]
+          }
+        ],
+        "evidence_references": [
+          "ev-ad_spend",
+          "ev-sales",
+          "ev-cogs",
+          "ev-fulfillment",
+          "ev-platform_fees",
+          "ev-discounts",
+          "ev-refunds",
+          "ev-other_costs"
+        ],
+        "recommendations": [
+          {
+            "action": "在模拟中把 SKU TRAVEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批",
+            "rationale": "广告支出是利润下滑的首要因素，该SKU利润与广告变化最集中，先以模拟验证降预算效果。",
+            "evidence_ids": [
+              "ev-ad_spend",
+              "ev-sales"
+            ],
+            "priority": "high"
+          },
+          {
+            "action": "在模拟中对比该SKU降价预算后销售额与净利润变化，验证广告效率是否回升",
+            "rationale": "销售增量不足以覆盖广告增量，需确认广告投入产出比是否改善再决定是否推广。",
+            "evidence_ids": [
+              "ev-ad_spend",
+              "ev-sales"
+            ],
+            "priority": "medium"
+          },
+          {
+            "action": "同步复核采购与履约单均成本，作为模拟的并行假设输入",
+            "rationale": "采购与履约合计增10000美分，需确认是销量驱动还是单均成本上升。",
+            "evidence_ids": [
+              "ev-cogs",
+              "ev-fulfillment"
+            ],
+            "priority": "low"
+          }
+        ],
+        "expected_impact": {
+          "direction": "improve",
+          "horizon_days": 14,
+          "explanation": "模拟下调预算可削减广告支出，短期内改善利润率；但销售额可能同步回落，净额是否改善取决于广告效率变化。"
+        },
+        "risks": [
+          "降预算可能减少销量与自然排名",
+          "SKU级归因缺少独立证据ID，结论需人工核对",
+          "模拟结果不代表真实市场表现"
+        ],
+        "missing_information": [
+          "广告花费的广告活动与关键词级拆分",
+          "该SKU的ROAS、转化率与单均广告成本",
+          "TRAVEL-BAG-01 的库存周转与售价结构"
+        ],
+        "confidence": 0.72
+      },
+      "rejected_output": null,
+      "error": null,
+      "call_count": 1,
+      "side_effects": {
+        "approval_calls": 0,
+        "execution_calls": 0,
+        "recommendation_calls": 0,
+        "business_external_calls": 0,
+        "database_writes": 0,
+        "llm_calls": 1
+      },
+      "payload": {
+        "task": "解释利润变化的会计驱动因素，并给出可人工审批的模拟动作建议",
+        "period": {
+          "start_date": "2026-10-01",
+          "end_date": "2026-10-30"
+        },
+        "previous_period": {
+          "start_date": "2026-09-01",
+          "end_date": "2026-09-30"
+        },
+        "store_id": null,
+        "currency": "USD",
+        "amount_unit": "integer USD cents; divide by 100 for USD",
+        "current_totals": {
+          "sales": 120000,
+          "discounts": 0,
+          "refunds": 0,
+          "cogs": 36000,
+          "ad_spend": 45000,
+          "fulfillment": 14000,
+          "platform_fees": 6000,
+          "other_costs": 0,
+          "net_sales": 120000,
+          "net_profit": 19000,
+          "margin_pct": 15.83,
+          "orders": 140,
+          "units": 140
+        },
+        "previous_totals": {
+          "sales": 100000,
+          "discounts": 0,
+          "refunds": 0,
+          "cogs": 30000,
+          "ad_spend": 10000,
+          "fulfillment": 10000,
+          "platform_fees": 5000,
+          "other_costs": 0,
+          "net_sales": 100000,
+          "net_profit": 45000,
+          "margin_pct": 45.0,
+          "orders": 120,
+          "units": 120
+        },
+        "changes": {
+          "sales": {
+            "absolute": 20000,
+            "pct": 20.0
+          },
+          "discounts": {
+            "absolute": 0,
+            "pct": null
+          },
+          "refunds": {
+            "absolute": 0,
+            "pct": null
+          },
+          "cogs": {
+            "absolute": 6000,
+            "pct": 20.0
+          },
+          "ad_spend": {
+            "absolute": 35000,
+            "pct": 350.0
+          },
+          "fulfillment": {
+            "absolute": 4000,
+            "pct": 40.0
+          },
+          "platform_fees": {
+            "absolute": 1000,
+            "pct": 20.0
+          },
+          "other_costs": {
+            "absolute": 0,
+            "pct": null
+          },
+          "net_sales": {
+            "absolute": 20000,
+            "pct": 20.0
+          },
+          "net_profit": {
+            "absolute": -26000,
+            "pct": -57.78
+          },
+          "margin_pct": {
+            "absolute": -29.17,
+            "pct": null
+          },
+          "orders": {
+            "absolute": 20,
+            "pct": 16.67
+          },
+          "units": {
+            "absolute": 20,
+            "pct": 16.67
+          }
+        },
+        "drivers": [
+          {
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "previous": 10000,
+            "current": 45000,
+            "contribution": -35000,
+            "source": "daily_operations.ad_spend"
+          },
+          {
+            "metric": "cogs",
+            "label": "采购成本",
+            "previous": 30000,
+            "current": 36000,
+            "contribution": -6000,
+            "source": "orders.cogs"
+          },
+          {
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "previous": 10000,
+            "current": 14000,
+            "contribution": -4000,
+            "source": "orders.fulfillment"
+          },
+          {
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "previous": 5000,
+            "current": 6000,
+            "contribution": -1000,
+            "source": "orders.platform_fees"
+          },
+          {
+            "metric": "discounts",
+            "label": "折扣",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.discounts"
+          },
+          {
+            "metric": "refunds",
+            "label": "退款",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.refunds"
+          },
+          {
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.other_costs"
+          },
+          {
+            "metric": "sales",
+            "label": "销售额",
+            "previous": 100000,
+            "current": 120000,
+            "contribution": 20000,
+            "source": "orders.sales"
+          }
+        ],
+        "primary_driver": {
+          "metric": "ad_spend",
+          "label": "广告支出",
+          "previous": 10000,
+          "current": 45000,
+          "contribution": -35000,
+          "source": "daily_operations.ad_spend"
+        },
+        "evidence": [
+          {
+            "id": "ev-ad_spend",
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "current": 45000,
+            "previous": 10000,
+            "contribution": -35000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "daily_operations.ad_spend",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-cogs",
+            "metric": "cogs",
+            "label": "采购成本",
+            "current": 36000,
+            "previous": 30000,
+            "contribution": -6000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.cogs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-fulfillment",
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "current": 14000,
+            "previous": 10000,
+            "contribution": -4000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.fulfillment",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-platform_fees",
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "current": 6000,
+            "previous": 5000,
+            "contribution": -1000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.platform_fees",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-discounts",
+            "metric": "discounts",
+            "label": "折扣",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.discounts",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-refunds",
+            "metric": "refunds",
+            "label": "退款",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.refunds",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-other_costs",
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.other_costs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-sales",
+            "metric": "sales",
+            "label": "销售额",
+            "current": 120000,
+            "previous": 100000,
+            "contribution": 20000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.sales",
+            "formula": "current - previous"
+          }
+        ],
+        "sku_breakdown": [
+          {
+            "sku": "TRAVEL-BAG-01",
+            "profit_delta": -16050,
+            "ad_spend_delta": 20550,
+            "inventory": 210,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "THERMO-02",
+            "profit_delta": -6300,
+            "ad_spend_delta": 9000,
+            "inventory": 270,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "USB-HUB-03",
+            "profit_delta": -3650,
+            "ad_spend_delta": 5450,
+            "inventory": 330,
+            "inbound_inventory": 120
+          }
+        ],
+        "planned_simulation_action": {
+          "type": "adjust_ad_budget",
+          "simulation": true,
+          "product_id": "bag",
+          "sku": "TRAVEL-BAG-01",
+          "adjustment_pct": 15,
+          "baseline_daily_budget": 852,
+          "proposed_daily_budget": 724,
+          "source_period": {
+            "start_date": "2026-10-01",
+            "end_date": "2026-10-30"
+          }
+        },
+        "allowed_evidence_ids": [
+          "ev-ad_spend",
+          "ev-cogs",
+          "ev-fulfillment",
+          "ev-platform_fees",
+          "ev-discounts",
+          "ev-refunds",
+          "ev-other_costs",
+          "ev-sales"
+        ],
+        "output_requirements": {
+          "all_claims_reference_evidence": true,
+          "numbers_must_come_from_payload": true,
+          "simulation_only": true
+        }
+      },
+      "case_id": "ad_spend_pressure",
+      "scenario": "real:trial-1",
+      "expected": {
+        "status": "llm_success",
+        "error_code": null,
+        "reason": null,
+        "negative_control": false,
+        "expected_gate_failure": null
+      },
+      "hard_gates": {
+        "expected_status": true,
+        "expected_error_code": true,
+        "expected_reason": true,
+        "no_side_effects": true,
+        "schema_valid": true,
+        "evidence_ids_valid": true,
+        "primary_driver_hit": true,
+        "recommendation_primary_evidence": true,
+        "action_target_consistency": true,
+        "action_type_consistency": true,
+        "impact_direction_consistency": true,
+        "amount_consistency": true,
+        "forbidden_claims": true
+      },
+      "hard_gate_details": {
+        "expected_status": "llm_success",
+        "actual_status": "llm_success",
+        "expected_error_code": null,
+        "actual_error_code": null,
+        "expected_reason": null,
+        "actual_reason": null,
+        "evidence": {
+          "valid": true,
+          "allowed": [
+            "ev-ad_spend",
+            "ev-cogs",
+            "ev-discounts",
+            "ev-fulfillment",
+            "ev-other_costs",
+            "ev-platform_fees",
+            "ev-refunds",
+            "ev-sales"
+          ],
+          "referenced": [
+            "ev-ad_spend",
+            "ev-cogs",
+            "ev-discounts",
+            "ev-fulfillment",
+            "ev-other_costs",
+            "ev-platform_fees",
+            "ev-refunds",
+            "ev-sales"
+          ],
+          "unknown": [],
+          "primary_evidence_id": "ev-ad_spend",
+          "primary_hit": true,
+          "recommendation_primary_hit": true,
+          "all_causes_have_evidence": true,
+          "all_recommendations_have_evidence": true
+        },
+        "action": {
+          "target_sku": "TRAVEL-BAG-01",
+          "action_type": "adjust_ad_budget",
+          "target_consistency": true,
+          "action_type_consistency": true,
+          "impact_direction_consistency": true,
+          "warnings": []
+        },
+        "number_audit": {
+          "passed": true,
+          "checked": 24,
+          "known_facts": [
+            {
+              "field": "summary",
+              "value": "100000",
+              "unit": "cents",
+              "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至1",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "120000",
+              "unit": "cents",
+              "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "20",
+              "unit": "percent",
+              "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0",
+              "matched": "20.00"
+            },
+            {
+              "field": "summary",
+              "value": "45000",
+              "unit": "cents",
+              "context": "额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "19000",
+              "unit": "cents",
+              "context": "分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "45.0",
+              "unit": "percent",
+              "context": "+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美",
+              "matched": "45.00"
+            },
+            {
+              "field": "summary",
+              "value": "15.83",
+              "unit": "percent",
+              "context": "净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加3500",
+              "matched": "15.83"
+            },
+            {
+              "field": "summary",
+              "value": "10000",
+              "unit": "cents",
+              "context": "000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "45000",
+              "unit": "cents",
+              "context": "从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "35000",
+              "unit": "cents",
+              "context": ".83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "20000",
+              "unit": "cents",
+              "context": "0000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "6000",
+              "unit": "cents",
+              "context": "分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "4000",
+              "unit": "cents",
+              "context": "出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "1000",
+              "unit": "cents",
+              "context": "；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变化。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "35000",
+              "unit": "cents",
+              "context": "广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "20000",
+              "unit": "cents",
+              "context": "广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "29",
+              "unit": "pp",
+              "context": "000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。",
+              "matched": "29.17"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "16.67",
+              "unit": "percent",
+              "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000",
+              "matched": "16.67"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "6000",
+              "unit": "cents",
+              "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "4000",
+              "unit": "cents",
+              "context": "与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "1000",
+              "unit": "cents",
+              "context": ".67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+              "matched": "cents"
+            },
+            {
+              "field": "recommendations[0].action",
+              "value": "852",
+              "unit": "cents",
+              "context": "SKU TRAVEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批",
+              "matched": "cents"
+            },
+            {
+              "field": "recommendations[0].action",
+              "value": "724",
+              "unit": "cents",
+              "context": "VEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批",
+              "matched": "cents"
+            },
+            {
+              "field": "recommendations[2].rationale",
+              "value": "10000",
+              "unit": "cents",
+              "context": "采购与履约合计增10000美分，需确认是销量驱动还是单均成本上升。",
+              "matched": "cents"
+            }
+          ],
+          "assumptions": [],
+          "non_amount": [
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "20",
+              "unit": "none",
+              "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、",
+              "reason": "count/date/metric"
+            },
+            {
+              "field": "root_causes[2].reasoning",
+              "value": "0",
+              "unit": "none",
+              "context": "三项贡献均为0，说明利润恶化完全来自广告与商品、履约、平台费用端。",
+              "reason": "count/date/metric"
+            }
+          ],
+          "violations": [],
+          "warnings": []
+        },
+        "forbidden_claims": {
+          "passed": true,
+          "violations": []
+        }
+      },
+      "evidence_consistency": {
+        "valid": true,
+        "allowed": [
+          "ev-ad_spend",
+          "ev-cogs",
+          "ev-discounts",
+          "ev-fulfillment",
+          "ev-other_costs",
+          "ev-platform_fees",
+          "ev-refunds",
+          "ev-sales"
+        ],
+        "referenced": [
+          "ev-ad_spend",
+          "ev-cogs",
+          "ev-discounts",
+          "ev-fulfillment",
+          "ev-other_costs",
+          "ev-platform_fees",
+          "ev-refunds",
+          "ev-sales"
+        ],
+        "unknown": [],
+        "primary_evidence_id": "ev-ad_spend",
+        "primary_hit": true,
+        "recommendation_primary_hit": true,
+        "all_causes_have_evidence": true,
+        "all_recommendations_have_evidence": true
+      },
+      "action_consistency": {
+        "target_sku": "TRAVEL-BAG-01",
+        "action_type": "adjust_ad_budget",
+        "target_consistency": true,
+        "action_type_consistency": true,
+        "impact_direction_consistency": true,
+        "warnings": []
+      },
+      "number_check": {
+        "passed": true,
+        "checked": 24,
+        "known_facts": [
+          {
+            "field": "summary",
+            "value": "100000",
+            "unit": "cents",
+            "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至1",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "120000",
+            "unit": "cents",
+            "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "20",
+            "unit": "percent",
+            "context": "本期销售额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0",
+            "matched": "20.00"
+          },
+          {
+            "field": "summary",
+            "value": "45000",
+            "unit": "cents",
+            "context": "额由100000美分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "19000",
+            "unit": "cents",
+            "context": "分增至120000美分（+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "45.0",
+            "unit": "percent",
+            "context": "+20%），但净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美",
+            "matched": "45.00"
+          },
+          {
+            "field": "summary",
+            "value": "15.83",
+            "unit": "percent",
+            "context": "净利润由45000美分降至19000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加3500",
+            "matched": "15.83"
+          },
+          {
+            "field": "summary",
+            "value": "10000",
+            "unit": "cents",
+            "context": "000美分，利润率从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "45000",
+            "unit": "cents",
+            "context": "从45.0%降至15.83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "35000",
+            "unit": "cents",
+            "context": ".83%。主因是广告支出由10000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "20000",
+            "unit": "cents",
+            "context": "0000美分升至45000美分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "6000",
+            "unit": "cents",
+            "context": "分，增加35000美分，超出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "4000",
+            "unit": "cents",
+            "context": "出销售增量20000美分；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "1000",
+            "unit": "cents",
+            "context": "；采购成本增加6000美分、履约成本增加4000美分、平台费增加1000美分叠加上升。折扣、退款、其他可变成本均无变化。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "35000",
+            "unit": "cents",
+            "context": "广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "20000",
+            "unit": "cents",
+            "context": "广告支出增加35000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "29",
+            "unit": "pp",
+            "context": "000美分，远高于销售额增加的20000美分，直接使利润率压缩约29个百分点。",
+            "matched": "29.17"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "16.67",
+            "unit": "percent",
+            "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000",
+            "matched": "16.67"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "6000",
+            "unit": "cents",
+            "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "4000",
+            "unit": "cents",
+            "context": "与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "1000",
+            "unit": "cents",
+            "context": ".67%），采购成本增6000美分、履约增4000美分、平台费增1000美分，属规模性成本增加。",
+            "matched": "cents"
+          },
+          {
+            "field": "recommendations[0].action",
+            "value": "852",
+            "unit": "cents",
+            "context": "SKU TRAVEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批",
+            "matched": "cents"
+          },
+          {
+            "field": "recommendations[0].action",
+            "value": "724",
+            "unit": "cents",
+            "context": "VEL-BAG-01 的日广告预算下调15%，即由852美分降至724美分，并等待人工审批",
+            "matched": "cents"
+          },
+          {
+            "field": "recommendations[2].rationale",
+            "value": "10000",
+            "unit": "cents",
+            "context": "采购与履约合计增10000美分，需确认是销量驱动还是单均成本上升。",
+            "matched": "cents"
+          }
+        ],
+        "assumptions": [],
+        "non_amount": [
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "20",
+            "unit": "none",
+            "context": "订单与件数各增20（+16.67%），采购成本增6000美分、履约增4000美分、",
+            "reason": "count/date/metric"
+          },
+          {
+            "field": "root_causes[2].reasoning",
+            "value": "0",
+            "unit": "none",
+            "context": "三项贡献均为0，说明利润恶化完全来自广告与商品、履约、平台费用端。",
+            "reason": "count/date/metric"
+          }
+        ],
+        "violations": [],
+        "warnings": []
+      },
+      "forbidden_claims": {
+        "passed": true,
+        "violations": []
+      },
+      "semantic_warnings": [],
+      "failure_reasons": [],
+      "negative_control_detected": null,
+      "passed": true,
+      "trial": 1,
+      "real_online": false
+    },
+    {
+      "status": "llm_success",
+      "reason": null,
+      "configured": true,
+      "provider_type": "deepseek",
+      "model": "deepseek-flash",
+      "prompt_hash": "f02e262aee2dc6eb6d20ec92eff412c26835356610899435645a5b3961b71f31",
+      "model_params": {
+        "temperature": 0.2,
+        "max_tokens": 3000
+      },
+      "latency_ms": 15572.508,
+      "attempts": 1,
+      "usage": {
+        "prompt_tokens": 2358,
+        "completion_tokens": 2653,
+        "total_tokens": 5011,
+        "cached_tokens": 384
+      },
+      "finish_reason": "stop",
+      "raw_content": "{\"summary\":\"本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告和平台费小幅上升进一步挤压利润，折扣、退款及其他成本无变化。\",\"root_causes\":[{\"cause\":\"物流履约成本异常上升\",\"reasoning\":\"物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。\",\"evidence_ids\":[\"ev-fulfillment\"]},{\"cause\":\"采购与广告等变动成本同步增加\",\"reasoning\":\"采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。\",\"evidence_ids\":[\"ev-cogs\",\"ev-ad_spend\",\"ev-platform_fees\"]},{\"cause\":\"销售增长不足以抵消成本上升\",\"reasoning\":\"销售额增加10000美分，但成本增量更大，净销售增长未转化为利润增长。\",\"evidence_ids\":[\"ev-sales\"]}],\"evidence_references\":[\"ev-fulfillment\",\"ev-cogs\",\"ev-ad_spend\",\"ev-platform_fees\",\"ev-sales\"],\"recommendations\":[{\"action\":\"在模拟环境为TRAVEL-BAG-01创建人工审批的复盘任务，核查物流履约费用与SKU利润。\",\"rationale\":\"物流履约贡献-20000美分，需人工确认异常来源并核对TRAVEL-BAG-01成本。\",\"evidence_ids\":[\"ev-fulfillment\"],\"priority\":\"high\"},{\"action\":\"在模拟人工审批任务中要求补充履约费用明细，并复核采购成本与广告花费增量。\",\"rationale\":\"采购、广告与平台费合计贡献-4500美分，需确认是否与订单量增长匹配。\",\"evidence_ids\":[\"ev-cogs\",\"ev-ad_spend\",\"ev-platform_fees\"],\"priority\":\"medium\"},{\"action\":\"暂缓任何真实广告预算调整；如审批通过，仅保留TRAVEL-BAG-01的模拟复盘任务。\",\"rationale\":\"当前利润下滑主因是履约成本，先审成本再评估广告预算，避免误调。\",\"evidence_ids\":[\"ev-fulfillment\",\"ev-ad_spend\"],\"priority\":\"medium\"}],\"expected_impact\":{\"direction\":\"improve\",\"horizon_days\":30,\"explanation\":\"若人工复盘确认并修正履约成本异常，利润率有修复空间；当前动作仅为模拟复盘任务，不直接改变真实成本。\"},\"risks\":[\"履约成本异常原因未确认，修复幅度不确定\",\"SKU利润拆分未提供对应证据明细\",\"模拟复盘任务不产生真实成本或预算变更\"],\"missing_information\":[\"物流履约费用上涨的具体计费明细\",\"TRAVEL-BAG-01的订单量与履约单价变化\",\"供应商或承运商合同/费率变更信息\"],\"confidence\":0.84}",
+      "output": {
+        "summary": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告和平台费小幅上升进一步挤压利润，折扣、退款及其他成本无变化。",
+        "root_causes": [
+          {
+            "cause": "物流履约成本异常上升",
+            "reasoning": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。",
+            "evidence_ids": [
+              "ev-fulfillment"
+            ]
+          },
+          {
+            "cause": "采购与广告等变动成本同步增加",
+            "reasoning": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+            "evidence_ids": [
+              "ev-cogs",
+              "ev-ad_spend",
+              "ev-platform_fees"
+            ]
+          },
+          {
+            "cause": "销售增长不足以抵消成本上升",
+            "reasoning": "销售额增加10000美分，但成本增量更大，净销售增长未转化为利润增长。",
+            "evidence_ids": [
+              "ev-sales"
+            ]
+          }
+        ],
+        "evidence_references": [
+          "ev-fulfillment",
+          "ev-cogs",
+          "ev-ad_spend",
+          "ev-platform_fees",
+          "ev-sales"
+        ],
+        "recommendations": [
+          {
+            "action": "在模拟环境为TRAVEL-BAG-01创建人工审批的复盘任务，核查物流履约费用与SKU利润。",
+            "rationale": "物流履约贡献-20000美分，需人工确认异常来源并核对TRAVEL-BAG-01成本。",
+            "evidence_ids": [
+              "ev-fulfillment"
+            ],
+            "priority": "high"
+          },
+          {
+            "action": "在模拟人工审批任务中要求补充履约费用明细，并复核采购成本与广告花费增量。",
+            "rationale": "采购、广告与平台费合计贡献-4500美分，需确认是否与订单量增长匹配。",
+            "evidence_ids": [
+              "ev-cogs",
+              "ev-ad_spend",
+              "ev-platform_fees"
+            ],
+            "priority": "medium"
+          },
+          {
+            "action": "暂缓任何真实广告预算调整；如审批通过，仅保留TRAVEL-BAG-01的模拟复盘任务。",
+            "rationale": "当前利润下滑主因是履约成本，先审成本再评估广告预算，避免误调。",
+            "evidence_ids": [
+              "ev-fulfillment",
+              "ev-ad_spend"
+            ],
+            "priority": "medium"
+          }
+        ],
+        "expected_impact": {
+          "direction": "improve",
+          "horizon_days": 30,
+          "explanation": "若人工复盘确认并修正履约成本异常，利润率有修复空间；当前动作仅为模拟复盘任务，不直接改变真实成本。"
+        },
+        "risks": [
+          "履约成本异常原因未确认，修复幅度不确定",
+          "SKU利润拆分未提供对应证据明细",
+          "模拟复盘任务不产生真实成本或预算变更"
+        ],
+        "missing_information": [
+          "物流履约费用上涨的具体计费明细",
+          "TRAVEL-BAG-01的订单量与履约单价变化",
+          "供应商或承运商合同/费率变更信息"
+        ],
+        "confidence": 0.84
+      },
+      "rejected_output": null,
+      "error": null,
+      "call_count": 1,
+      "side_effects": {
+        "approval_calls": 0,
+        "execution_calls": 0,
+        "recommendation_calls": 0,
+        "business_external_calls": 0,
+        "database_writes": 0,
+        "llm_calls": 1
+      },
+      "payload": {
+        "task": "解释利润变化的会计驱动因素，并给出可人工审批的模拟动作建议",
+        "period": {
+          "start_date": "2026-10-01",
+          "end_date": "2026-10-30"
+        },
+        "previous_period": {
+          "start_date": "2026-09-01",
+          "end_date": "2026-09-30"
+        },
+        "store_id": null,
+        "currency": "USD",
+        "amount_unit": "integer USD cents; divide by 100 for USD",
+        "current_totals": {
+          "sales": 110000,
+          "discounts": 0,
+          "refunds": 0,
+          "cogs": 33000,
+          "ad_spend": 11000,
+          "fulfillment": 30000,
+          "platform_fees": 5500,
+          "other_costs": 0,
+          "net_sales": 110000,
+          "net_profit": 30500,
+          "margin_pct": 27.73,
+          "orders": 130,
+          "units": 130
+        },
+        "previous_totals": {
+          "sales": 100000,
+          "discounts": 0,
+          "refunds": 0,
+          "cogs": 30000,
+          "ad_spend": 10000,
+          "fulfillment": 10000,
+          "platform_fees": 5000,
+          "other_costs": 0,
+          "net_sales": 100000,
+          "net_profit": 45000,
+          "margin_pct": 45.0,
+          "orders": 120,
+          "units": 120
+        },
+        "changes": {
+          "sales": {
+            "absolute": 10000,
+            "pct": 10.0
+          },
+          "discounts": {
+            "absolute": 0,
+            "pct": null
+          },
+          "refunds": {
+            "absolute": 0,
+            "pct": null
+          },
+          "cogs": {
+            "absolute": 3000,
+            "pct": 10.0
+          },
+          "ad_spend": {
+            "absolute": 1000,
+            "pct": 10.0
+          },
+          "fulfillment": {
+            "absolute": 20000,
+            "pct": 200.0
+          },
+          "platform_fees": {
+            "absolute": 500,
+            "pct": 10.0
+          },
+          "other_costs": {
+            "absolute": 0,
+            "pct": null
+          },
+          "net_sales": {
+            "absolute": 10000,
+            "pct": 10.0
+          },
+          "net_profit": {
+            "absolute": -14500,
+            "pct": -32.22
+          },
+          "margin_pct": {
+            "absolute": -17.27,
+            "pct": null
+          },
+          "orders": {
+            "absolute": 10,
+            "pct": 8.33
+          },
+          "units": {
+            "absolute": 10,
+            "pct": 8.33
+          }
+        },
+        "drivers": [
+          {
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "previous": 10000,
+            "current": 30000,
+            "contribution": -20000,
+            "source": "orders.fulfillment"
+          },
+          {
+            "metric": "cogs",
+            "label": "采购成本",
+            "previous": 30000,
+            "current": 33000,
+            "contribution": -3000,
+            "source": "orders.cogs"
+          },
+          {
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "previous": 10000,
+            "current": 11000,
+            "contribution": -1000,
+            "source": "daily_operations.ad_spend"
+          },
+          {
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "previous": 5000,
+            "current": 5500,
+            "contribution": -500,
+            "source": "orders.platform_fees"
+          },
+          {
+            "metric": "discounts",
+            "label": "折扣",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.discounts"
+          },
+          {
+            "metric": "refunds",
+            "label": "退款",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.refunds"
+          },
+          {
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.other_costs"
+          },
+          {
+            "metric": "sales",
+            "label": "销售额",
+            "previous": 100000,
+            "current": 110000,
+            "contribution": 10000,
+            "source": "orders.sales"
+          }
+        ],
+        "primary_driver": {
+          "metric": "fulfillment",
+          "label": "物流履约",
+          "previous": 10000,
+          "current": 30000,
+          "contribution": -20000,
+          "source": "orders.fulfillment"
+        },
+        "evidence": [
+          {
+            "id": "ev-fulfillment",
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "current": 30000,
+            "previous": 10000,
+            "contribution": -20000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.fulfillment",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-cogs",
+            "metric": "cogs",
+            "label": "采购成本",
+            "current": 33000,
+            "previous": 30000,
+            "contribution": -3000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.cogs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-ad_spend",
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "current": 11000,
+            "previous": 10000,
+            "contribution": -1000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "daily_operations.ad_spend",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-platform_fees",
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "current": 5500,
+            "previous": 5000,
+            "contribution": -500,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.platform_fees",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-discounts",
+            "metric": "discounts",
+            "label": "折扣",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.discounts",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-refunds",
+            "metric": "refunds",
+            "label": "退款",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.refunds",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-other_costs",
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.other_costs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-sales",
+            "metric": "sales",
+            "label": "销售额",
+            "current": 110000,
+            "previous": 100000,
+            "contribution": 10000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.sales",
+            "formula": "current - previous"
+          }
+        ],
+        "sku_breakdown": [
+          {
+            "sku": "TRAVEL-BAG-01",
+            "profit_delta": -7250,
+            "ad_spend_delta": 500,
+            "inventory": 210,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "THERMO-02",
+            "profit_delta": -4350,
+            "ad_spend_delta": 300,
+            "inventory": 270,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "USB-HUB-03",
+            "profit_delta": -2900,
+            "ad_spend_delta": 200,
+            "inventory": 330,
+            "inbound_inventory": 120
+          }
+        ],
+        "planned_simulation_action": {
+          "type": "create_review_task",
+          "simulation": true,
+          "product_id": "bag",
+          "sku": "TRAVEL-BAG-01",
+          "adjustment_pct": 15,
+          "baseline_daily_budget": 184,
+          "proposed_daily_budget": 184,
+          "source_period": {
+            "start_date": "2026-10-01",
+            "end_date": "2026-10-30"
+          }
+        },
+        "allowed_evidence_ids": [
+          "ev-fulfillment",
+          "ev-cogs",
+          "ev-ad_spend",
+          "ev-platform_fees",
+          "ev-discounts",
+          "ev-refunds",
+          "ev-other_costs",
+          "ev-sales"
+        ],
+        "output_requirements": {
+          "all_claims_reference_evidence": true,
+          "numbers_must_come_from_payload": true,
+          "simulation_only": true
+        }
+      },
+      "case_id": "fulfillment_pressure",
+      "scenario": "real:trial-1",
+      "expected": {
+        "status": "llm_success",
+        "error_code": null,
+        "reason": null,
+        "negative_control": false,
+        "expected_gate_failure": null
+      },
+      "hard_gates": {
+        "expected_status": true,
+        "expected_error_code": true,
+        "expected_reason": true,
+        "no_side_effects": true,
+        "schema_valid": true,
+        "evidence_ids_valid": true,
+        "primary_driver_hit": true,
+        "recommendation_primary_evidence": true,
+        "action_target_consistency": true,
+        "action_type_consistency": true,
+        "impact_direction_consistency": true,
+        "amount_consistency": true,
+        "forbidden_claims": true
+      },
+      "hard_gate_details": {
+        "expected_status": "llm_success",
+        "actual_status": "llm_success",
+        "expected_error_code": null,
+        "actual_error_code": null,
+        "expected_reason": null,
+        "actual_reason": null,
+        "evidence": {
+          "valid": true,
+          "allowed": [
+            "ev-ad_spend",
+            "ev-cogs",
+            "ev-discounts",
+            "ev-fulfillment",
+            "ev-other_costs",
+            "ev-platform_fees",
+            "ev-refunds",
+            "ev-sales"
+          ],
+          "referenced": [
+            "ev-ad_spend",
+            "ev-cogs",
+            "ev-fulfillment",
+            "ev-platform_fees",
+            "ev-sales"
+          ],
+          "unknown": [],
+          "primary_evidence_id": "ev-fulfillment",
+          "primary_hit": true,
+          "recommendation_primary_hit": true,
+          "all_causes_have_evidence": true,
+          "all_recommendations_have_evidence": true
+        },
+        "action": {
+          "target_sku": "TRAVEL-BAG-01",
+          "action_type": "create_review_task",
+          "target_consistency": true,
+          "action_type_consistency": true,
+          "impact_direction_consistency": true,
+          "warnings": []
+        },
+        "number_audit": {
+          "passed": true,
+          "checked": 18,
+          "known_facts": [
+            {
+              "field": "summary",
+              "value": "110000",
+              "unit": "cents",
+              "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "10.0",
+              "unit": "percent",
+              "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少1450",
+              "matched": "10.00"
+            },
+            {
+              "field": "summary",
+              "value": "30500",
+              "unit": "cents",
+              "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "45000",
+              "unit": "cents",
+              "context": "0000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "14500",
+              "unit": "cents",
+              "context": "0.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成",
+              "matched": "cents"
+            },
+            {
+              "field": "summary",
+              "value": "45.0",
+              "unit": "percent",
+              "context": "30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000",
+              "matched": "45.00"
+            },
+            {
+              "field": "summary",
+              "value": "27.73",
+              "unit": "percent",
+              "context": "，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告",
+              "matched": "27.73"
+            },
+            {
+              "field": "summary",
+              "value": "20000",
+              "unit": "cents",
+              "context": "45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告和平台费小幅上升进一步挤压利润，折扣、退款及其他成本",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "10000",
+              "unit": "ambiguous",
+              "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一",
+              "matched": "known fact"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "30000",
+              "unit": "cents",
+              "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[0].reasoning",
+              "value": "-20000",
+              "unit": "cents",
+              "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "3000",
+              "unit": "ambiguous",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放",
+              "matched": "known fact"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "1000",
+              "unit": "ambiguous",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+              "matched": "known fact"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "500",
+              "unit": "cents",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+              "matched": "cents"
+            },
+            {
+              "field": "root_causes[1].reasoning",
+              "value": "-4500",
+              "unit": "cents",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+              "matched": "derived_sum"
+            },
+            {
+              "field": "root_causes[2].reasoning",
+              "value": "10000",
+              "unit": "cents",
+              "context": "销售额增加10000美分，但成本增量更大，净销售增长未转化为利润增长。",
+              "matched": "cents"
+            },
+            {
+              "field": "recommendations[0].rationale",
+              "value": "-20000",
+              "unit": "cents",
+              "context": "物流履约贡献-20000美分，需人工确认异常来源并核对TRAVEL-BAG-01成本。",
+              "matched": "cents"
+            },
+            {
+              "field": "recommendations[1].rationale",
+              "value": "-4500",
+              "unit": "cents",
+              "context": "采购、广告与平台费合计贡献-4500美分，需确认是否与订单量增长匹配。",
+              "matched": "derived_sum"
+            }
+          ],
+          "assumptions": [],
+          "non_amount": [],
+          "violations": [],
+          "warnings": [
+            {
+              "type": "ambiguous_unit",
+              "value": "10000",
+              "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一",
+              "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+            },
+            {
+              "type": "ambiguous_unit",
+              "value": "3000",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放",
+              "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+            },
+            {
+              "type": "ambiguous_unit",
+              "value": "1000",
+              "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+              "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+            }
+          ]
+        },
+        "forbidden_claims": {
+          "passed": true,
+          "violations": []
+        }
+      },
+      "evidence_consistency": {
+        "valid": true,
+        "allowed": [
+          "ev-ad_spend",
+          "ev-cogs",
+          "ev-discounts",
+          "ev-fulfillment",
+          "ev-other_costs",
+          "ev-platform_fees",
+          "ev-refunds",
+          "ev-sales"
+        ],
+        "referenced": [
+          "ev-ad_spend",
+          "ev-cogs",
+          "ev-fulfillment",
+          "ev-platform_fees",
+          "ev-sales"
+        ],
+        "unknown": [],
+        "primary_evidence_id": "ev-fulfillment",
+        "primary_hit": true,
+        "recommendation_primary_hit": true,
+        "all_causes_have_evidence": true,
+        "all_recommendations_have_evidence": true
+      },
+      "action_consistency": {
+        "target_sku": "TRAVEL-BAG-01",
+        "action_type": "create_review_task",
+        "target_consistency": true,
+        "action_type_consistency": true,
+        "impact_direction_consistency": true,
+        "warnings": []
+      },
+      "number_check": {
+        "passed": true,
+        "checked": 18,
+        "known_facts": [
+          {
+            "field": "summary",
+            "value": "110000",
+            "unit": "cents",
+            "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "10.0",
+            "unit": "percent",
+            "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少1450",
+            "matched": "10.00"
+          },
+          {
+            "field": "summary",
+            "value": "30500",
+            "unit": "cents",
+            "context": "本期净销售额110000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "45000",
+            "unit": "cents",
+            "context": "0000美分（+10.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "14500",
+            "unit": "cents",
+            "context": "0.0%），净利润却降至30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成",
+            "matched": "cents"
+          },
+          {
+            "field": "summary",
+            "value": "45.0",
+            "unit": "percent",
+            "context": "30500美分，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000",
+            "matched": "45.00"
+          },
+          {
+            "field": "summary",
+            "value": "27.73",
+            "unit": "percent",
+            "context": "，较上期45000美分减少14500美分，利润率由45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告",
+            "matched": "27.73"
+          },
+          {
+            "field": "summary",
+            "value": "20000",
+            "unit": "cents",
+            "context": "45.0%降至27.73%。利润下滑主要来自物流履约成本异常增加20000美分；采购、广告和平台费小幅上升进一步挤压利润，折扣、退款及其他成本",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "10000",
+            "unit": "ambiguous",
+            "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一",
+            "matched": "known fact"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "30000",
+            "unit": "cents",
+            "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[0].reasoning",
+            "value": "-20000",
+            "unit": "cents",
+            "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一因素。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "3000",
+            "unit": "ambiguous",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放",
+            "matched": "known fact"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "1000",
+            "unit": "ambiguous",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+            "matched": "known fact"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "500",
+            "unit": "cents",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+            "matched": "cents"
+          },
+          {
+            "field": "root_causes[1].reasoning",
+            "value": "-4500",
+            "unit": "cents",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+            "matched": "derived_sum"
+          },
+          {
+            "field": "root_causes[2].reasoning",
+            "value": "10000",
+            "unit": "cents",
+            "context": "销售额增加10000美分，但成本增量更大，净销售增长未转化为利润增长。",
+            "matched": "cents"
+          },
+          {
+            "field": "recommendations[0].rationale",
+            "value": "-20000",
+            "unit": "cents",
+            "context": "物流履约贡献-20000美分，需人工确认异常来源并核对TRAVEL-BAG-01成本。",
+            "matched": "cents"
+          },
+          {
+            "field": "recommendations[1].rationale",
+            "value": "-4500",
+            "unit": "cents",
+            "context": "采购、广告与平台费合计贡献-4500美分，需确认是否与订单量增长匹配。",
+            "matched": "derived_sum"
+          }
+        ],
+        "assumptions": [],
+        "non_amount": [],
+        "violations": [],
+        "warnings": [
+          {
+            "type": "ambiguous_unit",
+            "value": "10000",
+            "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一",
+            "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+          },
+          {
+            "type": "ambiguous_unit",
+            "value": "3000",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放",
+            "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+          },
+          {
+            "type": "ambiguous_unit",
+            "value": "1000",
+            "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+            "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+          }
+        ]
+      },
+      "forbidden_claims": {
+        "passed": true,
+        "violations": []
+      },
+      "semantic_warnings": [
+        {
+          "type": "ambiguous_unit",
+          "value": "10000",
+          "context": "物流履约从10000增至30000美分，贡献-20000美分，是净利润下滑的最大单一",
+          "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+        },
+        {
+          "type": "ambiguous_unit",
+          "value": "3000",
+          "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放",
+          "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+        },
+        {
+          "type": "ambiguous_unit",
+          "value": "1000",
+          "context": "采购成本增3000、广告增1000、平台费增500美分，合计贡献-4500美分，放大利润压力。",
+          "detail": "金额未写单位，按已知美分/美元匹配；建议在文本中明确单位"
+        }
+      ],
+      "failure_reasons": [],
+      "negative_control_detected": null,
+      "passed": true,
+      "trial": 1,
+      "real_online": false
+    },
+    {
+      "status": "not_requested",
+      "reason": "insufficient_data",
+      "configured": true,
+      "provider_type": "deepseek",
+      "model": "deepseek-flash",
+      "prompt_hash": null,
+      "model_params": null,
+      "latency_ms": null,
+      "attempts": 0,
+      "usage": null,
+      "finish_reason": null,
+      "raw_content": null,
+      "output": null,
+      "rejected_output": null,
+      "error": {
+        "code": "insufficient_data",
+        "message": "经营数据不完整，未生成建议"
+      },
+      "call_count": 0,
+      "side_effects": {
+        "approval_calls": 0,
+        "execution_calls": 0,
+        "recommendation_calls": 0,
+        "business_external_calls": 0,
+        "database_writes": 0,
+        "llm_calls": 0
+      },
+      "payload": null,
+      "case_id": "insufficient_data",
+      "scenario": "real:guardrail",
+      "expected": {
+        "status": "not_requested",
+        "error_code": "insufficient_data",
+        "reason": "insufficient_data",
+        "negative_control": false,
+        "expected_gate_failure": null
+      },
+      "hard_gates": {
+        "expected_status": true,
+        "expected_error_code": true,
+        "expected_reason": true,
+        "no_side_effects": true
+      },
+      "hard_gate_details": {
+        "expected_status": "not_requested",
+        "actual_status": "not_requested",
+        "expected_error_code": "insufficient_data",
+        "actual_error_code": "insufficient_data",
+        "expected_reason": "insufficient_data",
+        "actual_reason": "insufficient_data"
+      },
+      "evidence_consistency": {},
+      "action_consistency": {},
+      "number_check": {},
+      "forbidden_claims": {},
+      "semantic_warnings": [],
+      "failure_reasons": [],
+      "negative_control_detected": null,
+      "passed": true,
+      "trial": 1,
+      "real_online": false
+    },
+    {
+      "status": "deterministic_fallback",
+      "reason": "llm_invalid_json",
+      "configured": true,
+      "provider_type": "deepseek",
+      "model": "deepseek-flash",
+      "prompt_hash": "ae778ce6c5f63bb05de4e7e50784b65b65005f4177f078290c1dc6e5714a4907",
+      "model_params": {
+        "temperature": 0.2,
+        "max_tokens": 3000
+      },
+      "latency_ms": 11344.721,
+      "attempts": 1,
+      "usage": null,
+      "finish_reason": "stop",
+      "raw_content": null,
+      "output": null,
+      "rejected_output": null,
+      "error": {
+        "code": "llm_invalid_json",
+        "message": "模型输出不是合法 JSON",
+        "retryable": false,
+        "status_code": null,
+        "details": {
+          "finish_reason": "stop"
+        }
+      },
+      "call_count": 1,
+      "side_effects": {
+        "approval_calls": 0,
+        "execution_calls": 0,
+        "recommendation_calls": 0,
+        "business_external_calls": 0,
+        "database_writes": 0,
+        "llm_calls": 1
+      },
+      "payload": {
+        "task": "解释利润变化的会计驱动因素，并给出可人工审批的模拟动作建议",
+        "period": {
+          "start_date": "2026-10-01",
+          "end_date": "2026-10-30"
+        },
+        "previous_period": {
+          "start_date": "2026-09-01",
+          "end_date": "2026-09-30"
+        },
+        "store_id": null,
+        "currency": "USD",
+        "amount_unit": "integer USD cents; divide by 100 for USD",
+        "current_totals": {
+          "sales": 110000,
+          "discounts": 0,
+          "refunds": 25000,
+          "cogs": 33000,
+          "ad_spend": 10000,
+          "fulfillment": 10000,
+          "platform_fees": 5000,
+          "other_costs": 0,
+          "net_sales": 85000,
+          "net_profit": 27000,
+          "margin_pct": 31.76,
+          "orders": 130,
+          "units": 130
+        },
+        "previous_totals": {
+          "sales": 100000,
+          "discounts": 0,
+          "refunds": 1000,
+          "cogs": 30000,
+          "ad_spend": 10000,
+          "fulfillment": 10000,
+          "platform_fees": 5000,
+          "other_costs": 0,
+          "net_sales": 99000,
+          "net_profit": 44000,
+          "margin_pct": 44.44,
+          "orders": 120,
+          "units": 120
+        },
+        "changes": {
+          "sales": {
+            "absolute": 10000,
+            "pct": 10.0
+          },
+          "discounts": {
+            "absolute": 0,
+            "pct": null
+          },
+          "refunds": {
+            "absolute": 24000,
+            "pct": 2400.0
+          },
+          "cogs": {
+            "absolute": 3000,
+            "pct": 10.0
+          },
+          "ad_spend": {
+            "absolute": 0,
+            "pct": 0.0
+          },
+          "fulfillment": {
+            "absolute": 0,
+            "pct": 0.0
+          },
+          "platform_fees": {
+            "absolute": 0,
+            "pct": 0.0
+          },
+          "other_costs": {
+            "absolute": 0,
+            "pct": null
+          },
+          "net_sales": {
+            "absolute": -14000,
+            "pct": -14.14
+          },
+          "net_profit": {
+            "absolute": -17000,
+            "pct": -38.64
+          },
+          "margin_pct": {
+            "absolute": -12.68,
+            "pct": null
+          },
+          "orders": {
+            "absolute": 10,
+            "pct": 8.33
+          },
+          "units": {
+            "absolute": 10,
+            "pct": 8.33
+          }
+        },
+        "drivers": [
+          {
+            "metric": "refunds",
+            "label": "退款",
+            "previous": 1000,
+            "current": 25000,
+            "contribution": -24000,
+            "source": "orders.refunds"
+          },
+          {
+            "metric": "cogs",
+            "label": "采购成本",
+            "previous": 30000,
+            "current": 33000,
+            "contribution": -3000,
+            "source": "orders.cogs"
+          },
+          {
+            "metric": "discounts",
+            "label": "折扣",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.discounts"
+          },
+          {
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "previous": 10000,
+            "current": 10000,
+            "contribution": 0,
+            "source": "daily_operations.ad_spend"
+          },
+          {
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "previous": 10000,
+            "current": 10000,
+            "contribution": 0,
+            "source": "orders.fulfillment"
+          },
+          {
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "previous": 5000,
+            "current": 5000,
+            "contribution": 0,
+            "source": "orders.platform_fees"
+          },
+          {
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "previous": 0,
+            "current": 0,
+            "contribution": 0,
+            "source": "orders.other_costs"
+          },
+          {
+            "metric": "sales",
+            "label": "销售额",
+            "previous": 100000,
+            "current": 110000,
+            "contribution": 10000,
+            "source": "orders.sales"
+          }
+        ],
+        "primary_driver": {
+          "metric": "refunds",
+          "label": "退款",
+          "previous": 1000,
+          "current": 25000,
+          "contribution": -24000,
+          "source": "orders.refunds"
+        },
+        "evidence": [
+          {
+            "id": "ev-refunds",
+            "metric": "refunds",
+            "label": "退款",
+            "current": 25000,
+            "previous": 1000,
+            "contribution": -24000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.refunds",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-cogs",
+            "metric": "cogs",
+            "label": "采购成本",
+            "current": 33000,
+            "previous": 30000,
+            "contribution": -3000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.cogs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-discounts",
+            "metric": "discounts",
+            "label": "折扣",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.discounts",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-ad_spend",
+            "metric": "ad_spend",
+            "label": "广告支出",
+            "current": 10000,
+            "previous": 10000,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "daily_operations.ad_spend",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-fulfillment",
+            "metric": "fulfillment",
+            "label": "物流履约",
+            "current": 10000,
+            "previous": 10000,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.fulfillment",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-platform_fees",
+            "metric": "platform_fees",
+            "label": "平台手续费",
+            "current": 5000,
+            "previous": 5000,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.platform_fees",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-other_costs",
+            "metric": "other_costs",
+            "label": "其他可变成本",
+            "current": 0,
+            "previous": 0,
+            "contribution": 0,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.other_costs",
+            "formula": "-(current - previous)"
+          },
+          {
+            "id": "ev-sales",
+            "metric": "sales",
+            "label": "销售额",
+            "current": 110000,
+            "previous": 100000,
+            "contribution": 10000,
+            "period": {
+              "start_date": "2026-10-01",
+              "end_date": "2026-10-30"
+            },
+            "previous_period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            },
+            "store_id": null,
+            "currency": "USD",
+            "source": "orders.sales",
+            "formula": "current - previous"
+          }
+        ],
+        "sku_breakdown": [
+          {
+            "sku": "TRAVEL-BAG-01",
+            "profit_delta": -8500,
+            "ad_spend_delta": 0,
+            "inventory": 210,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "THERMO-02",
+            "profit_delta": -5100,
+            "ad_spend_delta": 0,
+            "inventory": 270,
+            "inbound_inventory": 120
+          },
+          {
+            "sku": "USB-HUB-03",
+            "profit_delta": -3400,
+            "ad_spend_delta": 0,
+            "inventory": 330,
+            "inbound_inventory": 120
+          }
+        ],
+        "planned_simulation_action": {
+          "type": "create_review_task",
+          "simulation": true,
+          "product_id": "bag",
+          "sku": "TRAVEL-BAG-01",
+          "adjustment_pct": 15,
+          "baseline_daily_budget": 167,
+          "proposed_daily_budget": 167,
+          "source_period": {
+            "start_date": "2026-10-01",
+            "end_date": "2026-10-30"
+          }
+        },
+        "allowed_evidence_ids": [
+          "ev-refunds",
+          "ev-cogs",
+          "ev-discounts",
+          "ev-ad_spend",
+          "ev-fulfillment",
+          "ev-platform_fees",
+          "ev-other_costs",
+          "ev-sales"
+        ],
+        "output_requirements": {
+          "all_claims_reference_evidence": true,
+          "numbers_must_come_from_payload": true,
+          "simulation_only": true
+        }
+      },
+      "case_id": "refund_pressure",
+      "scenario": "real:trial-1",
+      "expected": {
+        "status": "llm_success",
+        "error_code": null,
+        "reason": null,
+        "negative_control": false,
+        "expected_gate_failure": null
+      },
+      "hard_gates": {
+        "expected_status": false,
+        "expected_error_code": true,
+        "expected_reason": true,
+        "no_side_effects": true
+      },
+      "hard_gate_details": {
+        "expected_status": "llm_success",
+        "actual_status": "deterministic_fallback",
+        "expected_error_code": null,
+        "actual_error_code": "llm_invalid_json",
+        "expected_reason": null,
+        "actual_reason": "llm_invalid_json"
+      },
+      "evidence_consistency": {},
+      "action_consistency": {},
+      "number_check": {},
+      "forbidden_claims": {},
+      "semantic_warnings": [],
+      "failure_reasons": [
+        "expected_status"
+      ],
+      "negative_control_detected": null,
+      "passed": false,
+      "trial": 1,
+      "real_online": false
+    }
+  ],
+  "summary": {
+    "mode": "real",
+    "total_runs": 4,
+    "normal_runs": 4,
+    "normal_passed": 3,
+    "negative_controls": 0,
+    "negative_controls_detected": 0,
+    "status_counts": {
+      "llm_success": 2,
+      "not_requested": 1,
+      "deterministic_fallback": 1
+    },
+    "hard_gate_rates": {
+      "action_target_consistency": 1.0,
+      "action_type_consistency": 1.0,
+      "amount_consistency": 1.0,
+      "evidence_ids_valid": 1.0,
+      "expected_error_code": 1.0,
+      "expected_reason": 1.0,
+      "expected_status": 1.0,
+      "forbidden_claims": 1.0,
+      "impact_direction_consistency": 1.0,
+      "no_side_effects": 1.0,
+      "primary_driver_hit": 1.0,
+      "recommendation_primary_evidence": 1.0,
+      "schema_valid": 1.0
+    },
+    "evidence_reference_valid_rate": 1.0,
+    "primary_driver_hit_rate": 1.0,
+    "amount_consistency_rate": 1.0,
+    "latency_ms": {
+      "count": 3,
+      "min": 9845.984,
+      "max": 15572.508,
+      "mean": 12254.404
+    },
+    "usage": {
+      "prompt_tokens": 4723,
+      "completion_tokens": 4169,
+      "total_tokens": 8892,
+      "cached_tokens": 768
+    },
+    "fake_provider_calls": 0,
+    "real_online_calls": 3,
+    "failed_runs": [
+      {
+        "case_id": "refund_pressure",
+        "scenario": "real:trial-1",
+        "status": "deterministic_fallback",
+        "failure_reasons": [
+          "expected_status"
+        ]
+      }
+    ],
+    "cases": {
+      "ad_spend_pressure": {
+        "runs": 1,
+        "negative_controls": 0,
+        "passed": 1,
+        "failed": 0,
+        "status_counts": {
+          "llm_success": 1
+        },
+        "hard_gate_rates": {
+          "action_target_consistency": 1.0,
+          "action_type_consistency": 1.0,
+          "amount_consistency": 1.0,
+          "evidence_ids_valid": 1.0,
+          "expected_error_code": 1.0,
+          "expected_reason": 1.0,
+          "expected_status": 1.0,
+          "forbidden_claims": 1.0,
+          "impact_direction_consistency": 1.0,
+          "no_side_effects": 1.0,
+          "primary_driver_hit": 1.0,
+          "recommendation_primary_evidence": 1.0,
+          "schema_valid": 1.0
+        },
+        "evidence_reference_valid_rate": 1.0,
+        "primary_driver_hit_rate": 1.0,
+        "amount_consistency_rate": 1.0,
+        "latency_ms": {
+          "count": 1,
+          "min": 9845.984,
+          "max": 9845.984,
+          "mean": 9845.984
+        },
+        "usage": {
+          "prompt_tokens": 2365,
+          "completion_tokens": 1516,
+          "total_tokens": 3881,
+          "cached_tokens": 384
+        },
+        "stability_reported": false
+      },
+      "fulfillment_pressure": {
+        "runs": 1,
+        "negative_controls": 0,
+        "passed": 1,
+        "failed": 0,
+        "status_counts": {
+          "llm_success": 1
+        },
+        "hard_gate_rates": {
+          "action_target_consistency": 1.0,
+          "action_type_consistency": 1.0,
+          "amount_consistency": 1.0,
+          "evidence_ids_valid": 1.0,
+          "expected_error_code": 1.0,
+          "expected_reason": 1.0,
+          "expected_status": 1.0,
+          "forbidden_claims": 1.0,
+          "impact_direction_consistency": 1.0,
+          "no_side_effects": 1.0,
+          "primary_driver_hit": 1.0,
+          "recommendation_primary_evidence": 1.0,
+          "schema_valid": 1.0
+        },
+        "evidence_reference_valid_rate": 1.0,
+        "primary_driver_hit_rate": 1.0,
+        "amount_consistency_rate": 1.0,
+        "latency_ms": {
+          "count": 1,
+          "min": 15572.508,
+          "max": 15572.508,
+          "mean": 15572.508
+        },
+        "usage": {
+          "prompt_tokens": 2358,
+          "completion_tokens": 2653,
+          "total_tokens": 5011,
+          "cached_tokens": 384
+        },
+        "stability_reported": false
+      },
+      "insufficient_data": {
+        "runs": 1,
+        "negative_controls": 0,
+        "passed": 1,
+        "failed": 0,
+        "status_counts": {
+          "not_requested": 1
+        },
+        "hard_gate_rates": {},
+        "evidence_reference_valid_rate": null,
+        "primary_driver_hit_rate": null,
+        "amount_consistency_rate": null,
+        "latency_ms": null,
+        "usage": null,
+        "stability_reported": false
+      },
+      "refund_pressure": {
+        "runs": 1,
+        "negative_controls": 0,
+        "passed": 0,
+        "failed": 1,
+        "status_counts": {
+          "deterministic_fallback": 1
+        },
+        "hard_gate_rates": {},
+        "evidence_reference_valid_rate": null,
+        "primary_driver_hit_rate": null,
+        "amount_consistency_rate": null,
+        "latency_ms": {
+          "count": 1,
+          "min": 11344.721,
+          "max": 11344.721,
+          "mean": 11344.721
+        },
+        "usage": null,
+        "stability_reported": false
+      }
+    }
+  },
+  "separation_note": "FakeProvider runs are offline and are not real online results. Only runs with provider_type=deepseek and call_count=1 are real DeepSeek calls.",
+  "regraded_at": "2026-10-30T19:28:50.587928Z",
+  "regrade_note": "Re-evaluated saved outputs with the current graders; no new LLM calls were made."
+}

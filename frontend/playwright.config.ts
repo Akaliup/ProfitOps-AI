@@ -15,7 +15,7 @@ export default defineConfig({
       command: `"${python}" -m uvicorn app.main:app --app-dir ../backend --host 127.0.0.1 --port 8010`,
       url: 'http://127.0.0.1:8010/health', reuseExistingServer: !process.env.CI,
       timeout: 30000,
-      env: { PROFITOPS_DATABASE_URL: 'sqlite:///../data/e2e.db' },
+      env: { PROFITOPS_DATABASE_URL: 'sqlite:///../data/e2e.db', LLM_API_KEY: '' },
     },
     { command: 'npm run dev', url: 'http://127.0.0.1:5180', reuseExistingServer: !process.env.CI, timeout: 30000 },
   ],

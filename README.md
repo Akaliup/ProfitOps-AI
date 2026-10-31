@@ -2,7 +2,7 @@
 
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从真实经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 
-默认规则引擎 + LangGraph，**不需要 LLM API Key**；所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
+LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
 
 ![经营总览](docs/screenshots/overview.png)
 
@@ -32,6 +32,31 @@ python scripts/dev.py
 
 端口被占用时可指定：`python scripts/dev.py --api-port 8020 --web-port 5190`。依赖已安装时可加 `--skip-install`。数据库位于 `data/profitops.db`；删除它可做全新初始化（会清除审批与审计历史）。
 
+### 接入 DeepSeek（可选）
+
+不配置任何变量也能完整运行。要启用真实 LLM，在项目根目录的 `.env`（已被 Git 忽略）或后端进程环境中设置：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LLM_PROVIDER` | `deepseek` | `deepseek` 或 `disabled` |
+| `LLM_MODEL` | `deepseek-flash` | DeepSeek-V4.1-Flash-1017 的 API 模型 ID |
+| `LLM_API_KEY` | 空 | 只放在本地 `.env` 或进程环境，不提交、不打印 |
+| `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容接口根地址 |
+| `LLM_TIMEOUT` | `20` | 单次请求超时秒数 |
+| `LLM_MAX_TOKENS` | `4000` | 单次响应最大 token 数（256–8192） |
+| `LLM_MAX_RETRIES` | `1` | 可重试错误的有界重试次数（0–3） |
+| `LLM_FALLBACK_POLICY` | `rules` | `rules`：失败降级为规则；`fail`：分析失败并记录 `llm_failed` |
+
+DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须让后端进程自己读到上述变量；Docker Compose 会从项目根 `.env` 插值并注入这些变量。启用后，LangGraph 在确定性利润计算与证据校验之后调用一次 DeepSeek，输出经 Pydantic 校验、且所有 `evidence_id` 必须存在于本次确定性证据中，才允许进入待审批建议；模型只负责解释与策略，不计算利润。
+
+降级状态在 API 与前端明确区分：`llm_success`、`deterministic_fallback`、`llm_failed`、`not_requested`。真实调用一次并查看模型、耗时、Token 与证据引用：
+
+```bash
+.venv/Scripts/python.exe scripts/llm_check.py
+```
+
+未配置 Key 时脚本会输出 `{"status":"skipped","reason":"LLM_API_KEY 未配置"}` 并以退出码 2 结束，不会发起网络请求。
+
 ### Docker Compose（可选 PostgreSQL）
 
 ```powershell
@@ -53,8 +78,8 @@ docker compose down
 ## 演示流程（约 3 分钟）
 
 1. 打开工作台。默认身份是“经营分析师”；总览显示销售额上涨、净利润下降，KPI、趋势图、利润归因和 SKU 明细均来自 API。
-2. 点击 **启动 Profit Agent**。工作台逐步显示读取数据 → 利润计算 → 异常归因 → 证据核验 → 创建建议 → 等待审批，每步有耗时、摘要和请求 ID。
-3. 点击 **查看经营建议**。查看统计周期、上一周期、8 项利润贡献、预期影响情景、风险与待补充信息。
+2. 点击 **启动 Profit Agent**。工作台逐步显示读取数据 → 利润计算 → 异常归因 → 证据核验 → DeepSeek 根因分析 → LLM 证据引用校验 → 创建建议 → 等待审批，每步有耗时、摘要和请求 ID。未配置 Key 时该步明确显示“已降级为确定性规则”。
+3. 点击 **查看经营建议**。查看 LLM 根因/置信度/证据引用（若真实调用成功）、统计周期、上一周期、8 项利润贡献、预期影响情景、风险与待补充信息。
 4. 以分析师身份尝试批准：页面不提供按钮；直接用 API 伪造 `X-Role` 会返回 403。右上角切换为 **审批负责人**。
 5. 审批页先展示 **待执行的模拟动作**：目标 SKU、参考日预算、模拟新预算。填写审批意见并 **批准建议**；然后 **模拟执行已批准动作**。结果显示 `SIMULATION`、预算预览、外部调用 0 次。
 6. 再次点击 **再次请求 · 验证幂等**。返回同一执行 ID，并提示“命中幂等”，数据库没有第二条执行记录。
@@ -124,17 +149,17 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 33 通过（含 5 个业务评测）、前端 6 通过、生产构建通过、实际 HTTP 11 项闭环检查通过、Chromium 真实浏览器 E2E 2 通过。详情与未验证项见 [docs/TEST_REPORT.md](docs/TEST_REPORT.md)。
+当前实测结果：后端 74 通过（含 Phase 2B 评测 Runner、负向对照与 LLM 测试）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
 ```
-backend/app/         FastAPI、模型、利润计算、工具、LangGraph、审批执行、审计
+backend/app/         FastAPI、模型、利润计算、工具、LangGraph、LLM Provider、审批执行、审计
 backend/tests/       单元、集成、工作流、并发、评测
-backend/evals/       可重复业务评测样本
+backend/evals/       LLM Agent 评测样本、Runner 与报告
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
-scripts/             一键启动、HTTP 冒烟、浏览器测试
+scripts/             一键启动、HTTP 冒烟、浏览器测试、真实 LLM 验证
 docs/                契约、架构、验证记录、截图
 compose.yaml         PostgreSQL + 后端 + 前端
 AGENTS.md            开发约定
@@ -144,7 +169,7 @@ TASKS.md             交付与后续任务
 ## 已知限制
 
 - 本地演示认证不是生产安全方案；没有租户、OIDC、权限后台、限流和密钥轮换。
-- 规则引擎不调用 LLM，不会生成开放式自然语言策略；结论和文案可复现，归因是会计贡献项，不是因果证明。
+- LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
 - 预期影响是明确标注的条件性情景，不构成收益承诺。
 - 模拟执行只写数据库预览，不改变任何真实平台。
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
@@ -156,6 +181,8 @@ TASKS.md             交付与后续任务
 
 - [docs/HANDOFF.md](docs/HANDOFF.md)：接管报告、实际验证结果、未完成项与下一步顺序。
 - [docs/INTERVIEW.md](docs/INTERVIEW.md)：3 分钟演示脚本、架构讲解、高频追问与回答要点。
+- [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。
+- [docs/EVALUATION.md](docs/EVALUATION.md)：Phase 2B Agent 评测系统、4 个合成案例、离线负向对照、真实调用与评分器修正记录。
 
 ## 面试讲解建议
 

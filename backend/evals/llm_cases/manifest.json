@@ -1,0 +1,110 @@
+{
+  "dataset_id": "profitops-llm-eval-v1",
+  "source_type": "synthetic",
+  "generation_method": "backend/evals/fixtures.py v1: deterministic SKU amounts allocated over 30 days; expected labels from build_report/analyze_drivers/plan_action; no LLM",
+  "synthetic_notes": "Synthetic cross-border e-commerce ledger; not real company data; no PII.",
+  "period": {
+    "start_date": "2026-10-01",
+    "end_date": "2026-10-30"
+  },
+  "previous_period": {
+    "start_date": "2026-09-01",
+    "end_date": "2026-09-30"
+  },
+  "stores": 2,
+  "products": [
+    {
+      "product_id": "bag",
+      "sku": "TRAVEL-BAG-01",
+      "name": "轻量旅行背包",
+      "inventory": 210,
+      "inbound_inventory": 120
+    },
+    {
+      "product_id": "bottle",
+      "sku": "THERMO-02",
+      "name": "不锈钢保温杯",
+      "inventory": 270,
+      "inbound_inventory": 120
+    },
+    {
+      "product_id": "hub",
+      "sku": "USB-HUB-03",
+      "name": "多口扩展坞",
+      "inventory": 330,
+      "inbound_inventory": 120
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "ad_spend_pressure",
+      "file": "ad_spend_pressure.json",
+      "title": "广告费用上涨导致利润下降",
+      "tags": [
+        "anomaly",
+        "ad_spend",
+        "budget_action"
+      ],
+      "risk": "high",
+      "source_type": "synthetic",
+      "expected_primary": "ad_spend",
+      "expected_action": "adjust_ad_budget",
+      "expected_llm_status": "llm_success",
+      "expected_error_code": null
+    },
+    {
+      "case_id": "fulfillment_pressure",
+      "file": "fulfillment_pressure.json",
+      "title": "物流履约费用上涨导致利润下降",
+      "tags": [
+        "anomaly",
+        "fulfillment",
+        "review_action"
+      ],
+      "risk": "high",
+      "source_type": "synthetic",
+      "expected_primary": "fulfillment",
+      "expected_action": "create_review_task",
+      "expected_llm_status": "llm_success",
+      "expected_error_code": null
+    },
+    {
+      "case_id": "refund_pressure",
+      "file": "refund_pressure.json",
+      "title": "退款上涨导致利润下降",
+      "tags": [
+        "anomaly",
+        "refunds",
+        "review_action"
+      ],
+      "risk": "high",
+      "source_type": "synthetic",
+      "expected_primary": "refunds",
+      "expected_action": "create_review_task",
+      "expected_llm_status": "llm_success",
+      "expected_error_code": null
+    },
+    {
+      "case_id": "insufficient_data",
+      "file": "insufficient_data.json",
+      "title": "经营数据不完整，禁止生成无依据建议",
+      "tags": [
+        "guardrail",
+        "insufficient_data",
+        "no_llm"
+      ],
+      "risk": "high",
+      "source_type": "synthetic",
+      "expected_primary": "ad_spend",
+      "expected_action": null,
+      "expected_llm_status": "not_requested",
+      "expected_error_code": "insufficient_data"
+    }
+  ],
+  "validation": {
+    "all_sku_totals_reconciled": true,
+    "all_bridge_totals_reconciled": true,
+    "labels_generated_by_deterministic_functions": true,
+    "llm_used_for_labels": false
+  }
+}

@@ -5,13 +5,14 @@
 ```
 React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / PostgreSQL
                                           |
-                                          +-- LangGraph 分析图（7 个持久化步骤）
+                                          +-- LangGraph 分析图（异常路径 9 个持久化步骤）
                                           +-- LangGraph 执行图（3 个步骤，事务内）
                                           +-- Tool Registry（6 个 Pydantic 工具）
+                                          +-- LLM Provider（DeepSeek，可选，超时/重试/结构化输出）
                                           +-- 审计事件 + 请求 ID
 ```
 
-默认不依赖 LLM API Key，也不调用真实广告、采购或支付系统。分析结论由确定性规则和数据库账本产生；`engine=deterministic-rules-v1` 在分析、建议和健康接口中可见。这里不是“模型假装成规则”，也没有把 mock 结果冒充真实 LLM。
+默认不依赖 LLM API Key，也不调用真实广告、采购或支付系统。分析结论由确定性规则和数据库账本产生；`engine=deterministic-rules-v1` 在分析、建议和健康接口中可见。配置 `LLM_API_KEY` 后，DeepSeek 只参与根因解释和策略文案，`engine` 在真实成功且证据校验通过时标记为 `deepseek-llm-v1`。这里不是“模型假装成规则”，也没有把 mock 或规则结果冒充真实 LLM。
 
 ## 为什么选择 SQLite 默认、PostgreSQL 可选
 
@@ -30,6 +31,14 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 
 `run_analysis` 在后台执行 LangGraph 分析图。每个节点开始和完成时更新 `analyses.steps` 与 `snapshot`；`wait_for_approval` 是真实的业务暂停点，不是内存等待。执行阶段从数据库快照进入单独执行图，读取审批状态、调用唯一模拟执行工具并保存结果，避免重跑建议生成。失败会写入 `failed` 状态、失败步骤和错误码；重启恢复将遗留 `queued/running` 分析标记为 `restart_interrupted`。超时在步骤完成后检查实际耗时（`step_timeout`），不声称能够强杀同步线程。
 
+## LLM 推理层
+
+`backend/app/llm.py` 定义统一 Provider 语义：`generate()` 返回文本、模型、耗时、Token 用量、尝试次数；`generate_json()` 额外要求 OpenAI 兼容的 `response_format={"type":"json_object"}`。`DeepSeekProvider` 使用 `httpx`，基址默认 `https://api.deepseek.com`，请求 `POST /chat/completions`，模型默认 `deepseek-flash`（DeepSeek-V4.1-Flash-1017）。401/403/402 不重试，429/5xx/超时/网络错误/空响应按 `LLM_MAX_RETRIES` 有界重试；每次错误映射稳定错误码，并记录尝试次数和耗时。
+
+工作流只调用一次 LLM，位置在确定性利润、异常归因和证据校验之后、创建建议之前。输入由 `build_llm_payload` 从已计算结果构造，包括周期、总额、变化、主要驱动、8 项证据、紧凑 SKU 摘要和 `plan_action` 已确定的模拟动作；金额字段为整数美分并显式标注 `amount_unit`。提示词要求只引用给定证据、不编造数字、不承诺收益、保持 simulation 边界、限制各字段长度，并输出严格 JSON。调用使用可配置的 `LLM_MAX_TOKENS`（默认 4000）；Provider 记录 `finish_reason`，截断导致的非法 JSON 会在错误信息中明确标注。输出经 `LLMAnalysisOutput`（Pydantic）校验；独立节点 `verify_llm_evidence` 检查 `summary/root_causes/recommendations/evidence_references` 中的全部证据 ID 是否属于本次 `findings.evidence`。任何未知 ID 都会使本次 LLM 输出作废，不能进入审批流。
+
+数字权威性没有转移：建议标题、动作参数、预算和预期影响金额仍由确定性 `plan_action` 生成；LLM 成功时只把 `summary` 用于建议的“问题”描述，并附加根因、风险、待补充信息和置信度。`recommendations.body.engine` 与 `analysis.result.engine` 只有在 `llm_success` 时为 `deepseek-llm-v1`。降级状态完整持久化：无 Key 为 `deterministic_fallback/not_configured`，调用或证据失败为 `deterministic_fallback` 并带错误码，`LLM_FALLBACK_POLICY=fail` 时为 `llm_failed` 且分析失败，无异常/数据不足为 `not_requested`。审计分别记录 `analysis.llm_succeeded`、`analysis.llm_fallback`（degraded）和 `analysis.llm_failed`。LLM 步骤不叠加通用 15s 步骤超时，由 Provider 的 `LLM_TIMEOUT` + 有界重试负责。
+
 ## 状态机与并发
 
 `proposed → pending_approval → approved → executing → executed`，另有 `rejected` 和 `execution_failed` 终态。审批和执行都通过带旧状态条件的 UPDATE 抢占状态；执行先抢占行锁/写锁，再检查唯一执行记录，最后在同一个事务中插入执行记录、模拟变更、更新状态和写审计。`executions.recommendation_id` 与 `executions.idempotency_key` 唯一。重复请求返回已有执行记录并标记 `replayed=true`；不同建议复用执行键返回 409。失败保留错误诊断并返回 HTTP 500，不会伪装成成功。
@@ -45,6 +54,8 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 ## 前端
 
 React + TypeScript + Vite + 自定义 CSS，Recharts 只负责趋势图。所有页面数据通过真实 API 获取，无静态经营假数据。关键状态包括：初始加载、空数据初始化、API 错误（带请求 ID）、分析轮询、建议审批、待执行动作预览、重复执行回放和手机布局。审计页支持按请求 ID 精确过滤；趋势图提供表格替代视图；颜色使用通过 CVD 校验的蓝/橙两色，并始终有图例与数据表。
+
+Agent 工作台新增 LLM 面板：显示实际模型、`llm_success/deterministic_fallback/llm_failed/not_requested` 状态、耗时、尝试次数、仅在 API 真实返回时显示 Token 用量，以及摘要、置信度、根因、建议、预期影响、风险、待补充信息和全部证据引用。降级时明确标注“不是 LLM 输出”并显示原因/错误；`not_requested` 说明本次未触发 LLM。建议详情同样展示 LLM 根因分析，审计页把 `degraded` 标为“已降级”。
 
 ## 数据初始化与迁移
 

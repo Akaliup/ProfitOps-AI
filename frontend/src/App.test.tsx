@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { analysis, demo, metrics, recommendation } from './test/fixtures'
+import { analysis, demo, llmSuccess, metrics, recommendation } from './test/fixtures'
 import type { Analysis, Recommendation } from './types'
 
 vi.mock('./components/TrendChart', () => ({ TrendChart: () => <div>经营趋势图</div> }))
@@ -104,6 +104,32 @@ describe('ProfitOps workspace', () => {
     await user.type(screen.getByLabelText('按请求 ID 过滤'), 'req-123')
     await user.click(screen.getByRole('button', { name: '筛选' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('request_id=req-123'))).toBe(true))
+  })
+
+  it('shows real LLM root causes, evidence references, latency and tokens', async () => {
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: llmSuccess } })]
+    rows = [structuredClone(recommendation)]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    expect((await screen.findAllByText('真实调用成功')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('321.5 ms').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('输入 120 / 输出 80').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('广告支出增长快于销售额').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ev-ad_spend').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('置信度 72%').length).toBeGreaterThan(0)
+  })
+
+  it('labels deterministic fallback instead of pretending it is LLM output', async () => {
+    history = [structuredClone(analysis)]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    expect((await screen.findAllByText('已降级为确定性规则')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/未配置 API Key/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/不是 LLM 输出/).length).toBeGreaterThan(0)
   })
 
   it('shows API error and correlation id', async () => {

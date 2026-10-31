@@ -12,10 +12,14 @@ def test_langgraph_path_persisted(client, analyst, recommendation):
     analysis = client.get(f"/api/analyses/{row['analysis_id']}", headers=analyst).json()
     assert [step["name"] for step in analysis["steps"]] == [
         "receive_request", "get_sales_metrics", "calculate_profit", "analyze_profit_drivers",
-        "verify_evidence", "create_recommendation", "wait_for_approval",
+        "verify_evidence", "llm_root_cause_analysis", "verify_llm_evidence",
+        "create_recommendation", "wait_for_approval",
     ]
     assert all(step["status"] == "completed" and step["duration_ms"] >= 0 for step in analysis["steps"])
     assert analysis["result"]["metrics"]["bridge_verified"]
+    assert analysis["result"]["llm"]["status"] == "deterministic_fallback"
+    assert analysis["result"]["llm"]["configured"] is False
+    assert analysis["result"]["engine"] == "deterministic-rules-v1"
     assert row["action"]["simulation"] is True
     assert row["body"]["primary_driver"]["metric"] == "ad_spend"
     assert len(row["body"]["evidence"]) == 8
@@ -32,6 +36,8 @@ def test_insufficient_data_no_recommendation(client, analyst):
     assert result["recommendation_id"] is None
     assert result["error"]["code"] == "insufficient_data"
     assert "create_recommendation" not in [step["name"] for step in result["steps"]]
+    assert result["result"]["llm"]["status"] == "not_requested"
+    assert result["result"]["llm"]["reason"] == "insufficient_data"
 
 
 def test_no_anomaly_does_not_invent_action(client, analyst):
@@ -44,6 +50,8 @@ def test_no_anomaly_does_not_invent_action(client, analyst):
     assert result["status"] == "completed"
     assert result["recommendation_id"] is None
     assert result["result"]["findings"]["anomaly"] is False
+    assert result["result"]["llm"]["status"] == "not_requested"
+    assert result["result"]["llm"]["reason"] == "no_anomaly"
 
 
 def test_tool_validation_permission_unknown_and_failure(client):

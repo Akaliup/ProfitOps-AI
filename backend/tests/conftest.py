@@ -7,7 +7,8 @@ from app.main import create_app
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}", auto_seed=True))
+    # Never call a real provider from the default test fixture.
+    app = create_app(Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}", auto_seed=True, llm_api_key=""))
     with TestClient(app) as http:
         yield http
 

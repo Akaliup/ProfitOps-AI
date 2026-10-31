@@ -2,7 +2,27 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
-## 已验证
+## 2026-10-31 Phase 2A：DeepSeek 接入（Claude Code）
+
+分支 `feat/deepseek-llm-agent`，基线 `4285afe`。以下均为本次实际输出：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 52 passed，0 failed，0 skipped（1 个第三方 DeprecationWarning，13.02s） |
+| LLM/降级测试 | 同上，`backend/tests/test_llm.py` | 19 项：Provider 成功/重试/鉴权/超时/非法 JSON/截断/空响应/纯文本、环境变量读取、Schema、证据引用、无 Key 降级、失败/超时/Schema 降级、`fail` 策略、LLM 成功后审批与幂等执行 |
+| 前端单元/交互 | `npm --prefix frontend test` | 8 passed（Vitest + RTL，24.46s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，14.45s |
+| 实际 HTTP 闭环 | 独立数据库 `data/smoke-phase2a-final.db`、端口 8011：`.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8011` | 11/11 通过 |
+| 真实浏览器 E2E | `.venv/Scripts/python.exe scripts/browser_test.py --skip-install` | 2/2 通过（19.8s）；后端强制 `LLM_API_KEY=''`，不消耗真实 Token |
+| 真实 DeepSeek 调用 | `.venv/Scripts/python.exe scripts/llm_check.py` | **成功**：`llm_success`，模型 `deepseek-flash`，15467.974 ms，1 次尝试，4801 tokens，证据引用全部有效，退出码 0 |
+
+真实调用详情（模型、Token、完整结构化输出、首次截断失败与修复）见 [LLM_LIVE_CHECK.md](LLM_LIVE_CHECK.md)。摘要：分析状态 `waiting_approval`，`engine=deepseek-llm-v1`，`all_references_valid=true`，未自动批准或执行。
+
+首次真实调用在 `max_tokens=1400` 处被截断，返回 `llm_invalid_json` 并降级；修复为 `max_tokens=3000`、收紧提示词输出长度、记录 `finish_reason`，新增截断回归测试后重跑成功。失败尝试保留在验证记录中，没有伪装成成功。Phase 2B 后续把默认值改为可配置的 `LLM_MAX_TOKENS=4000`，最新评测见 `docs/EVALUATION.md`。
+
+单元测试全部使用 `httpx.MockTransport` 或 `FakeProvider`，没有调用 DeepSeek，也没有消耗真实 Token；只有 `scripts/llm_check.py` 发起了真实调用。测试库使用临时目录或独立 `data/*.db`，未修改 `data/profitops.db`。
+
+## 已验证（2026-10-30 基线）
 
 | 检查 | 命令 | 结果 |
 |---|---|---|

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from math import ceil
 from typing import Literal
 
@@ -9,7 +10,7 @@ from .audit import record
 from .errors import DomainError
 from .metrics import verify_evidence
 from .models import Analysis, Execution, Recommendation, new_id
-from .schemas import ExecuteOutput, RecommendationInput, RecommendationOutput, StrictModel
+from .schemas import DriverReport, ExecuteOutput, MetricsReport, RecommendationInput, RecommendationOutput, StrictModel
 from .security import Actor, require_role
 
 
@@ -22,6 +23,37 @@ class SimulationAction(StrictModel):
     baseline_daily_budget: int = Field(ge=0)
     proposed_daily_budget: int = Field(ge=0)
     source_period: dict
+
+
+@dataclass
+class ActionPlan:
+    action: SimulationAction
+    target: dict
+    days: int
+    is_budget: bool
+    potential: int
+
+
+def plan_action(report: MetricsReport, findings: DriverReport) -> ActionPlan:
+    """Deterministically choose the simulated action; the LLM never computes amounts."""
+    primary = findings.primary_driver
+    if primary is None:
+        raise DomainError("no_primary_driver", "没有可执行的主要贡献项", 409)
+    candidates = report.sku_breakdown
+    if not candidates:
+        raise DomainError("no_sku_data", "缺少 SKU 明细，无法规划动作", 409)
+    target = max(candidates, key=lambda row: row["ad_spend_delta"]) if primary.metric == "ad_spend" else min(candidates, key=lambda row: row["profit_delta"])
+    days = (report.period.end_date - report.period.start_date).days + 1
+    daily_budget = ceil(target["current"]["ad_spend"] / days)
+    is_budget = primary.metric == "ad_spend"
+    proposed = daily_budget * 85 // 100 if is_budget else daily_budget
+    potential = (daily_budget - proposed) * days if is_budget else 0
+    action = SimulationAction(
+        type="adjust_ad_budget" if is_budget else "create_review_task", product_id=target["product_id"], sku=target["sku"],
+        baseline_daily_budget=daily_budget, proposed_daily_budget=proposed,
+        source_period=report.period.model_dump(mode="json"),
+    )
+    return ActionPlan(action=action, target=target, days=days, is_budget=is_budget, potential=potential)
 
 
 def create_recommendation(session: Session, payload: RecommendationInput, actor: Actor, request_id: str):
@@ -37,23 +69,21 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
         return RecommendationOutput(recommendation_id=existing.id, status=existing.status)
     report, findings = payload.report, payload.findings
     primary = findings.primary_driver
-    candidates = report.sku_breakdown
-    target = max(candidates, key=lambda row: row["ad_spend_delta"]) if primary.metric == "ad_spend" else min(candidates, key=lambda row: row["profit_delta"])
-    days = (report.period.end_date - report.period.start_date).days + 1
-    daily_budget = ceil(target["current"]["ad_spend"] / days)
-    is_budget = primary.metric == "ad_spend"
-    proposed = daily_budget * 85 // 100 if is_budget else daily_budget
-    potential = (daily_budget - proposed) * days if is_budget else 0
-    action = SimulationAction(
-        type="adjust_ad_budget" if is_budget else "create_review_task", product_id=target["product_id"], sku=target["sku"],
-        baseline_daily_budget=daily_budget, proposed_daily_budget=proposed,
-        source_period=report.period.model_dump(mode="json"),
-    )
+    plan = plan_action(report, findings)
+    target, action, days, is_budget, potential = plan.target, plan.action, plan.days, plan.is_budget, plan.potential
+    llm_output = payload.llm.output if payload.llm and payload.llm.status == "llm_success" else None
+    risks = ["降低广告预算可能减少流量和转化，实际利润可能不升反降。", "会计贡献项只解释利润变化，不能替代因果实验。"]
+    missing = ["广告活动级 ROAS、边际获客成本与转化弹性", "自然流量占比与库存补货周期"]
+    if llm_output:
+        risks = list(dict.fromkeys([*risks, *llm_output.risks]))
+        missing = list(dict.fromkeys([*missing, *llm_output.missing_information]))
     body = {
-        "problem": findings.conclusion,
+        "problem": llm_output.summary if llm_output else findings.conclusion,
         "period": report.period.model_dump(mode="json"),
         "previous_period": report.previous_period.model_dump(mode="json"),
-        "store_id": report.store_id, "currency": "USD", "engine": "deterministic-rules-v1",
+        "store_id": report.store_id, "currency": "USD",
+        "engine": "deepseek-llm-v1" if llm_output else "deterministic-rules-v1",
+        "llm": payload.llm.model_dump(mode="json") if payload.llm else None,
         "evidence": findings.evidence, "primary_driver": primary.model_dump(),
         "recommendation": f"针对 {target['sku']} 将参考日广告预算下调 15%，先进行受控模拟并在 7 天后复核。" if is_budget else f"为 {target['sku']} 创建成本核查任务，核对 {primary.label} 原始账单。",
         "expected_impact": {
@@ -61,8 +91,8 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
             "profit_improvement_min": potential // 2, "profit_improvement_max": potential,
             "explanation": "假设未来日均广告花费等于本周期均值、预算完全用尽且收入与其他成本不变，节省额兑现 50%–100%。这是情景测算，未证明广告弹性，也不是已实现利润。" if is_budget else "核查任务不直接承诺利润改善。",
         },
-        "risks": ["降低广告预算可能减少流量和转化，实际利润可能不升反降。", "会计贡献项只解释利润变化，不能替代因果实验。"],
-        "missing_information": ["广告活动级 ROAS、边际获客成本与转化弹性", "自然流量占比与库存补货周期"],
+        "risks": risks,
+        "missing_information": missing,
         "assumptions": ["USD 单币种；日期按 UTC 业务日统计", "参考日预算来自周期广告花费均值，并非平台已配置预算"],
         "source": report.source,
     }
