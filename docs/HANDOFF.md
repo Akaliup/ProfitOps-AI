@@ -4,11 +4,13 @@
 接管人：Claude Code（唯一主开发 / 技术负责人 / 交付负责人）  
 工作区：`E:\ProfitOps-AI`（沿用原项目，不重建、不覆盖、不清理未提交修改）
 
+> 2026-10-31 更新：Phase 2A/2B 已合入 `master`；Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）；最新测试为后端 74、前端 8。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md` 和 `docs/EVALUATION.md`。
+
 ## 1. 接管结论
 
 磁盘上的项目已经是一个可运行、可测试、可演示的 MVP，不是空壳，也不是只停留在文档阶段。接管后我以实际代码、数据库、测试输出和真实 HTTP/浏览器结果为准重新验证了一遍，并补齐了几处影响“可信 Agent”表达的缺口。
 
-当前状态：**核心业务闭环完整，后端 33 项测试、前端 6 项测试、生产构建、HTTP 冒烟 11 项、Chromium 浏览器 E2E 2 项全部通过。** 唯一明确的环境阻碍是 Docker Desktop 引擎不可用，因此 Compose 的 PostgreSQL 容器运行路径仍未实际验证（配置语法已通过）。
+当前状态（2026-10-30 接管时）：**核心业务闭环完整，后端 33 项测试、前端 6 项测试、生产构建、HTTP 冒烟 11 项、Chromium 浏览器 E2E 2 项全部通过。** 当时唯一明确的环境阻碍是 Docker Desktop 引擎不可用，因此 Compose 的 PostgreSQL 容器运行路径未实际验证（配置语法已通过）；该阻碍已于 2026-10-31 解除，见顶部更新。
 
 ## 2. 接管方法与事实来源
 
@@ -105,14 +107,14 @@ docker compose -f compose.yaml config --quiet
 通过
 ```
 
-详细记录见 `docs/TEST_REPORT.md`。测试没有跳过、没有伪造；Docker 运行项明确标记为未验证。
+详细记录见 `docs/TEST_REPORT.md`。测试没有跳过、没有伪造；2026-10-30 当时 Docker 运行项明确标记为未验证，2026-10-31 已补验。
 
 ## 6. 尚未实现或未验证
 
 ### 环境阻碍
 
-- **Docker Compose 实际运行**：本机 Docker Desktop 引擎不可用（`dockerDesktopLinuxEngine` 未启动，尝试启动后仍无法连接）。因此 PostgreSQL 容器初始化、容器内并发、nginx 反向代理没有实际跑过；只验证了 `docker compose config` 语法。
-- 由于没有 Docker，PostgreSQL 上的条件 UPDATE / 唯一约束并发行为未在本机实测；SQLite 并发测试已通过。
+- **Docker Compose 实际运行**：2026-10-31 已在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 HTTP 冒烟通过。详见 `docs/TEST_REPORT.md`。本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
+- 本次 Docker 验收未单独重复 PostgreSQL 条件 UPDATE / 唯一约束并发压力测试；SQLite 并发测试已通过。
 
 ### 明确未实现
 
@@ -127,7 +129,7 @@ docker compose -f compose.yaml config --quiet
 ## 7. 当前最严重的问题（按风险排序）
 
 1. **Git 基线已建立**：接管时仓库零 commit、全部文件未跟踪；用户随后明确要求提交，已在 `master` 建立根提交（67 个文件）。后续提交仍须遵守 `AGENTS.md`：由用户明确要求后才提交。
-2. **Docker/PostgreSQL 路径未实测**：这是交付清单里唯一明确未完成的运行项，也是面试时最容易被追问的环境问题。需要一台 Docker 可用的机器跑一次 `docker compose up --build`。
+2. **Docker/PostgreSQL 路径已实测**：2026-10-31 已在本机 Docker Desktop 完成实际启动与 11/11 HTTP 冒烟；其他机器仍需复验。详见 `docs/TEST_REPORT.md`。
 3. **演示认证不是生产安全方案**：`/api/demo` 会返回公开演示 token；没有租户隔离、限流、审计防篡改。文档已明确标注，不能把它说成生产能力。
 4. **LLM 已有门禁评测，但样本仍小**：Phase 2A 实现了 DeepSeek Provider、结构化输出和证据引用校验；Phase 2B 增加了 4 个合成案例、离线负向对照和真实三次重复（见 `docs/EVALUATION.md`）。最新 4000 复测为 9/9 通过，但只有 3 个异常案例、每个 3 次，没有人工语义标注或跨模型对比；面试时仍不能把规则输出说成 LLM 输出，应展示 `llm_success` 与降级状态的区分。
 5. **没有增量迁移**：修改模型后旧数据库不会自动加列/加约束；当前依赖删除数据库重建。生产化前必须补 Alembic。

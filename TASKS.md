@@ -21,7 +21,7 @@
 ## 阶段四：集成交付
 - [x] 本地一键启动（含依赖安装）、SQLite 全新数据库初始化
 - [x] 核心 HTTP 闭环、并发测试、浏览器验收
-- [ ] Docker Compose 实际运行（本机 Docker 引擎不可用；配置语法已通过）
+- [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
 - [x] 最终验证记录、README 与面试演示说明
 
 ## 阶段五：接管复验与加固（2026-10-30）
@@ -34,7 +34,7 @@
 - [x] 新增 Seed 不删除审批/执行/审计的回归测试
 - [x] 新增交接报告与面试材料
 - [x] 按用户明确要求建立首个 Git 基线（`master` 根提交，67 个文件）
-- [ ] Docker Compose 实际运行（本机 Docker 引擎仍不可用；配置语法已通过）
+- [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
 
 ## 阶段六：Phase 2A DeepSeek 真实 LLM（2026-10-31）
 - [x] 统一 Provider 接口 + `DeepSeekProvider`：文本/JSON、超时、有界重试、Token、耗时、错误码

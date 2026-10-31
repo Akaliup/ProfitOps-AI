@@ -2,6 +2,23 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-10-31 Docker Compose 实际运行验收（Claude Code）
+
+本机 Docker Desktop 29.5.3 / Compose v5.1.4（WSL2）。Docker Hub 直连受限，构建时通过本机代理拉取基础镜像并传入 BuildKit 代理参数；未修改 `compose.yaml`、Dockerfile 或业务代码。`node:22-alpine` 使用 AWS ECR Public 的官方镜像 `public.ecr.aws/docker/library/node:22-alpine` 后本地打标签。后端启动参数为 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不调用真实 LLM。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 镜像构建 | `docker compose build --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... --build-arg NO_PROXY=...` | 后端、前端镜像构建成功 |
+| 启动 | `LLM_API_KEY= LLM_PROVIDER=disabled docker compose up -d` | db/backend healthy，frontend 启动 |
+| 后端冒烟 | `.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8010` | 11/11 通过 |
+| nginx 代理冒烟 | `.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8080` | 11/11 通过 |
+| 健康检查 | `curl http://127.0.0.1:8010/health` | `database=connected`、`simulation=true`、`llm.configured=false`、`llm.provider=disabled` |
+| PostgreSQL | `docker compose exec -T db psql -U profitops_demo -d profitops -tAc 'select version();'` | PostgreSQL 16.15 |
+| 前端资源 | `curl -I http://127.0.0.1:8080/assets/index-17EP4-Cu.js` | 200 |
+| 容器日志 | `docker compose logs backend/frontend/db` | 无启动错误或 Traceback |
+
+验收后执行 `docker compose down`；PostgreSQL 命名卷 `profitops-ai_profitops_pg` 保留，未删除数据。`data/profitops.db` 未被修改。
+
 ## 2026-10-31 Phase 2A：DeepSeek 接入（Claude Code）
 
 分支 `feat/deepseek-llm-agent`，基线 `4285afe`。以下均为本次实际输出：
@@ -52,25 +69,25 @@
 | Python 依赖 | `.venv/Scripts/python.exe -m pip check` | No broken requirements |
 | 前端依赖 | `npm --prefix frontend audit --registry=https://registry.npmjs.org` | 0 vulnerabilities |
 | Compose 语法 | `docker compose -f compose.yaml config --quiet` | 通过 |
-| Compose 运行 | `docker compose up --build` | 未执行：Docker Desktop 引擎仍不可用 |
+| Compose 运行 | `docker compose up --build` | 当时未执行：Docker Desktop 引擎不可用；2026-10-31 已补验（见上） |
 
 新增回归覆盖：工具 `policy` 分类与 `deny` 拒绝、API 时间戳显式 UTC、审计按 `request_id` 过滤、Seed 不删除审批/执行/审计、审批页动作预览与审计过滤 UI。冒烟与浏览器测试使用独立数据库（`data/smoke-takeover-2.db`、`data/e2e.db`），未修改 `data/profitops.db` 中的用户运行数据。
 
 ## 尚未验证（环境阻碍）
 
-- Docker Compose 实际启动 PostgreSQL、后端和前端：本机 Docker Desktop 引擎不可用。`docker desktop start` 在 120 秒后仍无法连接 `dockerDesktopLinuxEngine`，启动尝试被停止。因此不能声明容器运行、PostgreSQL 并发或全新容器数据库初始化已经通过。SQLite 并发测试已通过，Compose 配置只验证了语法。
+- Docker Compose 已于 2026-10-31 在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 通过。其他机器仍需按本文件复验；本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
 
 浏览器验收不属于未验证项：Playwright + Chromium 真实页面测试 2/2 通过，截图位于 `docs/screenshots/`。
 
 ## 环境
 
-Windows 11、Python 3.12.8（venv）、Node 24.16.0、npm 11.13.0、Git 2.40.0、Docker CLI 29.5.3（引擎未运行）。默认端口 8010 / 5180；本机 8000 / 5173 被其他进程占用，本项目不修改它们。
+Windows 11、Python 3.12.8（venv）、Node 24.16.0、npm 11.13.0、Git 2.40.0、Docker Desktop 29.5.3 / Compose v5.1.4（2026-10-31 已启动并完成容器验收）。默认端口 8010 / 5180；本机 8000 / 5173 被其他进程占用，本项目不修改它们。
 
 ## 开发过程中的失败与修复
 
 - 首轮后端测试 28 passed / 1 failed：`test_no_anomaly_does_not_invent_action` 所选的 7 天数据实际也存在轻微利润背离，测试前提错误。改为显式构造无成本、利润随销售增长的数据后重跑通过。没有放宽生产逻辑。
 - 首次 npm 安装因本机镜像 TLS `ECONNRESET` 失败，改用官方 registry 后成功；随后升级 Vite/Vitest/Playwright 修复审计漏洞，最终 `npm audit` 为 0。
 - 首次 Playwright WebServer 启动失败：Windows 将 Python 相对路径拆成命令；改为绝对路径并加引号后，浏览器测试通过。
-- Docker Desktop 启动在 120 秒限制内未就绪，停止尝试；因此容器运行验证保持未完成状态。
+- Docker Desktop 启动在 120 秒限制内未就绪，停止尝试；因此当时的容器运行验证保持未完成状态。2026-10-31 再次启动 Docker Desktop 后成功完成 Compose 验收；Docker Hub 直连仍受限，构建时使用本机代理。
 
 最终结果不包含任何伪造或跳过的测试。
