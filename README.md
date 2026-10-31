@@ -63,12 +63,12 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 docker compose up --build
 ```
 
-工作台 <http://127.0.0.1:8080>，API <http://127.0.0.1:8010>。Compose 使用 PostgreSQL 16 和持久卷；只绑定回环地址。当前交付环境中 Docker 引擎未运行，因此容器路径**未完成实际运行验证**，详见 `docs/TEST_REPORT.md`。
+工作台 <http://127.0.0.1:8080>，API <http://127.0.0.1:8010>。Compose 使用 PostgreSQL 16 和持久卷；只绑定回环地址。已在本机 Docker Desktop 29.5.3 实际启动并通过后端与 nginx 代理各 11/11 HTTP 冒烟，详见 `docs/TEST_REPORT.md`。验收时使用 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不会调用真实模型。
 
-在 Docker 可用的机器上，可用以下命令做一次容器验收：
+如需重新验收，可执行：
 
 ```bash
-docker compose up --build -d
+LLM_API_KEY= LLM_PROVIDER=disabled docker compose up --build -d
 python scripts/smoke.py --base-url http://127.0.0.1:8010
 curl -I http://127.0.0.1:8080
 docker compose logs --tail=50 backend
@@ -149,7 +149,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 74 通过（含 Phase 2B 评测 Runner、负向对照与 LLM 测试）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果：后端 74 通过（含 Phase 2B 评测 Runner、负向对照与 LLM 测试）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过（Docker Compose 下后端直连与 nginx 代理各一次）、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
@@ -174,7 +174,7 @@ TASKS.md             交付与后续任务
 - 模拟执行只写数据库预览，不改变任何真实平台。
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
 - 无 Alembic 增量迁移；MVP 使用版本化建表和种子。
-- Docker/PostgreSQL 容器运行未在当前环境验证。
+- Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；其他机器仍需按 `docs/TEST_REPORT.md` 复验。
 - 实际 MCP Server 未实现，因此不声称支持 MCP。
 
 ## 交接与面试材料

@@ -108,7 +108,7 @@ LLM 擅长解释和归纳，不擅长保证算术一致。这个项目的核心�
 
 ### 为什么默认 SQLite，Compose 用 PostgreSQL？
 
-SQLite 让演示无需外部服务、一条命令可复现；WAL、外键、30 秒 busy timeout 足以支撑单机演示。Compose 提供 PostgreSQL 16 + 持久卷，事实模型、唯一约束和条件 UPDATE 在两者通用。需要诚实说明：本机 Docker 引擎不可用，PostgreSQL 容器路径未实测，只有 SQLite 并发测试通过。
+SQLite 让演示无需外部服务、一条命令可复现；WAL、外键、30 秒 busy timeout 足以支撑单机演示。Compose 提供 PostgreSQL 16 + 持久卷，事实模型、唯一约束和条件 UPDATE 在两者通用。2026-10-31 已在本机 Docker Desktop 完成 PostgreSQL 16 + 后端 + nginx 前端的实际启动验收，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过；其他机器仍需复验，PostgreSQL 条件 UPDATE/唯一约束的独立并发压力测试仍未单独执行。
 
 ### 为什么不用微服务？
 
@@ -136,7 +136,7 @@ MVP 用 FastAPI BackgroundTasks 是为了零额外基础设施，HTTP 立即返�
 
 ### 这个项目最大的局限是什么？
 
-五个：演示认证不是生产安全方案；Docker/PostgreSQL 容器路径未实测；没有增量迁移和持久化队列；LLM 评测只有 3 个合成异常案例、每个 3 次，样本小且没有人工语义准确率；文本数字一致性已有门禁，但不是对任意文本的逐字核对。项目文档明确标注了这些边界，不把 MVP 说成生产能力。
+五个：演示认证不是生产安全方案；Docker/PostgreSQL 已在本机 Docker Desktop 实测，但其他机器未复验，独立并发压力测试也未单独执行；没有增量迁移和持久化队列；LLM 评测只有 3 个合成异常案例、每个 3 次，样本小且没有人工语义准确率；文本数字一致性已有门禁，但不是对任意文本的逐字核对。项目文档明确标注了这些边界，不把 MVP 说成生产能力。
 
 ## 6. 高频追问速答
 
