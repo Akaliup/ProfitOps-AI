@@ -160,7 +160,7 @@ backend/evals/       LLM Agent 评测样本、Runner 与报告
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
 scripts/             一键启动、HTTP 冒烟、浏览器测试、真实 LLM 验证
-docs/                契约、架构、验证记录、截图
+docs/                契约、架构、验证记录、截图、路线图与阶段状态
 compose.yaml         PostgreSQL + 后端 + 前端
 AGENTS.md            开发约定
 TASKS.md             交付与后续任务
@@ -179,6 +179,8 @@ TASKS.md             交付与后续任务
 
 ## 交接与面试材料
 
+- [docs/ROADMAP.md](docs/ROADMAP.md)：Phase 2C/2D/3 的目标、依赖、优先级与验收条件。
+- [docs/STATUS.md](docs/STATUS.md)：当前阶段、分支、CI、Codex Review 与下一步。
 - [docs/HANDOFF.md](docs/HANDOFF.md)：接管报告、实际验证结果、未完成项与下一步顺序。
 - [docs/INTERVIEW.md](docs/INTERVIEW.md)：3 分钟演示脚本、架构讲解、高频追问与回答要点。
 - [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。
