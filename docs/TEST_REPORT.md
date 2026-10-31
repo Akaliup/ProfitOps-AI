@@ -2,6 +2,22 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-01 Phase 2C MCP Server（Claude Code）
+
+分支 `feat/phase-2c-mcp-server`，基于协作规则分支。使用官方 Python MCP SDK 1.30.0 的 stdio transport，只暴露 4 个只读/纯计算工具；不暴露 `create_recommendation` 和 `simulate_execute_approved_action`。所有验证使用临时数据库，未修改 `data/profitops.db`；未调用真实 LLM。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 80 passed，1 个第三方 DeprecationWarning，22.34s |
+| MCP 专项 | `.venv/Scripts/python.exe -m pytest backend/tests/test_mcp_server.py -q` | 6 passed，3.16s |
+| 真实 stdio | `.venv/Scripts/python.exe scripts/mcp_check.py` | `ok=true`；4 个工具；1140 orders；`net_sales=4121600` 美分；`net_profit=-570300` 美分；`bridge_verified=true`；`ask_tool_call_error=unknown_tool`；`llm_configured=false` |
+| 前端测试 | `npm --prefix frontend test` | 8 passed |
+| 生产构建 | `npm --prefix frontend run build` | 通过，5.50s |
+
+MCP 专项覆盖：`initialize`、`tools/list`、4 个工具调用、未知工具、非法参数、`ask` 工具未暴露、客户端 `role` 注入拒绝、角色由服务端配置、调用前后业务表计数不变。
+
+未执行：HTTP 冒烟、浏览器 E2E、Docker Compose 复验。原因：本阶段只新增 MCP stdio 路径和一个工具描述文案，未改 HTTP/前端流程；上述路径已由既有测试与 CI 覆盖。
+
 ## 2026-10-31 Docker Compose 实际运行验收（Claude Code）
 
 本机 Docker Desktop 29.5.3 / Compose v5.1.4（WSL2）。Docker Hub 直连受限，构建时通过本机代理拉取基础镜像并传入 BuildKit 代理参数；未修改 `compose.yaml`、Dockerfile 或业务代码。`node:22-alpine` 使用 AWS ECR Public 的官方镜像 `public.ecr.aws/docker/library/node:22-alpine` 后本地打标签。后端启动参数为 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不调用真实 LLM。

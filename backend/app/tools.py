@@ -108,7 +108,7 @@ def execute(payload, context):
 def build_registry():
     registry = ToolRegistry()
     specs = [
-        ToolSpec(name="get_sales_metrics", description="读取订单与每日经营记录，报告数据覆盖", input_model=MetricsInput, output_model=RawMetrics, roles=("analyst", "approver"), effect="read", policy="safe", handler=get_metrics),
+        ToolSpec(name="get_sales_metrics", description="读取订单与每日经营记录，报告原始聚合与数据覆盖；派生利润字段由 calculate_profit 计算", input_model=MetricsInput, output_model=RawMetrics, roles=("analyst", "approver"), effect="read", policy="safe", handler=get_metrics),
         ToolSpec(name="calculate_profit", description="按整数美分计算利润、环比与贡献桥", input_model=CalculateInput, output_model=MetricsReport, roles=("analyst", "approver"), effect="pure", policy="safe", handler=lambda p, c: build_report(p.metrics)),
         ToolSpec(name="analyze_profit_drivers", description="识别利润异常及可追溯会计贡献项", input_model=DriversInput, output_model=DriverReport, roles=("analyst", "approver"), effect="pure", policy="safe", handler=lambda p, c: analyze_drivers(p.report)),
         ToolSpec(name="create_recommendation", description="验证证据并创建待审批建议", input_model=RecommendationInput, output_model=RecommendationOutput, roles=("analyst", "approver"), effect="database_write", policy="safe", handler=create),

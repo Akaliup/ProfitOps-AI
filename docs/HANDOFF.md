@@ -5,6 +5,8 @@
 工作区：`E:\ProfitOps-AI`（沿用原项目，不重建、不覆盖、不清理未提交修改）
 
 > 2026-10-31 更新：Phase 2A/2B 已合入 `master`；Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）；最新测试为后端 74、前端 8。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md` 和 `docs/EVALUATION.md`。
+>
+> 2026-11-01 更新：Phase 2C 只读 MCP Server 已实现（stdio，4 个只读工具），后端测试 80、前端 8；详见 `docs/MCP.md`。完整 MCP（网络 transport、OAuth、审批/执行工具）仍未实现。
 
 ## 1. 接管结论
 
@@ -118,7 +120,7 @@ docker compose -f compose.yaml config --quiet
 
 ### 明确未实现
 
-- 真实 MCP Server（README 未声称已接入）。
+- 完整 MCP Server（网络 transport、OAuth、审批/执行工具）未实现；Phase 2C 仅实现只读 stdio 子集，见 `docs/MCP.md`。
 - DeepSeek Provider 已实现（Phase 2A）；Phase 2B 已建立 4 个合成案例的评测系统并完成真实调用，最新 `max_tokens=4000` 三次重复为 9/9 `llm_success`，详见 `docs/EVALUATION.md`。仍未做人工语义标注和跨模型对比。
 - 生产身份（OIDC）、租户隔离、权限后台、速率限制、密钥轮换。
 - Alembic 增量迁移；当前是 `create_all` + 版本化 Seed。
@@ -154,7 +156,7 @@ docker compose -f compose.yaml config --quiet
 
 7. ~~抽象 LLM Provider 并接入真实 DeepSeek~~（Phase 2A 已完成真实调用；Phase 2B 已完成 4 案例门禁评测与数值一致性校验，剩余扩大样本、人工语义标注和跨模型对比）。
 8. 增加第二种演示场景（退款/履约驱动），让规则引擎与 LLM 的泛化能力在 UI 上可见。
-9. 增加 MCP Server（如果面试岗位强调工具协议），复用现有 Tool Registry 的 Schema。
+9. ~~增加 MCP Server~~（Phase 2C 已完成只读 stdio 子集；审批/执行工具和网络 transport 仍未实现）。
 10. 增加利润计算的属性测试与更多边界样本。
 
 ## 9. 关键文件地图
@@ -251,4 +253,4 @@ HTTP 冒烟：11/11（独立数据库、8011 端口）
 
 1. 扩大 LLM 评测案例数量，并做人工语义抽样与跨模型对比。
 2. 在现有数值/单位/证据门禁上继续补充边界案例，不把门禁通过说成语义准确率。
-3. 再评估 MCP Server、持久化队列或多租户，不在本轮提前实现。
+3. MCP Server 已在 Phase 2C 实现只读 stdio 子集；持久化队列和多租户仍待后续阶段。

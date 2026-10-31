@@ -8,6 +8,7 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
                                           +-- LangGraph 分析图（异常路径 9 个持久化步骤）
                                           +-- LangGraph 执行图（3 个步骤，事务内）
                                           +-- Tool Registry（6 个 Pydantic 工具）
+                                          +-- MCP Server（stdio，4 个只读工具，复用 Tool Registry）
                                           +-- LLM Provider（DeepSeek，可选，超时/重试/结构化输出）
                                           +-- 审计事件 + 请求 ID
 ```
@@ -38,6 +39,12 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 工作流只调用一次 LLM，位置在确定性利润、异常归因和证据校验之后、创建建议之前。输入由 `build_llm_payload` 从已计算结果构造，包括周期、总额、变化、主要驱动、8 项证据、紧凑 SKU 摘要和 `plan_action` 已确定的模拟动作；金额字段为整数美分并显式标注 `amount_unit`。提示词要求只引用给定证据、不编造数字、不承诺收益、保持 simulation 边界、限制各字段长度，并输出严格 JSON。调用使用可配置的 `LLM_MAX_TOKENS`（默认 4000）；Provider 记录 `finish_reason`，截断导致的非法 JSON 会在错误信息中明确标注。输出经 `LLMAnalysisOutput`（Pydantic）校验；独立节点 `verify_llm_evidence` 检查 `summary/root_causes/recommendations/evidence_references` 中的全部证据 ID 是否属于本次 `findings.evidence`。任何未知 ID 都会使本次 LLM 输出作废，不能进入审批流。
 
 数字权威性没有转移：建议标题、动作参数、预算和预期影响金额仍由确定性 `plan_action` 生成；LLM 成功时只把 `summary` 用于建议的“问题”描述，并附加根因、风险、待补充信息和置信度。`recommendations.body.engine` 与 `analysis.result.engine` 只有在 `llm_success` 时为 `deepseek-llm-v1`。降级状态完整持久化：无 Key 为 `deterministic_fallback/not_configured`，调用或证据失败为 `deterministic_fallback` 并带错误码，`LLM_FALLBACK_POLICY=fail` 时为 `llm_failed` 且分析失败，无异常/数据不足为 `not_requested`。审计分别记录 `analysis.llm_succeeded`、`analysis.llm_fallback`（degraded）和 `analysis.llm_failed`。LLM 步骤不叠加通用 15s 步骤超时，由 Provider 的 `LLM_TIMEOUT` + 有界重试负责。
+
+## MCP 层（只读）
+
+`backend/app/mcp_server.py` 使用官方 Python MCP SDK 的 stdio transport，把 Tool Registry 中的 4 个只读/纯计算工具暴露给本地 MCP 客户端：`get_sales_metrics`、`calculate_profit`、`analyze_profit_drivers`、`get_approval_status`。工具 Schema、角色校验和错误格式直接复用 Tool Registry，MCP 层不复制业务逻辑。
+
+MCP 面刻意保持只读：`create_recommendation` 会写提案，`simulate_execute_approved_action` 是必须人工审批的 `ask` 工具，两者都不暴露；审批、拒绝和执行继续走 HTTP 状态机。角色由服务端环境变量 `PROFITOPS_MCP_ROLE` 决定（默认 `analyst`），工具参数中的 `role` 会被严格 Schema 拒绝。Server 不构建 LLM Provider、不写业务表、不连接外部系统，也不监听网络端口；数据库需先由主服务初始化。验证见 `backend/tests/test_mcp_server.py` 与 `scripts/mcp_check.py`。
 
 ## 状态机与并发
 

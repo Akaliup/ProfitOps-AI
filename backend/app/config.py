@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     analyst_token: str = "demo-analyst"
     approver_token: str = "demo-approver"
     step_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    mcp_role: Literal["analyst", "approver"] = Field(
+        default="analyst", validation_alias=AliasChoices("PROFITOPS_MCP_ROLE", "mcp_role")
+    )
 
     # LLM settings intentionally use the plain names the deployment platform exposes.
     # PROFITOPS_-prefixed variants remain accepted for backward compatibility.

@@ -75,6 +75,21 @@ docker compose logs --tail=50 backend
 docker compose down
 ```
 
+### MCP Server（只读，stdio）
+
+Phase 2C 提供本地 MCP Server，通过 stdio 暴露 4 个只读工具：`get_sales_metrics`、`calculate_profit`、`analyze_profit_drivers`、`get_approval_status`。审批、拒绝和模拟执行仍只能走 HTTP + 人工审批，MCP 不暴露写工具。角色由服务端 `PROFITOPS_MCP_ROLE` 决定，默认 `analyst`；不调用 LLM，不连接外部经营系统。
+
+```bash
+PYTHONPATH=backend .venv/Scripts/python.exe -m app.mcp_server
+```
+
+客户端配置、调用链和安全边界见 [docs/MCP.md](docs/MCP.md)。实际 stdio 验收：
+
+```bash
+.venv/Scripts/python.exe -m pytest backend/tests/test_mcp_server.py -q
+.venv/Scripts/python.exe scripts/mcp_check.py
+```
+
 ## 演示流程（约 3 分钟）
 
 1. 打开工作台。默认身份是“经营分析师”；总览显示销售额上涨、净利润下降，KPI、趋势图、利润归因和 SKU 明细均来自 API。
@@ -149,12 +164,12 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 74 通过（含 Phase 2B 评测 Runner、负向对照与 LLM 测试）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过（Docker Compose 下后端直连与 nginx 代理各一次）、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果：后端 80 通过（含 Phase 2B 评测 Runner、负向对照、LLM 测试与 Phase 2C MCP Server 6 项）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过（Docker Compose 下后端直连与 nginx 代理各一次）、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
 ```
-backend/app/         FastAPI、模型、利润计算、工具、LangGraph、LLM Provider、审批执行、审计
+backend/app/         FastAPI、模型、利润计算、工具、LangGraph、LLM Provider、MCP Server、审批执行、审计
 backend/tests/       单元、集成、工作流、并发、评测
 backend/evals/       LLM Agent 评测样本、Runner 与报告
 frontend/src/        React 工作台、API 类型、交互测试
@@ -175,7 +190,7 @@ TASKS.md             交付与后续任务
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
 - 无 Alembic 增量迁移；MVP 使用版本化建表和种子。
 - Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；其他机器仍需按 `docs/TEST_REPORT.md` 复验。
-- 实际 MCP Server 未实现，因此不声称支持 MCP。
+- MCP Server 已实现只读 stdio 子集（4 个工具）；不暴露审批/执行工具，也没有网络 transport、OAuth 或多租户。
 
 ## 交接与面试材料
 
@@ -183,6 +198,7 @@ TASKS.md             交付与后续任务
 - [docs/STATUS.md](docs/STATUS.md)：当前阶段、分支、CI、Codex Review 与下一步。
 - [docs/HANDOFF.md](docs/HANDOFF.md)：接管报告、实际验证结果、未完成项与下一步顺序。
 - [docs/INTERVIEW.md](docs/INTERVIEW.md)：3 分钟演示脚本、架构讲解、高频追问与回答要点。
+- [docs/MCP.md](docs/MCP.md)：只读 MCP Server 的工具、客户端配置、安全边界与验证方式。
 - [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。
 - [docs/EVALUATION.md](docs/EVALUATION.md)：Phase 2B Agent 评测系统、4 个合成案例、离线负向对照、真实调用与评分器修正记录。
 

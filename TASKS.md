@@ -64,8 +64,17 @@
 - [x] 后端 74、前端 8、构建通过；临时数据库 HTTP 冒烟 11/11
 - [x] 报告 `docs/EVALUATION.md`；实际报告在 `backend/evals/reports/`
 
+## 阶段八：Phase 2C MCP Server（2026-11-01）
+- [x] 官方 Python MCP SDK，stdio transport，不监听网络端口
+- [x] 复用 Tool Registry，暴露 4 个只读/纯计算工具
+- [x] 不暴露 `create_recommendation` 与 `simulate_execute_approved_action`
+- [x] 角色由 `PROFITOPS_MCP_ROLE` 服务端决定，拒绝客户端 `role` 注入
+- [x] 6 项 MCP 测试 + `scripts/mcp_check.py` 真实 stdio 验收
+- [x] `docs/MCP.md`、README、ARCHITECTURE、CONTRACT 同步
+- [ ] PR、CI 与 Codex Review（阶段完成后更新）
+
 ## 后续（核心通过后再评估）
-- 实际 MCP Server（未实现前不能宣称已接入 MCP）
+- [x] 实际 MCP Server（Phase 2C：只读 stdio 子集；审批/执行工具仍走 HTTP）
 - LLM 解释质量评测集（固定案例比较结论、证据引用与越权承诺）
 - 生产身份（OIDC）、租户隔离、数据导入、汇率与多币种
 - Alembic 增量迁移与持久化任务队列（MVP 使用版本化初始化和数据库快照恢复）

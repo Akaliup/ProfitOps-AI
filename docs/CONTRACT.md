@@ -68,6 +68,10 @@ LLM 在确定性利润计算、异常归因和证据校验之后调用一次，�
 
 工具统一返回 `{ok,data,error}`，Pydantic 校验输入与输出；权限在 Tool Registry 与业务处理器双层验证。每个工具在 `/api/tools` 声明 `policy`：`safe`（只读、纯计算或仅写本系统提案）、`ask`（必须经人工审批后执行的模拟动作）、`deny`（外部系统副作用，注册表直接拒绝，当前未注册）。`ask` 工具由审批状态机与 approver 角色双重约束。工具参数失败为 invalid_tool_input，执行失败保留代码和消息。
 
+## MCP 接口（只读）
+
+Phase 2C 提供 stdio transport 的 MCP Server（`python -m app.mcp_server`，需 `PYTHONPATH=backend`）。只暴露 4 个 safe 工具：`get_sales_metrics`、`calculate_profit`、`analyze_profit_drivers`、`get_approval_status`，输入/输出 Schema 与 Tool Registry 相同。`create_recommendation`（数据库写入）和 `simulate_execute_approved_action`（`ask`）不暴露；审批、拒绝和执行仍只能走 HTTP。角色由服务端 `PROFITOPS_MCP_ROLE` 决定（`analyst` 默认 / `approver`），不接受客户端角色参数；工具参数中的未知字段（包括 `role`）返回 `invalid_tool_input`。MCP 层不写业务表、不调用 LLM、不连接外部系统，不监听网络端口；数据库需先初始化。工具错误以 MCP `isError=true` 返回，文本内容为 Tool Registry 的统一 `{ok,data,error}` JSON。
+
 ## 验收
 
-pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。LLM 测试覆盖 Provider 成功/重试/鉴权/超时/非法 JSON/空响应、环境变量读取、结构化 Schema、证据引用校验、无 Key 降级、调用失败降级、Schema 无效降级、`fail` 策略以及 LLM 成功后的审批与幂等执行；全部使用 MockTransport/FakeProvider，不消耗真实 Token。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤、API 错误和 LLM 成功/降级面板；生产构建和实际 HTTP + 浏览器演示闭环。PostgreSQL 已在本机 Docker Desktop 完成容器验收；其他环境若无法运行 Docker，需明确记录验证缺口。真实 DeepSeek 调用已通过 `scripts/llm_check.py` 完成一次：`deepseek-flash`、15467.974 ms、4801 tokens、`all_references_valid=true`，详见 `docs/LLM_LIVE_CHECK.md`。
+pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。LLM 测试覆盖 Provider 成功/重试/鉴权/超时/非法 JSON/空响应、环境变量读取、结构化 Schema、证据引用校验、无 Key 降级、调用失败降级、Schema 无效降级、`fail` 策略以及 LLM 成功后的审批与幂等执行；全部使用 MockTransport/FakeProvider，不消耗真实 Token。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤、API 错误和 LLM 成功/降级面板；生产构建和实际 HTTP + 浏览器演示闭环。PostgreSQL 已在本机 Docker Desktop 完成容器验收；其他环境若无法运行 Docker，需明确记录验证缺口。MCP 测试覆盖 initialize、tools/list、4 个只读工具、未知工具、非法参数、ask 工具未暴露、角色注入拒绝和调用前后业务表计数不变；`scripts/mcp_check.py` 使用临时数据库和真实 stdio 子进程验证。真实 DeepSeek 调用已通过 `scripts/llm_check.py` 完成一次：`deepseek-flash`、15467.974 ms、4801 tokens、`all_references_valid=true`，详见 `docs/LLM_LIVE_CHECK.md`。
