@@ -176,11 +176,11 @@ A：`/api/tools` 暴露每个工具的策略；`safe` 是只读/纯计算/仅写
 **Q：为什么测试数从 29 变成 33，又变成 52？**
 A：接管时补了 4 个回归：工具 policy/deny、API UTC 时间戳、审计 request_id 过滤、Seed 不删除审批/执行/审计。Phase 2A 新增 19 个 LLM 测试：Provider 成功/重试/鉴权/超时/非法 JSON/截断/空响应、环境变量读取、Schema、证据引用、无 Key 降级、失败/超时/Schema 降级、`fail` 策略和 LLM 成功后的审批幂等。前端从 6 增至 8，新增真实 LLM 面板和降级面板测试。
 
-**Q：Docker 没跑过，怎么证明能启动？**
-A：不能证明。只能证明 `docker compose config` 语法通过、Dockerfile 和依赖锁文件齐全、SQLite 路径完整跑通。面试时主动说明这是环境阻碍，并给出在 Docker 可用机器上的验证命令；不要把“配置存在”说成“容器已运行”。
+**Q：Docker 里跑过吗？怎么证明能启动？**
+A：2026-10-31 已在本机 Docker Desktop 29.5.3 / Compose v5.1.4 实际构建并启动 PostgreSQL 16、后端和 nginx 前端；后端直连与 nginx 代理各 11/11 HTTP 冒烟通过，`/health` 返回 `database=connected`、`simulation=true`、`llm.configured=false`。验收使用 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，未调用真实模型；`docker compose down` 后保留数据卷，未修改 `data/profitops.db`。其他机器仍需复验，PostgreSQL 条件 UPDATE / 唯一约束的独立并发压力测试未单独执行。详见 `docs/TEST_REPORT.md`。
 
 **Q：如果让你继续做两周，你先做什么？**
-A：Phase 2A/2B 已完成 LLM Provider、真实调用、证据校验和 4 个合成案例的评测系统；下一步先扩大案例数量、做跨模型对比和人工语义抽样，然后在 Docker 可用环境跑通 Compose；之后 Alembic 迁移、持久化队列、OIDC/多租户、限流；最后扩第二种演示场景。顺序是先补真实性与交付风险，再补生产能力，最后扩 Agent 能力。
+A：Phase 2A/2B 已完成 LLM Provider、真实调用、证据校验和 4 个合成案例的评测系统，Docker Compose 也已在本机完成容器验收；下一步先扩大案例数量、做跨模型对比和人工语义抽样；之后 Alembic 迁移、持久化队列、OIDC/多租户、限流；最后扩第二种演示场景。顺序是先补真实性与交付风险，再补生产能力，最后扩 Agent 能力。
 
 ## 7. 讲解时的边界清单
 
@@ -192,7 +192,7 @@ A：Phase 2A/2B 已完成 LLM Provider、真实调用、证据校验和 4 个合
 - “LLM 解释质量已经达到生产可用准确率”——目前只有 3 个合成异常案例、每个 3 次的门禁结果，没有人工语义标注或跨模型对比。
 - “LLM 结果可以直接进审批”——必须先通过 Schema 和证据引用校验。
 - “LLM 文本中的数字已逐字核对”——已有数值/单位/证据门禁，但不是对任意文本的逐字核对；金额计算仍以确定性代码为准。
-- “Docker/PostgreSQL 已验证”——只验证了配置语法。
+- “Docker/PostgreSQL 在所有环境都已验证”——只在本机 Docker Desktop 验证过，其他机器未复验，独立 PostgreSQL 并发压力测试也未单独执行。
 - “生产级认证/多租户”——当前是公开演示 token。
 - “归因证明了因果”——只是会计贡献项。
 - “预期影响是收益承诺”——是条件性情景。
