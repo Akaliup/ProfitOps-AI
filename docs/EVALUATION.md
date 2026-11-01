@@ -1,6 +1,6 @@
-# ProfitOps AI Agent 评测报告（Phase 2B / Phase 2D）
+# ProfitOps AI Agent 评测报告（Phase 2B / Phase 2D / RAG）
 
-- 日期：2026-10-31（首部与第 1–11 节为 Phase 2B 记录）
+- 日期：2026-10-31（首部与第 1–11 节为 Phase 2B 记录）；RAG 与 Phase 2D 记录为 2026-11-01
 - 分支：`feat/deepseek-llm-agent`（Phase 2B）；Phase 2D 分支为 `feat/agent-evaluation-trace`
 - 模型：`deepseek-flash`（DeepSeek-V4.1-Flash-1017）
 - 数据集：`profitops-llm-eval-v1`，`source_type=synthetic`；Phase 2D 另使用 `profitops-native-tool-eval-v1` 场景版本
@@ -9,6 +9,74 @@
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
 
 > Phase 2C 原生 Function Calling 未纳入本报告的评测口径。2026-11-01 另执行了 3 次真实脚本运行用于协议验收：第 1 次第 2 轮网络错误降级，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），记录见 `docs/LLM_LIVE_CHECK.md`。这不是评测集运行，不能据此声称工具调用准确率或真实多轮稳定性。
+
+## RAG 检索评测（2026-11-01）
+
+### R1. 目标与边界
+
+这一节评测的是**知识库检索链路**，不是 LLM 生成质量：文档入库、Markdown 切分、embedding、混合打分、`no_answer` 判定和 chunk 引用有效性。它不调用任何模型，也不读写 `data/profitops.db`。指标不能外推为“RAG 回答准确率”，因为答案生成仍由 LLM 完成，而本节没有运行 LLM。
+
+### R2. 数据集与执行方式
+
+- 6 篇合成 SOP：广告预算、退款排查、履约成本、平台手续费、数据完整性、审批与幂等。
+- 8 个固定查询：6 个可回答（每个有唯一目标文档）+ 2 个不可回答（会议室午餐、天气）。
+- 每次运行创建临时 SQLite，执行 `knowledge-v1` Seed，然后直接调用生产 `search_knowledge`。
+- 强制 `hashing` embedding、`top_k=3`、`min_score=0.15`，网络调用 0 次。
+- 命令：`.venv/Scripts/python.exe backend/evals/rag.py`
+
+### R3. 指标与硬门禁
+
+| 指标 | 定义 |
+|---|---|
+| hit@1 | 可回答查询中，top-1 命中目标文档的比例 |
+| hit@3 | 可回答查询中，top-3 含目标文档的比例 |
+| no-answer accuracy | 不可回答查询中，`no_answer=true` 且 hits 为空的比例 |
+| citation validity | 返回的 chunk_id 全部存在于当前 active 文档片段的比例 |
+| mean latency | 单次检索平均耗时，仅代表本机 SQLite 与 hashing 向量 |
+
+硬门禁：hit@3 全部命中、no-answer 全部正确、citation validity = 100%；任一失败时 CLI 退出码非 0。hit@1 仅报告，不作为门禁，避免为单一排序指标过拟合。
+
+### R4. 本次结果
+
+| 指标 | 结果 |
+|---|---|
+| 文档数 | 6 |
+| 查询数 | 8（6 可回答 / 2 不可回答） |
+| hit@1 | 83.33%（5/6） |
+| hit@3 | 100%（6/6） |
+| no-answer accuracy | 100%（2/2） |
+| answerable false no-answer | 0 |
+| citation validity | 100% |
+| 平均延迟 | 约 6 ms |
+| 网络调用 | 0 |
+
+逐查询结果：
+
+| 查询 | 期望 | 实际 top-1 | 结果 |
+|---|---|---|---|
+| 广告预算下调 15% 需要谁审批 | 广告预算调整与审批规则 | 广告预算调整与审批规则 | 命中 |
+| 退款率异常怎么排查 | 退款率异常排查手册 | 退款率异常排查手册 | 命中 |
+| 履约成本上涨要检查哪些费用 | 履约成本异常排查 | 履约成本异常排查 | 命中 |
+| 平台手续费和结算差异怎么核对 | 平台手续费与结算核对 | 平台手续费与结算核对 | 命中 |
+| 每日经营记录缺失怎么处理 | 数据完整性与缺失处理 | 数据完整性与缺失处理 | 命中 |
+| 执行幂等键重复请求怎么办 | 审批、执行与幂等规则 | 广告预算调整与审批规则 | top-1 未中，top-2 命中 |
+| 如何预订会议室午餐 | 无可靠答案 | 空 | 正确 |
+| 今天天气怎么样 | 无可靠答案 | 空 | 正确 |
+
+`approval-idempotency` 的查询词与广告审批文档共享“审批/规则”等 token，top-1 被广告文档占据；目标文档仍在 top-2，因此 hit@3 通过。报告保留真实排名，没有为提升 hit@1 调整权重或阈值。
+
+### R5. 失败路径与已覆盖的回归
+
+- 无关查询最初会因中文单字“预/订”误命中广告文档；修复为单字低权重 + `min_score=0.15`，并在 `no_answer` 时清空 hits，低置信度片段不能再被引用。
+- 测试覆盖 Seed 幂等、重复正文幂等、approver 创建/停用、analyst 403、删除后不再检索、引用子集校验、未知 chunk 降级、Markdown 切分边界、OpenAI 兼容 embedding 的 index 排序/归一化与 502 失败映射。
+- 未覆盖：真实业务文档、PDF/OCR、文档级 ACL、reranker、大规模向量库、多语言查询、LLM 回答忠实度。当前结果不能声明这些能力。
+
+### R6. 复现
+
+```bash
+.venv/Scripts/python.exe backend/evals/rag.py
+# 报告：backend/evals/reports/rag-latest.json
+```
 
 ## Phase 2D：原生 Function Calling 评测（2026-11-01）
 

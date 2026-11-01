@@ -56,6 +56,13 @@ def main():
     _, logs = call(f"/api/audit-logs?object_id={rec_id}", analyst)
     actions = {row["action"] for row in logs["items"]}
     check("audit_complete", {"recommendation.approve", "execution.started", "execution.executed", "execution.replayed", "request.execute.denied"}.issubset(actions))
+    _, documents = call("/api/knowledge/documents", analyst)
+    check("knowledge_seeded", len(documents["items"]) >= 6)
+    status, knowledge = call("/api/knowledge/search", analyst, {"query": "广告预算下调审批", "top_k": 3})
+    check("knowledge_search", status == 200 and not knowledge["no_answer"] and bool(knowledge["hits"]))
+    _, no_answer = call("/api/knowledge/search", analyst, {"query": "如何预订会议室午餐", "top_k": 3})
+    check("knowledge_no_answer", no_answer["no_answer"] and not no_answer["hits"])
+    check("knowledge_role_enforced", call("/api/knowledge/documents", analyst, {"title": "smoke doc", "source": "synthetic://smoke", "content": "# smoke\n\nsmoke content"})[0] == 403)
     print(json.dumps({"passed": len(checks), "failed": 0, "checks": checks, "analysis_id": analysis["id"], "recommendation_id": rec_id, "execution_id": executed["execution_id"]}, ensure_ascii=False, indent=2))
 
 

@@ -84,6 +84,43 @@ class DailyOperation(Base):
     complete: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (
+        Index("ix_knowledge_documents_active", "active"),
+        Index("ix_knowledge_documents_sha", "content_sha256"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String(200))
+    source: Mapped[str] = mapped_column(String(300))
+    version: Mapped[str] = mapped_column(String(40), default="v1")
+    effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_knowledge_chunk_index"),
+        Index("ix_knowledge_chunks_document", "document_id"),
+        Index("ix_knowledge_chunks_model", "embedding_model"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id"))
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    heading: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer)
+    embedding: Mapped[list] = mapped_column(JSON, default=list)
+    embedding_model: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Analysis(Base):
     __tablename__ = "analyses"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

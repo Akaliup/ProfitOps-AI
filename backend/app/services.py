@@ -10,7 +10,10 @@ from .audit import record
 from .errors import DomainError
 from .metrics import verify_evidence
 from .models import Analysis, Execution, Recommendation, new_id
-from .schemas import DriverReport, ExecuteOutput, MetricsReport, RecommendationInput, RecommendationOutput, StrictModel
+from .schemas import (
+    DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsReport,
+    RecommendationInput, RecommendationOutput, StrictModel,
+)
 from .security import Actor, require_role
 
 
@@ -77,6 +80,19 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
     if llm_output:
         risks = list(dict.fromkeys([*risks, *llm_output.risks]))
         missing = list(dict.fromkeys([*missing, *llm_output.missing_information]))
+    knowledge_context = None
+    if payload.knowledge is not None:
+        cited = set(llm_output.knowledge_references) if llm_output else set()
+        knowledge_context = KnowledgeContext(
+            query=payload.knowledge.query,
+            hits=[
+                KnowledgeCitation(**hit.model_dump(), cited=hit.chunk_id in cited)
+                for hit in payload.knowledge.hits
+            ],
+            no_answer=payload.knowledge.no_answer,
+            embedding_model=payload.knowledge.embedding_model,
+            retrieval_ms=payload.knowledge.retrieval_ms,
+        ).model_dump(mode="json")
     body = {
         "problem": llm_output.summary if llm_output else findings.conclusion,
         "period": report.period.model_dump(mode="json"),
@@ -84,6 +100,7 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
         "store_id": report.store_id, "currency": "USD",
         "engine": "deepseek-llm-v1" if llm_output else "deterministic-rules-v1",
         "llm": payload.llm.model_dump(mode="json") if payload.llm else None,
+        "knowledge": knowledge_context,
         "evidence": findings.evidence, "primary_driver": primary.model_dump(),
         "recommendation": f"针对 {target['sku']} 将参考日广告预算下调 15%，先进行受控模拟并在 7 天后复核。" if is_budget else f"为 {target['sku']} 创建成本核查任务，核对 {primary.label} 原始账单。",
         "expected_impact": {

@@ -10,13 +10,18 @@ from sqlalchemy import select, update
 from .audit import record
 from .config import Settings
 from .errors import DomainError
+from .knowledge import build_knowledge_query, merge_knowledge_hits
 from .llm import LLMError
-from .llm_analysis import SYSTEM_PROMPT, build_llm_payload, build_user_prompt, validate_evidence_references
+from .llm_analysis import (
+    SYSTEM_PROMPT, build_llm_payload, build_user_prompt,
+    validate_evidence_references, validate_knowledge_references,
+)
 from .llm_tools import ToolLoopResult, run_tool_loop
 from .metrics import verify_evidence
 from .models import Analysis, utcnow
 from .schemas import (
-    DriverReport, LLMAnalysisOutput, LLMErrorInfo, LLMRun, LLMUsage, MetricsInput, MetricsReport,
+    DriverReport, KnowledgeSearchOutput, LLMAnalysisOutput, LLMErrorInfo, LLMRun,
+    LLMUsage, MetricsInput, MetricsReport,
 )
 from .security import Actor
 from .services import plan_action
@@ -32,6 +37,8 @@ class ProfitState(TypedDict, total=False):
     report: dict
     findings: dict
     evidence_valid: bool
+    knowledge: dict | None
+    knowledge_error: dict | None
     llm: dict
     recommendation_id: str
     status: str
@@ -44,7 +51,8 @@ class ProfitState(TypedDict, total=False):
 LABELS = {
     "receive_request": "接收分析请求", "get_sales_metrics": "读取经营数据",
     "calculate_profit": "计算利润与环比", "analyze_profit_drivers": "分析异常与贡献项",
-    "verify_evidence": "验证证据与完整性", "llm_root_cause_analysis": "DeepSeek 根因分析",
+    "verify_evidence": "验证证据与完整性", "retrieve_knowledge": "检索运营知识库",
+    "llm_root_cause_analysis": "DeepSeek 根因分析",
     "verify_llm_evidence": "验证 LLM 证据引用", "create_recommendation": "创建待审批建议",
     "wait_for_approval": "等待人工审批", "get_approval_status": "检查审批状态",
     "simulate_execute_approved_action": "受控模拟执行", "save_execution_result": "保存结果与审计",
@@ -66,6 +74,13 @@ def result_summary(name, update):
         return f"净利润 {update['report']['current']['net_profit']} 美分；利润桥核对 {update['report']['bridge_verified']}"
     if "findings" in update:
         return update["findings"]["conclusion"]
+    if "knowledge" in update and "llm" not in update:
+        knowledge = update.get("knowledge")
+        if update.get("knowledge_error"):
+            return f"知识库检索失败（{update['knowledge_error'].get('code')}），继续无知识分析"
+        if knowledge and knowledge.get("hits"):
+            return f"检索到 {len(knowledge['hits'])} 个知识片段；no_answer={knowledge.get('no_answer')}"
+        return "知识库没有匹配片段，继续分析"
     if "llm" in update and update["llm"].get("status") != "not_requested":
         run = update["llm"]
         if run.get("status") == "llm_success":
@@ -109,6 +124,7 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             "usage": run.usage.model_dump() if run.usage else None,
             "error": run.error.model_dump() if run.error else None,
             "evidence_references": run.output.evidence_references if run.output else None,
+            "knowledge_references": run.output.knowledge_references if run.output else None,
             "confidence": run.output.confidence if run.output else None,
             "native_tools": run.native_tools, "termination_reason": run.termination_reason,
             "rounds": [item.model_dump(mode="json") for item in run.rounds],
@@ -151,10 +167,32 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
         audit_llm(fallback, "analysis.llm_fallback", "degraded")
         return {"llm": fallback.model_dump(mode="json")}
 
+    def retrieve(state):
+        report = MetricsReport.model_validate(state["report"])
+        findings = DriverReport.model_validate(state["findings"])
+        query = build_knowledge_query(report, findings)
+        try:
+            result = tool_data(
+                registry, "search_knowledge",
+                {"query": query, "top_k": settings.knowledge_top_k}, context,
+            )
+        except DomainError as exc:
+            return {
+                "knowledge": None,
+                "knowledge_error": {"code": exc.code, "message": exc.message},
+            }
+        return {"knowledge": result, "knowledge_error": None}
+
     def llm_analyze(state):
         report = MetricsReport.model_validate(state["report"])
         findings = DriverReport.model_validate(state["findings"])
         plan = plan_action(report, findings)
+        pre_knowledge = None
+        if state.get("knowledge"):
+            try:
+                pre_knowledge = KnowledgeSearchOutput.model_validate(state["knowledge"])
+            except ValidationError:
+                pre_knowledge = None
         if llm is None:
             fallback = LLMRun(
                 status="deterministic_fallback", configured=False, provider=settings.llm_provider,
@@ -162,7 +200,9 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             )
             audit_llm(fallback, "analysis.llm_fallback", "degraded")
             return {"llm": fallback.model_dump(mode="json")}
-        payload = build_llm_payload(report, findings, plan.action.model_dump(mode="json"))
+        payload = build_llm_payload(
+            report, findings, plan.action.model_dump(mode="json"), knowledge=pre_knowledge,
+        )
 
         if settings.llm_native_tools and callable(getattr(llm, "chat", None)):
             try:
@@ -176,8 +216,12 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                 provider=llm, registry=registry, context=replace(context, scope=scope),
                 payload=payload, settings=settings, scope=scope,
             )
+            merged = merge_knowledge_hits(pre_knowledge, context.knowledge_hits)
+            knowledge_update = {
+                "knowledge": merged.model_dump(mode="json") if merged is not None else None,
+            }
             if loop.error is not None:
-                return llm_failure(loop.error, loop=loop)
+                return {**llm_failure(loop.error, loop=loop), **knowledge_update}
             assert loop.output is not None
             run = LLMRun(
                 status="llm_success", configured=True, provider=settings.llm_provider, model=loop.model,
@@ -186,7 +230,7 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                 rounds=loop.rounds, tool_calls=loop.tool_calls,
             )
             audit_llm(run, "analysis.llm_succeeded", "success")
-            return {"llm": run.model_dump(mode="json")}
+            return {"llm": run.model_dump(mode="json"), **knowledge_update}
 
         try:
             result = llm.generate_json(
@@ -214,19 +258,31 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
         if run.status != "llm_success":
             return {}
         assert run.output is not None
-        unknown = validate_evidence_references(run.output, state["findings"]["evidence"])
-        if not unknown:
+        knowledge = None
+        if state.get("knowledge"):
+            try:
+                knowledge = KnowledgeSearchOutput.model_validate(state["knowledge"])
+            except ValidationError:
+                knowledge = None
+        unknown_evidence = validate_evidence_references(run.output, state["findings"]["evidence"])
+        unknown_knowledge = validate_knowledge_references(run.output, knowledge)
+        if not unknown_evidence and not unknown_knowledge:
             return {}
-        error = LLMErrorInfo(
-            code="invalid_evidence_reference",
-            message=f"LLM 引用了不存在的证据：{', '.join(unknown[:5])}",
-        )
+        if unknown_evidence:
+            code = "invalid_evidence_reference"
+            message = f"LLM 引用了不存在的证据：{', '.join(unknown_evidence[:5])}"
+            details = {"unknown_evidence_ids": unknown_evidence}
+        else:
+            code = "invalid_knowledge_reference"
+            message = f"LLM 引用了不存在的知识片段：{', '.join(unknown_knowledge[:5])}"
+            details = {"unknown_knowledge_ids": unknown_knowledge}
+        error = LLMErrorInfo(code=code, message=message)
         if settings.llm_fallback_policy == "fail":
-            failed = run.model_copy(update={"status": "llm_failed", "reason": "invalid_evidence_reference", "error": error, "output": None})
+            failed = run.model_copy(update={"status": "llm_failed", "reason": code, "error": error, "output": None})
             audit_llm(failed, "analysis.llm_failed", "failure")
             persist_llm_run(failed)
-            raise DomainError("llm_failed", "LLM 证据引用无效，且降级策略为 fail", 502, {"unknown_evidence_ids": unknown})
-        fallback = run.model_copy(update={"status": "deterministic_fallback", "reason": "invalid_evidence_reference", "error": error, "output": None})
+            raise DomainError("llm_failed", "LLM 引用无效，且降级策略为 fail", 502, details)
+        fallback = run.model_copy(update={"status": "deterministic_fallback", "reason": code, "error": error, "output": None})
         audit_llm(fallback, "analysis.llm_fallback", "degraded")
         return {"llm": fallback.model_dump(mode="json")}
 
@@ -252,7 +308,12 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                     if "report" in merged:
                         llm_meta = merged.get("llm")
                         engine = "deepseek-llm-v1" if llm_meta and llm_meta.get("status") == "llm_success" else "deterministic-rules-v1"
-                        row.result = {"metrics": merged["report"], "findings": merged.get("findings"), "llm": llm_meta, "engine": engine}
+                        row.result = {
+                            "metrics": merged["report"], "findings": merged.get("findings"),
+                            "knowledge": merged.get("knowledge"),
+                            "knowledge_error": merged.get("knowledge_error"),
+                            "llm": llm_meta, "engine": engine,
+                        }
                     row.recommendation_id = merged.get("recommendation_id")
                     row.error = merged.get("error")
                 return updates
@@ -297,9 +358,10 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
         "calculate_profit": lambda state: {"report": tool_data(registry, "calculate_profit", {"metrics": state["raw"]}, context)},
         "analyze_profit_drivers": lambda state: {"findings": tool_data(registry, "analyze_profit_drivers", {"report": state["report"]}, context)},
         "verify_evidence": verify,
+        "retrieve_knowledge": retrieve,
         "llm_root_cause_analysis": llm_analyze,
         "verify_llm_evidence": verify_llm,
-        "create_recommendation": lambda state: {"recommendation_id": tool_data(registry, "create_recommendation", {"analysis_id": analysis_id, "report": state["report"], "findings": state["findings"], "llm": state.get("llm")}, context)["recommendation_id"]},
+        "create_recommendation": lambda state: {"recommendation_id": tool_data(registry, "create_recommendation", {"analysis_id": analysis_id, "report": state["report"], "findings": state["findings"], "llm": state.get("llm"), "knowledge": state.get("knowledge")}, context)["recommendation_id"]},
         "wait_for_approval": wait,
     }
     for name, handler in handlers.items():
@@ -307,7 +369,8 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
     chain = [START, "receive_request", "get_sales_metrics", "calculate_profit", "analyze_profit_drivers", "verify_evidence"]
     for before, after in zip(chain, chain[1:]):
         graph.add_edge(before, after)
-    graph.add_conditional_edges("verify_evidence", lambda state: "llm" if state["evidence_valid"] and state["findings"]["anomaly"] else "finish", {"llm": "llm_root_cause_analysis", "finish": "wait_for_approval"})
+    graph.add_conditional_edges("verify_evidence", lambda state: "knowledge" if state["evidence_valid"] and state["findings"]["anomaly"] else "finish", {"knowledge": "retrieve_knowledge", "finish": "wait_for_approval"})
+    graph.add_edge("retrieve_knowledge", "llm_root_cause_analysis")
     graph.add_edge("llm_root_cause_analysis", "verify_llm_evidence")
     graph.add_edge("verify_llm_evidence", "create_recommendation")
     graph.add_edge("create_recommendation", "wait_for_approval")

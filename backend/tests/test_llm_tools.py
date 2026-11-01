@@ -538,6 +538,61 @@ def test_tool_result_is_size_bounded(client):
     assert '"truncated":true' in tool_message["content"]
 
 
+def test_search_knowledge_tool_is_allowed_without_period_scope(client):
+    scope, payload = analysis_payload(client)
+    provider = FakeChatProvider([
+        tool_response(make_call("search_knowledge", {"query": "广告预算下调 15% 审批", "top_k": 3})),
+        final_response(),
+    ])
+    result = run_tool_loop(
+        provider=provider, registry=client.app.state.registry, context=context_for(client, scope),
+        payload=payload, settings=settings_for(client), scope=scope,
+    )
+    assert result.error is None
+    assert result.tool_calls[0].ok is True
+    assert result.tool_calls[0].name == "search_knowledge"
+    assert "hits=" in result.tool_calls[0].result_summary
+    tool_message = provider.calls[1]["messages"][-1]
+    assert tool_message["role"] == "tool"
+    assert '"chunk_id"' in tool_message["content"]
+
+
+def test_workflow_accepts_knowledge_citation_from_retrieved_context(client, analyst):
+    search = client.post(
+        "/api/knowledge/search", headers=analyst,
+        json={"query": "广告预算下调 15% 审批", "top_k": 3},
+    ).json()
+    chunk_id = search["hits"][0]["chunk_id"]
+    provider = FakeChatProvider([
+        tool_response(make_call("search_knowledge", {"query": "广告预算下调 15% 审批", "top_k": 3})),
+        final_response({**VALID_OUTPUT, "knowledge_references": [chunk_id]}),
+    ])
+    client.app.state.llm = provider
+    created = client.post("/api/analyses", json={}, headers=analyst)
+    detail = client.get(f"/api/analyses/{created.json()['id']}", headers=analyst).json()
+    assert detail["result"]["llm"]["status"] == "llm_success"
+    assert detail["result"]["llm"]["output"]["knowledge_references"] == [chunk_id]
+    recommendation = client.get(
+        f"/api/recommendations/{detail['recommendation_id']}", headers=analyst,
+    ).json()
+    cited = [hit for hit in recommendation["body"]["knowledge"]["hits"] if hit["cited"]]
+    assert any(hit["chunk_id"] == chunk_id for hit in cited)
+
+
+def test_workflow_degrades_on_unknown_knowledge_citation(client, analyst):
+    provider = FakeChatProvider([
+        final_response({**VALID_OUTPUT, "knowledge_references": ["chunk-does-not-exist"]}),
+    ])
+    client.app.state.llm = provider
+    created = client.post("/api/analyses", json={}, headers=analyst)
+    detail = client.get(f"/api/analyses/{created.json()['id']}", headers=analyst).json()
+    assert detail["status"] == "waiting_approval"
+    assert detail["result"]["llm"]["status"] == "deterministic_fallback"
+    assert detail["result"]["llm"]["reason"] == "invalid_knowledge_reference"
+    assert detail["result"]["llm"]["output"] is None
+    assert detail["result"]["knowledge"] is not None
+
+
 def test_workflow_degrades_on_forbidden_tool_and_still_uses_rules(client, analyst):
     scope, _ = analysis_payload(client)
     provider = FakeChatProvider([tool_response(make_call("create_recommendation", {}))])

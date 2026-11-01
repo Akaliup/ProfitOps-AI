@@ -12,7 +12,7 @@ def test_langgraph_path_persisted(client, analyst, recommendation):
     analysis = client.get(f"/api/analyses/{row['analysis_id']}", headers=analyst).json()
     assert [step["name"] for step in analysis["steps"]] == [
         "receive_request", "get_sales_metrics", "calculate_profit", "analyze_profit_drivers",
-        "verify_evidence", "llm_root_cause_analysis", "verify_llm_evidence",
+        "verify_evidence", "retrieve_knowledge", "llm_root_cause_analysis", "verify_llm_evidence",
         "create_recommendation", "wait_for_approval",
     ]
     assert all(step["status"] == "completed" and step["duration_ms"] >= 0 for step in analysis["steps"])
@@ -62,7 +62,7 @@ def test_tool_validation_permission_unknown_and_failure(client):
     assert registry.invoke("simulate_execute_approved_action", {"recommendation_id": "x", "idempotency_key": "test"}, context).error.code == "forbidden"
     assert registry.invoke("get_sales_metrics", {"period": {"start_date": "2026-10-30", "end_date": "2026-10-01"}}, context).error.code == "invalid_tool_input"
     catalog = registry.catalog()
-    assert len(catalog) == 8
+    assert len(catalog) == 9
     assert all(item["input_schema"] and item["output_schema"] for item in catalog)
     spec = registry.tools["get_sales_metrics"]
     spec.handler = lambda payload, ctx: (_ for _ in ()).throw(RuntimeError("data-source-offline"))
@@ -93,7 +93,7 @@ def test_failed_node_and_timeout_are_visible(client, analyst, monkeypatch):
 def test_tool_policy_catalog_and_deny(client, analyst):
     registry = client.app.state.registry
     response = client.get("/api/tools", headers=analyst)
-    assert response.status_code == 200 and len(response.json()["items"]) == 8
+    assert response.status_code == 200 and len(response.json()["items"]) == 9
     catalog = {item["name"]: item for item in registry.catalog()}
     assert {item["policy"] for item in catalog.values()} == {"safe", "ask"}
     assert catalog["get_sales_metrics"]["policy"] == "safe"
