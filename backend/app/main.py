@@ -14,12 +14,19 @@ from sqlalchemy.exc import IntegrityError
 
 from .audit import record, record_separately
 from .config import Settings, get_settings
-from .db import build_engine, initialize_database, make_session_factory
+from .db import begin_write, build_engine, initialize_database, make_session_factory
 from .errors import DomainError
+from .knowledge import (
+    build_embedding_provider, create_document, delete_document, list_documents,
+    reindex_document, search_knowledge, seed_knowledge,
+)
 from .llm import build_llm_provider
 from .metrics import build_report, fetch_metrics, resolve_scope
-from .models import Analysis, AuditLog, DailyOperation, Execution, Recommendation, Store, new_id
-from .schemas import AnalysisRequest, DecisionRequest
+from .models import (
+    Analysis, AuditLog, DailyOperation, Execution, KnowledgeDocument,
+    Recommendation, Store, new_id,
+)
+from .schemas import AnalysisRequest, DecisionRequest, KnowledgeDocumentInput, KnowledgeSearchInput
 from .security import Actor, get_actor, require_role
 from .seed import seed_demo
 from .services import decide
@@ -59,15 +66,31 @@ def create_app(settings: Settings | None = None):
     settings = settings or get_settings()
     engine = build_engine(settings.database_url)
     factory = make_session_factory(engine)
-    registry = build_registry()
+    embeddings = build_embedding_provider(settings)
+    registry = build_registry(embeddings, settings)
     llm = build_llm_provider(settings)
+
+    knowledge_seed_error: dict[str, str] | None = None
 
     @asynccontextmanager
     async def lifespan(app):
+        nonlocal knowledge_seed_error
+        knowledge_seed_error = None
+        # Database setup failures must still abort startup; only the optional
+        # knowledge seed may degrade so the core API stays available.
         initialize_database(engine)
         if settings.demo_mode and settings.auto_seed:
             seed_demo(factory)
+            try:
+                seed_knowledge(factory, embeddings, settings)
+            except DomainError as exc:
+                knowledge_seed_error = {"code": exc.code, "message": exc.message}
+                logger.warning(
+                    "knowledge_seed_failed: %s: %s", exc.code, exc.message,
+                    extra={"error_code": exc.code},
+                )
         recover_interrupted(factory)
+        app.state.knowledge_seed_error = knowledge_seed_error
         yield
         engine.dispose()
 
@@ -76,7 +99,7 @@ def create_app(settings: Settings | None = None):
         description="确定性利润分析与 LangGraph 工作流；本地演示认证；所有执行仅为 simulation。金额单位 USD 美分。",
     )
     app.state.settings, app.state.engine, app.state.factory, app.state.registry = settings, engine, factory, registry
-    app.state.llm = llm
+    app.state.llm, app.state.embeddings = llm, embeddings
 
     @app.middleware("http")
     async def request_context(request, call_next):
@@ -121,6 +144,12 @@ def create_app(settings: Settings | None = None):
             "status": "ok", "database": "connected", "simulation": True,
             "engine": "deterministic-rules-v1",
             "llm": {"configured": bool(llm), "provider": settings.llm_provider, "model": settings.llm_model},
+            "knowledge": {
+                "provider": settings.knowledge_embedding_provider,
+                "model": settings.knowledge_embedding_model,
+                "remote": settings.knowledge_embedding_remote,
+                "seed_error": knowledge_seed_error,
+            },
         }
 
     @app.get("/api/demo", tags=["demo"])
@@ -129,8 +158,17 @@ def create_app(settings: Settings | None = None):
         with factory() as session:
             minimum, maximum = session.execute(select(func.min(DailyOperation.date), func.max(DailyOperation.date))).one()
             stores = session.scalars(select(Store).order_by(Store.id)).all()
+            knowledge_documents = session.scalar(
+                select(func.count()).select_from(KnowledgeDocument).where(KnowledgeDocument.active.is_(True))
+            ) or 0
         return {
             "demo_mode": settings.demo_mode, "simulation": True, "currency": "USD",
+            "knowledge": {
+                "documents": knowledge_documents,
+                "embedding_provider": settings.knowledge_embedding_provider,
+                "embedding_model": settings.knowledge_embedding_model,
+                "seed_error": knowledge_seed_error,
+            },
             "identities": [{"id": "demo-analyst", "name": "经营分析师", "role": "analyst", "token": settings.analyst_token}, {"id": "demo-approver", "name": "审批负责人", "role": "approver", "token": settings.approver_token}] if settings.demo_mode else [],
             "stores": [{"id": store.id, "name": store.name, "marketplace": store.marketplace} for store in stores],
             "data_range": {"start_date": str(minimum), "end_date": str(maximum)} if minimum else None,
@@ -145,8 +183,12 @@ def create_app(settings: Settings | None = None):
         if not settings.demo_mode:
             raise DomainError("demo_disabled", "演示模式已关闭", 403)
         outcome = seed_demo(factory)
-        record_separately(factory, actor, "demo.seed", "dataset", "demo-60d-v1", request.state.request_id, details=outcome)
-        return outcome
+        knowledge = seed_knowledge(factory, embeddings, settings)
+        record_separately(
+            factory, actor, "demo.seed", "dataset", "demo-60d-v1",
+            request.state.request_id, details={"demo": outcome, "knowledge": knowledge},
+        )
+        return {**outcome, "knowledge": knowledge}
 
     def metrics_request(start_date: date | None, end_date: date | None, store_id: str | None):
         try:
@@ -165,6 +207,54 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/tools", tags=["agent"])
     def tools(actor: Actor = Depends(identity)):
         return {"items": registry.catalog()}
+
+    @app.get("/api/knowledge/documents", tags=["knowledge"])
+    def knowledge_documents(actor: Actor = Depends(identity)):
+        with factory() as session:
+            return {"items": [item.model_dump(mode="json") for item in list_documents(session)]}
+
+    @app.post("/api/knowledge/documents", tags=["knowledge"])
+    def add_knowledge_document(body: KnowledgeDocumentInput, request: Request, actor: Actor = Depends(identity)):
+        require_role(actor, "approver")
+        with factory.begin() as session:
+            # Acquire SQLite's write lock before the dedupe SELECT. Otherwise two
+            # concurrent uploads can both read "no document" and the second
+            # write fails with SQLITE_BUSY_SNAPSHOT instead of deduping.
+            begin_write(session, engine)
+            item = create_document(
+                session, body, embeddings,
+                chunk_chars=settings.knowledge_chunk_chars,
+                overlap=settings.knowledge_chunk_overlap,
+                actor=actor, request_id=request.state.request_id,
+            )
+        return JSONResponse(status_code=201 if item.created else 200, content=item.model_dump(mode="json"))
+
+    @app.post("/api/knowledge/documents/{document_id}/reindex", tags=["knowledge"])
+    def reindex_knowledge_document(document_id: str, request: Request, actor: Actor = Depends(identity)):
+        require_role(actor, "approver")
+        with factory.begin() as session:
+            item = reindex_document(
+                session, document_id, embeddings,
+                actor=actor, request_id=request.state.request_id,
+            )
+        return item.model_dump(mode="json")
+
+    @app.delete("/api/knowledge/documents/{document_id}", tags=["knowledge"])
+    def remove_knowledge_document(document_id: str, request: Request, actor: Actor = Depends(identity)):
+        require_role(actor, "approver")
+        with factory.begin() as session:
+            item = delete_document(session, document_id, actor, request.state.request_id)
+        return item.model_dump(mode="json")
+
+    @app.post("/api/knowledge/search", tags=["knowledge"])
+    def knowledge_search(body: KnowledgeSearchInput, actor: Actor = Depends(identity)):
+        with factory() as session:
+            result = search_knowledge(
+                session, body, embeddings,
+                candidate_k=settings.knowledge_candidate_k,
+                min_score=settings.knowledge_min_score,
+            )
+        return result.model_dump(mode="json")
 
     @app.post("/api/analyses", status_code=202, tags=["agent"])
     def analyse(body: AnalysisRequest, request: Request, background_tasks: BackgroundTasks, idempotency_key: str | None = Header(default=None), actor: Actor = Depends(identity)):

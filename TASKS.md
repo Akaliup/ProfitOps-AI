@@ -88,8 +88,22 @@
 - [x] 后端 130 通过（新增 28 项）、前端 11 通过、生产构建通过、HTTP 冒烟 11/11、浏览器 E2E 3/3
 - [x] 报告 `docs/EVALUATION.md` Phase 2D 章节、`docs/TEST_REPORT.md`、README 与契约同步
 
+## 阶段十：RAG 运营知识库（2026-11-01）
+- [x] `knowledge_documents` / `knowledge_chunks` 模型、Markdown 标题切分、正文 SHA-256 幂等与软删除
+- [x] 默认确定性 hashing embedding（离线、256 维）；可选 OpenAI 兼容 `/embeddings`，失败映射 502
+- [x] 混合检索：cosine + 中文/ASCII 词法 + 标题命中，candidate/top-k 重排，`no_answer` 阈值与 hits 清空
+- [x] LangGraph 新增 `retrieve_knowledge` 节点（`verify_evidence` 之后、LLM 之前）；无异常/数据不足不检索
+- [x] `search_knowledge` 成为第 9 个工具、第 3 个模型可见只读工具；知识片段标记为不可信数据
+- [x] `knowledge_references` 子集校验；未知 chunk_id 触发 `invalid_knowledge_reference` 降级或失败
+- [x] API：文档列表/新增/停用（approver）、检索；`analysis.result.knowledge` 与 `recommendation.body.knowledge`
+- [x] 前端运营知识库页面、检索/无答案状态、approver 管理、分析/建议知识面板与“LLM 已引用”标记
+- [x] `backend/tests/test_knowledge.py` 覆盖 Seed 幂等、检索/拒答、权限、引用校验、切分、embedding 失败
+- [x] 离线评测 `backend/evals/rag.py`：6 篇文档、8 个查询，hit@3 100%、no-answer 100%、citation validity 100%、网络 0
+- [x] 后端 142 通过、前端 15 通过、生产构建通过；契约、架构、评测、README、面试材料同步
+
 ## 后续（核心通过后再评估）
 - 实际 MCP Server（未实现前不能宣称已接入 MCP）
-- LLM 解释质量评测集（固定案例比较结论、证据引用与越权承诺）
+- RAG 生产化：真实 embedding、业务语料与人工标注查询集、reranker、文档级 ACL、PDF/OCR
+- LLM 解释质量评测集（固定案例比较结论、证据引用、知识引用与越权承诺）
 - 生产身份（OIDC）、租户隔离、数据导入、汇率与多币种
 - Alembic 增量迁移与持久化任务队列（MVP 使用版本化初始化和数据库快照恢复）

@@ -5,6 +5,28 @@ export interface Demo {
   demo_mode: boolean; simulation: boolean; currency: string; identities: Identity[];
   stores: { id: string; name: string; marketplace: string }[]; data_range: Period | null;
   llm?: LLMConfig;
+  knowledge?: {
+    documents: number; embedding_provider: string; embedding_model: string;
+    seed_error?: { code: string; message: string } | null;
+  };
+}
+export interface KnowledgeDocument {
+  id: string; title: string; source: string; version: string; effective_date: string | null;
+  active: boolean; chunk_count: number; created: boolean; reindexed?: boolean; created_at: string;
+}
+export interface KnowledgeDocumentInput {
+  title: string; source: string; version: string; content: string; metadata?: Record<string, unknown>;
+}
+export interface KnowledgeHit {
+  chunk_id: string; document_id: string; title: string; source: string; version: string;
+  heading: string | null; content: string; score: number; rank: number;
+}
+export interface KnowledgeCitation extends KnowledgeHit { cited: boolean }
+export interface KnowledgeSearch {
+  query: string; hits: KnowledgeHit[]; no_answer: boolean; embedding_model: string; retrieval_ms: number;
+}
+export interface KnowledgeContext {
+  query: string; hits: KnowledgeCitation[]; no_answer: boolean; embedding_model: string; retrieval_ms: number;
 }
 export interface Totals {
   sales: number; discounts: number; refunds: number; cogs: number; ad_spend: number;
@@ -43,6 +65,7 @@ export interface LLMExpectedImpact {
 }
 export interface LLMOutput {
   summary: string; root_causes: LLMRootCause[]; evidence_references: string[];
+  knowledge_references?: string[];
   recommendations: LLMRecommendation[]; expected_impact: LLMExpectedImpact;
   risks: string[]; missing_information: string[]; confidence: number;
 }
@@ -64,7 +87,7 @@ export interface LLMRun {
 }
 export interface Analysis {
   id: string; status: string; request: { period: Period; store_id: string | null };
-  steps: Step[]; result: { metrics: Metrics; findings: { conclusion: string; evidence: Evidence[]; primary_driver: Driver | null }; engine: string; llm?: LLMRun | null } | null;
+  steps: Step[]; result: { metrics: Metrics; findings: { conclusion: string; evidence: Evidence[]; primary_driver: Driver | null }; engine: string; llm?: LLMRun | null; knowledge?: KnowledgeSearch | null; knowledge_error?: { code: string; message: string } | null } | null;
   error: { code: string; message: string } | null; recommendation_id: string | null;
   request_id: string; created_at: string; replayed?: boolean;
 }
@@ -78,6 +101,7 @@ export interface Recommendation {
   body: {
     problem: string; period: Period; previous_period: Period; store_id: string | null; currency: string; engine: string;
     llm?: LLMRun | null;
+    knowledge?: KnowledgeContext | null;
     evidence: Evidence[]; primary_driver: Driver; recommendation: string;
     expected_impact: { kind: string; horizon_days: number; profit_improvement_min: number; profit_improvement_max: number; explanation: string };
     risks: string[]; missing_information: string[]; assumptions: string[]; source: string;

@@ -70,9 +70,56 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("LLM_TOOL_RESULT_MAX_BYTES", "PROFITOPS_LLM_TOOL_RESULT_MAX_BYTES", "llm_tool_result_max_bytes"),
     )
 
+    # Knowledge base retrieval. Hashing is the offline default; openai means any
+    # OpenAI-compatible /embeddings endpoint (Ollama, vLLM, a private gateway).
+    knowledge_embedding_provider: Literal["hashing", "openai"] = Field(
+        default="hashing",
+        validation_alias=AliasChoices("KNOWLEDGE_EMBEDDING_PROVIDER", "PROFITOPS_KNOWLEDGE_EMBEDDING_PROVIDER", "knowledge_embedding_provider"),
+    )
+    knowledge_embedding_model: str = Field(
+        default="hashing-v1", min_length=1, max_length=80,
+        validation_alias=AliasChoices("KNOWLEDGE_EMBEDDING_MODEL", "PROFITOPS_KNOWLEDGE_EMBEDDING_MODEL", "knowledge_embedding_model"),
+    )
+    knowledge_embedding_base_url: str = Field(
+        default="", max_length=200,
+        validation_alias=AliasChoices("KNOWLEDGE_EMBEDDING_BASE_URL", "PROFITOPS_KNOWLEDGE_EMBEDDING_BASE_URL", "knowledge_embedding_base_url"),
+    )
+    knowledge_embedding_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("KNOWLEDGE_EMBEDDING_API_KEY", "PROFITOPS_KNOWLEDGE_EMBEDDING_API_KEY", "knowledge_embedding_api_key"),
+    )
+    knowledge_embedding_dimensions: int = Field(
+        default=256, ge=32, le=1024,
+        validation_alias=AliasChoices("KNOWLEDGE_EMBEDDING_DIMENSIONS", "PROFITOPS_KNOWLEDGE_EMBEDDING_DIMENSIONS", "knowledge_embedding_dimensions"),
+    )
+    knowledge_chunk_chars: int = Field(
+        default=600, ge=200, le=2000,
+        validation_alias=AliasChoices("KNOWLEDGE_CHUNK_CHARS", "PROFITOPS_KNOWLEDGE_CHUNK_CHARS", "knowledge_chunk_chars"),
+    )
+    knowledge_chunk_overlap: int = Field(
+        default=100, ge=0, le=500,
+        validation_alias=AliasChoices("KNOWLEDGE_CHUNK_OVERLAP", "PROFITOPS_KNOWLEDGE_CHUNK_OVERLAP", "knowledge_chunk_overlap"),
+    )
+    knowledge_top_k: int = Field(
+        default=5, ge=1, le=10,
+        validation_alias=AliasChoices("KNOWLEDGE_TOP_K", "PROFITOPS_KNOWLEDGE_TOP_K", "knowledge_top_k"),
+    )
+    knowledge_candidate_k: int = Field(
+        default=20, ge=1, le=100,
+        validation_alias=AliasChoices("KNOWLEDGE_CANDIDATE_K", "PROFITOPS_KNOWLEDGE_CANDIDATE_K", "knowledge_candidate_k"),
+    )
+    knowledge_min_score: float = Field(
+        default=0.15, ge=0, le=1,
+        validation_alias=AliasChoices("KNOWLEDGE_MIN_SCORE", "PROFITOPS_KNOWLEDGE_MIN_SCORE", "knowledge_min_score"),
+    )
+
     @property
     def llm_configured(self) -> bool:
         return self.llm_provider == "deepseek" and bool(self.llm_api_key.get_secret_value().strip())
+
+    @property
+    def knowledge_embedding_remote(self) -> bool:
+        return self.knowledge_embedding_provider == "openai"
 
     @model_validator(mode="after")
     def distinct_tokens(self):
@@ -80,6 +127,15 @@ class Settings(BaseSettings):
             raise ValueError("演示角色必须使用不同且非空的 token")
         if self.llm_base_url and not self.llm_base_url.startswith(("http://", "https://")):
             raise ValueError("LLM_BASE_URL 必须以 http:// 或 https:// 开头")
+        if self.knowledge_embedding_provider == "openai":
+            if not self.knowledge_embedding_base_url:
+                raise ValueError("KNOWLEDGE_EMBEDDING_BASE_URL 在使用 openai Provider 时不能为空")
+            if not self.knowledge_embedding_base_url.startswith(("http://", "https://")):
+                raise ValueError("KNOWLEDGE_EMBEDDING_BASE_URL 必须以 http:// 或 https:// 开头")
+        if self.knowledge_chunk_overlap >= self.knowledge_chunk_chars:
+            raise ValueError("KNOWLEDGE_CHUNK_OVERLAP 必须小于 KNOWLEDGE_CHUNK_CHARS")
+        if self.knowledge_candidate_k < self.knowledge_top_k:
+            raise ValueError("KNOWLEDGE_CANDIDATE_K 不能小于 KNOWLEDGE_TOP_K")
         return self
 
 

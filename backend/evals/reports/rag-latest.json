@@ -1,0 +1,302 @@
+{
+  "generated_at": "2026-11-01T10:02:02.809131Z",
+  "mode": "offline_hashing_retrieval",
+  "network_calls": 0,
+  "seeded": {
+    "seeded": true,
+    "version": "knowledge-v1",
+    "documents": 6,
+    "message": "已初始化 6 篇演示知识文档"
+  },
+  "documents": 6,
+  "embedding_model": "hashing-v1",
+  "top_k": 3,
+  "min_score": 0.15,
+  "cases": [
+    {
+      "id": "ad-budget-approval",
+      "query": "广告预算下调 15% 需要谁审批",
+      "expected_title": "广告预算调整与审批规则",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "f0e2f959-e1dc-432e-8521-d746f0997ae7",
+          "document_id": "5c861931-95ac-4103-ae76-4e96cb37d37e",
+          "title": "广告预算调整与审批规则",
+          "source": "synthetic://profitops/knowledge/ad-budget-policy",
+          "version": "v1",
+          "heading": "预算口径",
+          "content": "参考日预算 = 统计周期广告支出 / 统计天数，金额使用 USD 整数美分。单次模拟下调不超过参考日预算的 15%。不得对上新 30 天内的 SKU 下调预算。",
+          "score": 0.3022,
+          "rank": 1
+        },
+        {
+          "chunk_id": "d4272ef0-9698-4578-877d-22a1526bacc5",
+          "document_id": "5c861931-95ac-4103-ae76-4e96cb37d37e",
+          "title": "广告预算调整与审批规则",
+          "source": "synthetic://profitops/knowledge/ad-budget-policy",
+          "version": "v1",
+          "heading": "适用范围",
+          "content": "本规则适用于北美旗舰店与欧洲直营店的站内广告预算调整。所有动作必须先经过人工审批，并在模拟环境执行；不得直接修改真实广告平台。",
+          "score": 0.2435,
+          "rank": 2
+        },
+        {
+          "chunk_id": "ba27afd0-d296-47f0-80a4-c73708829217",
+          "document_id": "5c861931-95ac-4103-ae76-4e96cb37d37e",
+          "title": "广告预算调整与审批规则",
+          "source": "synthetic://profitops/knowledge/ad-budget-policy",
+          "version": "v1",
+          "heading": "触发条件",
+          "content": "- 连续 7 天广告支出环比上升超过 20%，且净利润环比下降。\n- 广告支出是利润桥中绝对值最大的负向贡献项。\n- 数据完整性检查通过，缺失的每日经营记录为 0。",
+          "score": 0.1665,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 7.868
+    },
+    {
+      "id": "refund-triage",
+      "query": "退款率异常怎么排查",
+      "expected_title": "退款率异常排查手册",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "b0aacd4c-930c-4374-aa81-294f9e08e41f",
+          "document_id": "dc011fcf-973b-4316-bb8a-ab44e6a7977a",
+          "title": "退款率异常排查手册",
+          "source": "synthetic://profitops/knowledge/refund-playbook",
+          "version": "v1",
+          "heading": "排查顺序",
+          "content": "1. 按 SKU、店铺、日期拆分退款率，确认异常是单 SKU 还是全店。\n2. 检查商品详情页、尺码表、材质说明与近期改版记录。\n3. 检查承运商时效、破损率和丢件率。\n4. 检查促销活动、折扣叠加与预期管理。\n5. 检查支付争议与平台判责记录。",
+          "score": 0.3271,
+          "rank": 1
+        },
+        {
+          "chunk_id": "9e80dc78-85d8-4227-aa8e-70bf1d298dc6",
+          "document_id": "dc011fcf-973b-4316-bb8a-ab44e6a7977a",
+          "title": "退款率异常排查手册",
+          "source": "synthetic://profitops/knowledge/refund-playbook",
+          "version": "v1",
+          "heading": "适用范围",
+          "content": "适用于订单退款率、退款金额或净销售额异常下降的排查。退款只扣减收入；采购成本已经是退货后的残值，不得对退款重复扣减成本。",
+          "score": 0.3202,
+          "rank": 2
+        },
+        {
+          "chunk_id": "a2c7ece9-1a14-4715-9fb3-511b9231ce8f",
+          "document_id": "dc011fcf-973b-4316-bb8a-ab44e6a7977a",
+          "title": "退款率异常排查手册",
+          "source": "synthetic://profitops/knowledge/refund-playbook",
+          "version": "v1",
+          "heading": "复核",
+          "content": "7 天后比较退款率、退货原因分布和净销售额；若退款率仍高于基线 2 个百分点，升级为运营专项。",
+          "score": 0.2598,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 5.467
+    },
+    {
+      "id": "fulfillment-cost",
+      "query": "履约成本上涨要检查哪些费用",
+      "expected_title": "履约成本异常排查",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "204142a7-8e91-49d8-a997-8005ff62779a",
+          "document_id": "42c02b67-c73f-4b12-be51-d12022bd831d",
+          "title": "履约成本异常排查",
+          "source": "synthetic://profitops/knowledge/fulfillment-cost",
+          "version": "v1",
+          "heading": "适用范围",
+          "content": "适用于物流履约成本、承运商费用、仓储费和包装成本的异常排查。",
+          "score": 0.3748,
+          "rank": 1
+        },
+        {
+          "chunk_id": "7d42fd02-eb54-4383-89e5-89e30dcce1bd",
+          "document_id": "42c02b67-c73f-4b12-be51-d12022bd831d",
+          "title": "履约成本异常排查",
+          "source": "synthetic://profitops/knowledge/fulfillment-cost",
+          "version": "v1",
+          "heading": "触发条件",
+          "content": "- 履约成本环比上升超过 15%，且订单量没有同比例增长。\n- 履约成本是利润桥中的主要负向贡献项。\n- 数据完整性检查通过。",
+          "score": 0.3344,
+          "rank": 2
+        },
+        {
+          "chunk_id": "b6944e44-5a5c-4fa5-9e63-bc25989b4e25",
+          "document_id": "42c02b67-c73f-4b12-be51-d12022bd831d",
+          "title": "履约成本异常排查",
+          "source": "synthetic://profitops/knowledge/fulfillment-cost",
+          "version": "v1",
+          "heading": "复核",
+          "content": "7 天后复核单均履约成本、时效和破损率；若成本下降但时效明显恶化，暂停方案并重新评估。",
+          "score": 0.2707,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 5.702
+    },
+    {
+      "id": "platform-fees",
+      "query": "平台手续费和结算差异怎么核对",
+      "expected_title": "平台手续费与结算核对",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "d1587459-1f45-45f8-9a6d-0398c9b39c4d",
+          "document_id": "33ed0c98-a9dc-433a-97dd-a99a3b280b58",
+          "title": "平台手续费与结算核对",
+          "source": "synthetic://profitops/knowledge/platform-fees",
+          "version": "v1",
+          "heading": "适用范围",
+          "content": "适用于平台佣金、支付手续费、促销服务费和结算差异的核对。",
+          "score": 0.5041,
+          "rank": 1
+        },
+        {
+          "chunk_id": "cc209821-5716-4c6c-9775-de55301113a0",
+          "document_id": "33ed0c98-a9dc-433a-97dd-a99a3b280b58",
+          "title": "平台手续费与结算核对",
+          "source": "synthetic://profitops/knowledge/platform-fees",
+          "version": "v1",
+          "heading": "证据要求",
+          "content": "平台手续费必须来自订单字段或平台结算单；不得把广告费重复计入平台手续费。金额使用整数美分，差异按订单逐笔核对。",
+          "score": 0.4266,
+          "rank": 2
+        },
+        {
+          "chunk_id": "4d35d4ee-eec2-4e35-9058-c51235940052",
+          "document_id": "33ed0c98-a9dc-433a-97dd-a99a3b280b58",
+          "title": "平台手续费与结算核对",
+          "source": "synthetic://profitops/knowledge/platform-fees",
+          "version": "v1",
+          "heading": "排查步骤",
+          "content": "1. 按平台、店铺、类目核对佣金费率。\n2. 区分平台佣金、支付手续费、促销服务费和广告费。\n3. 检查结算周期、退款回冲和汇率折算。\n4. 对比订单金额、平台结算单和银行入账。\n5. 对差异超过 1% 的订单抽样复核。",
+          "score": 0.2702,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 6.353
+    },
+    {
+      "id": "data-quality",
+      "query": "每日经营记录缺失怎么处理",
+      "expected_title": "数据完整性与缺失处理",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "dbebc736-ad16-4971-ba0a-963de2c5251f",
+          "document_id": "33b41709-80bd-4f1b-908a-372de49ecb48",
+          "title": "数据完整性与缺失处理",
+          "source": "synthetic://profitops/knowledge/data-quality",
+          "version": "v1",
+          "heading": "处理流程",
+          "content": "1. 运行数据质量检查，列出缺失日期、店铺和 SKU。\n2. 补齐每日经营记录后重新分析。\n3. 在补齐前，Agent 必须停在 insufficient_data，不创建可执行建议。\n4. 在审计日志记录缺失范围与请求 ID。",
+          "score": 0.5455,
+          "rank": 1
+        },
+        {
+          "chunk_id": "41298d7e-7321-4fba-85d4-01f1e1d8d48f",
+          "document_id": "33b41709-80bd-4f1b-908a-372de49ecb48",
+          "title": "数据完整性与缺失处理",
+          "source": "synthetic://profitops/knowledge/data-quality",
+          "version": "v1",
+          "heading": "适用范围",
+          "content": "适用于每日经营记录缺失、标记不完整、订单与广告数据不一致的情况。",
+          "score": 0.4913,
+          "rank": 2
+        },
+        {
+          "chunk_id": "f16cef41-54f1-4cfa-9735-e908890900a1",
+          "document_id": "dc011fcf-973b-4316-bb8a-ab44e6a7977a",
+          "title": "退款率异常排查手册",
+          "source": "synthetic://profitops/knowledge/refund-playbook",
+          "version": "v1",
+          "heading": "证据要求",
+          "content": "每条结论必须引用订单退款证据、每日经营记录或知识库片段。数据不完整时停止生成建议，不把缺失值当成零。",
+          "score": 0.3795,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 7.08
+    },
+    {
+      "id": "approval-idempotency",
+      "query": "执行幂等键重复请求怎么办",
+      "expected_title": "审批、执行与幂等规则",
+      "expect_no_answer": false,
+      "no_answer": false,
+      "hits": [
+        {
+          "chunk_id": "b8c7a915-068e-4b52-96ba-5aab54627f88",
+          "document_id": "5c861931-95ac-4103-ae76-4e96cb37d37e",
+          "title": "广告预算调整与审批规则",
+          "source": "synthetic://profitops/knowledge/ad-budget-policy",
+          "version": "v1",
+          "heading": "审批流程",
+          "content": "分析师发起利润分析并创建建议；审批负责人复核利润桥、数据覆盖、SKU 与预算前后值后批准。只有批准后的建议可以模拟执行。执行使用幂等键，重复请求返回同一执行记录。",
+          "score": 0.3231,
+          "rank": 1
+        },
+        {
+          "chunk_id": "d4957628-eb59-49ce-9c62-cb5cb98ed936",
+          "document_id": "6bc7df1e-6138-463a-b820-fd2ab675624e",
+          "title": "审批、执行与幂等规则",
+          "source": "synthetic://profitops/knowledge/approval-policy",
+          "version": "v1",
+          "heading": "执行约束",
+          "content": "执行必须携带 Idempotency-Key，并在单个数据库事务中完成状态抢占、唯一执行记录、模拟结果和审计。重复请求返回同一 execution，replayed=true，不产生第二次模拟变更。不同建议不能复用执行键。",
+          "score": 0.3119,
+          "rank": 2
+        },
+        {
+          "chunk_id": "dbebc736-ad16-4971-ba0a-963de2c5251f",
+          "document_id": "33b41709-80bd-4f1b-908a-372de49ecb48",
+          "title": "数据完整性与缺失处理",
+          "source": "synthetic://profitops/knowledge/data-quality",
+          "version": "v1",
+          "heading": "处理流程",
+          "content": "1. 运行数据质量检查，列出缺失日期、店铺和 SKU。\n2. 补齐每日经营记录后重新分析。\n3. 在补齐前，Agent 必须停在 insufficient_data，不创建可执行建议。\n4. 在审计日志记录缺失范围与请求 ID。",
+          "score": 0.13,
+          "rank": 3
+        }
+      ],
+      "latency_ms": 5.948
+    },
+    {
+      "id": "unrelated-lunch",
+      "query": "如何预订会议室午餐",
+      "expected_title": null,
+      "expect_no_answer": true,
+      "no_answer": true,
+      "hits": [],
+      "latency_ms": 6.023
+    },
+    {
+      "id": "unrelated-weather",
+      "query": "今天天气怎么样",
+      "expected_title": null,
+      "expect_no_answer": true,
+      "no_answer": true,
+      "hits": [],
+      "latency_ms": 5.744
+    }
+  ],
+  "metrics": {
+    "hit_at_1": 0.8333,
+    "hit_at_3": 1.0,
+    "no_answer_accuracy": 1.0,
+    "answerable_false_no_answer": 0,
+    "citation_validity": 1.0,
+    "mean_latency_ms": 6.273
+  },
+  "passed": true
+}

@@ -4,7 +4,7 @@
 接管人：Claude Code（唯一主开发 / 技术负责人 / 交付负责人）  
 工作区：`E:\ProfitOps-AI`（沿用原项目，不重建、不覆盖、不清理未提交修改）
 
-> 2026-10-31 更新：Phase 2A/2B 已合入 `master`；Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）；最新测试为后端 74、前端 8。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md` 和 `docs/EVALUATION.md`。
+> 2026-11-01 更新：Phase 2A/2B/2C/2D 与 RAG 知识库已在工作分支实现；最新测试为后端 142、前端 15，HTTP 冒烟 15/15（含知识库检索/拒答/权限）。Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md` 和 `docs/EVALUATION.md`。
 
 ## 1. 接管结论
 
@@ -34,9 +34,10 @@
 - 60 天确定性 Seed（2026-09-01 至 2026-10-30，2 店铺 × 3 SKU），覆盖销售、折扣、退款、采购、广告、履约、平台费、其他可变成本、库存与在途库存。
 - 整数美分利润口径：净销售额、净利润、利润率、环比、8 项利润贡献桥；贡献项加总必须等于净利润变化。
 - 数据完整性：按“店铺 × SKU × 日期”检查每日经营记录缺失/不完整；不完整时 `insufficient_data`，不生成建议。
-- LangGraph 分析图 7 个节点：接收请求 → 读取数据 → 计算利润 → 归因 → 验证证据 → 创建建议 → 等待审批；每步写入数据库快照。
+- LangGraph 分析图 10 个节点（异常路径）：接收请求 → 读取数据 → 计算利润 → 归因 → 验证证据 → 检索知识库 → LLM 根因分析 → 验证 LLM 证据 → 创建建议 → 等待审批；每步写入数据库快照。
 - LangGraph 执行图 3 个节点：读取审批状态 → 事务内幂等模拟执行 → 保存结果。
-- 统一 Tool Registry：6 个工具，Pydantic 输入/输出 Schema，角色与副作用分类。
+- 统一 Tool Registry：9 个工具，Pydantic 输入/输出 Schema，角色与副作用分类。
+- RAG 知识库：6 篇合成 SOP、Markdown 切分、hashing/OpenAI 兼容 embedding、混合检索、`no_answer`、chunk 引用校验；`retrieve_knowledge` 节点与 `search_knowledge` 工具。
 - 审批状态机：`proposed → pending_approval → approved → executing → executed`，以及 `rejected`、`execution_failed`；条件 UPDATE 抢占状态。
 - 幂等：分析请求键、执行请求键全局唯一；同一执行键重复调用返回同一 execution 且 `replayed=true`；不同建议复用执行键返回 409。
 - 审计：分析请求/完成/失败、建议提出/待审批/批准/拒绝、执行开始/成功/失败/回放、被拒绝的请求；带请求 ID。
@@ -47,7 +48,7 @@
 
 ### 前端
 
-- 四个页面：经营总览、Agent 工作台、审批与执行、审计日志。
+- 五个页面：经营总览、Agent 工作台、审批与执行、审计日志、运营知识库。
 - 真实 API 数据，无静态经营假数据；加载、空数据、API 错误（带请求 ID）、分析轮询、审批、执行、幂等回放、手机布局。
 - 利润归因、趋势图 + 可切换数据表、SKU 明细、证据表、风险/假设/待补充信息。
 - 深色/浅色主题、响应式布局、演示身份切换。
@@ -165,14 +166,15 @@ backend/app/models.py      数据库模型与约束
 backend/app/schemas.py     Pydantic 契约（金额、周期、工具输入输出）
 backend/app/metrics.py     确定性利润、环比、贡献桥、数据完整性
 backend/app/workflow.py    LangGraph 分析图 / 执行图、步骤快照、重启恢复
-backend/app/tools.py       Tool Registry、角色/策略、6 个工具
+backend/app/tools.py       Tool Registry、角色/策略、9 个工具
+backend/app/knowledge.py   知识库入库、切分、embedding、混合检索、引用合并
 backend/app/services.py    建议生成、审批状态机、幂等模拟执行
 backend/app/seed.py        60 天确定性演示数据
 backend/app/security.py    演示 Bearer 身份与服务端角色
 backend/app/views.py       API 序列化（UTC 时间戳）
 backend/app/audit.py       审计写入
 backend/tests/             单元、集成、工作流、并发、评测
-frontend/src/App.tsx       四个页面与交互
+frontend/src/App.tsx       五个页面与交互
 frontend/src/api.ts        真实 API 客户端
 frontend/src/types.ts      与后端契约对应的 TS 类型
 frontend/e2e/              Playwright 真实浏览器验收
@@ -180,6 +182,7 @@ scripts/dev.py             一键启动
 scripts/smoke.py           实际 HTTP 闭环
 docs/CONTRACT.md           API/数据库/状态机契约
 docs/ARCHITECTURE.md       架构与关键决策
+docs/KNOWLEDGE.md          RAG 数据模型、检索、引用校验、API 与限制
 docs/TEST_REPORT.md        实际验证记录
 docs/INTERVIEW.md          面试讲解与高频追问
 ```

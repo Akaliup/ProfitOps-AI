@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -188,6 +188,7 @@ class LLMAnalysisOutput(StrictModel):
     summary: LongText
     root_causes: list[LLMRootCause] = Field(min_length=1, max_length=5)
     evidence_references: list[str] = Field(min_length=1, max_length=8)
+    knowledge_references: list[str] = Field(default_factory=list, max_length=8)
     recommendations: list[LLMRecommendation] = Field(min_length=1, max_length=5)
     expected_impact: LLMExpectedImpact
     risks: list[ShortText] = Field(max_length=6)
@@ -256,11 +257,74 @@ class LLMRun(StrictModel):
         return self
 
 
+class KnowledgeDocumentInput(StrictModel):
+    title: str = Field(min_length=2, max_length=200)
+    source: str = Field(min_length=2, max_length=300)
+    version: str = Field(default="v1", min_length=1, max_length=40)
+    effective_date: date | None = None
+    content: str = Field(min_length=10, max_length=20000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeDocumentOutput(StrictModel):
+    id: str
+    title: str
+    source: str
+    version: str
+    effective_date: date | None
+    active: bool
+    chunk_count: int = Field(ge=0)
+    created: bool = False
+    reindexed: bool = False
+    created_at: datetime
+
+
+class KnowledgeHit(StrictModel):
+    chunk_id: str
+    document_id: str
+    title: str
+    source: str
+    version: str
+    heading: str | None
+    content: str
+    score: float = Field(ge=0, le=1.1)
+    rank: int = Field(ge=1, le=100)
+
+
+KNOWLEDGE_MAX_HITS = 10
+
+
+class KnowledgeSearchInput(StrictModel):
+    query: str = Field(min_length=2, max_length=300)
+    top_k: int = Field(default=5, ge=1, le=KNOWLEDGE_MAX_HITS)
+
+
+class KnowledgeSearchOutput(StrictModel):
+    query: str
+    hits: list[KnowledgeHit] = Field(default_factory=list, max_length=KNOWLEDGE_MAX_HITS)
+    no_answer: bool = False
+    embedding_model: str
+    retrieval_ms: float = Field(ge=0)
+
+
+class KnowledgeCitation(KnowledgeHit):
+    cited: bool = False
+
+
+class KnowledgeContext(StrictModel):
+    query: str
+    hits: list[KnowledgeCitation] = Field(default_factory=list, max_length=20)
+    no_answer: bool = False
+    embedding_model: str
+    retrieval_ms: float = Field(ge=0)
+
+
 class RecommendationInput(StrictModel):
     analysis_id: str
     report: MetricsReport
     findings: DriverReport
     llm: LLMRun | None = None
+    knowledge: KnowledgeSearchOutput | None = None
 
 
 class RecommendationOutput(StrictModel):

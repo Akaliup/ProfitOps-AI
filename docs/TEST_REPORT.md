@@ -78,6 +78,25 @@ fail-closed 回归：复制案例并破坏 `source_type`、`expected.primary_dri
 
 测试数据库为临时目录或独立 `data/*.db`，未修改 `data/profitops.db`；`data/smoke-phase2d.db` 与 `data/e2e.db` 均在 `data/` 下且被 Git 忽略。
 
+## 2026-11-01 RAG 运营知识库（Claude Code）
+
+分支 `feat/agent-evaluation-trace`，在 Phase 2D 工作树上增量实现。以下均为本次实际输出：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 142 passed，0 failed，0 skipped（1 个第三方 DeprecationWarning，34.18s） |
+| 知识库测试 | 同上，`backend/tests/test_knowledge.py` | Seed 幂等、相关/无关检索、`no_answer` 清空 hits、approver 创建/停用、analyst 403、重复正文幂等、引用子集校验、提示词隔离、Markdown 切分、OpenAI 兼容 embedding 排序/归一化与 502 失败映射 |
+| 前端单元/交互 | `npm --prefix frontend test -- --run` | 15 passed（Vitest + RTL，9.66s），含知识库检索、无答案状态、approver 新增文档、建议引用标记、LLM 知识引用 |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，4.90s |
+| RAG 离线评测 | `.venv/Scripts/python.exe backend/evals/rag.py` | 6 篇文档、8 个查询；hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%；网络调用 0 |
+| HTTP 冒烟 | 独立数据库 `data/smoke-rag-20261101.db`、端口 8011、`LLM_PROVIDER=disabled`、空 `LLM_API_KEY`：`.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8011` | 15/15 通过，failed=0；新增知识库 Seed、相关检索、无答案、analyst 写入 403 四项检查 |
+| 真实浏览器 E2E | 未执行 | **未验证**：本次未重新运行 Playwright；知识库页面只由 Vitest + RTL 和生产构建覆盖 |
+| 真实 embedding 服务 | 未执行 | **未验证**：默认 hashing embedding；OpenAI 兼容 Provider 只用 `httpx.MockTransport` 测试，没有连接真实 Ollama/vLLM/云端端点 |
+
+RAG 评测报告写入 `backend/evals/reports/rag-latest.json`。评测强制 hashing embedding，使用临时 SQLite，不读写 `data/profitops.db`；`hit@1` 未达 100% 的查询是“执行幂等键重复请求怎么办”，top-1 命中广告预算文档、top-2 命中目标文档，报告保留真实排名，没有为提升 hit@1 调参。
+
+开发过程中发现并修复：无关查询“如何预订会议室午餐”最初因中文单字“预/订”误命中广告文档；修复为单字低权重、`KNOWLEDGE_MIN_SCORE` 默认 0.15，并在 `no_answer` 时清空 hits。HTTP 冒烟使用独立 `data/smoke-rag-20261101.db`，未修改 `data/profitops.db`。
+
 ## 已验证（2026-10-30 基线）
 
 | 检查 | 命令 | 结果 |
@@ -117,6 +136,8 @@ fail-closed 回归：复制案例并破坏 `source_type`、`expected.primary_dri
 - Docker Compose 已于 2026-10-31 在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 通过。其他机器仍需按本文件复验；本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
 - Phase 2C 原生 Function Calling 已对真实 DeepSeek 执行 3 次脚本运行：第 1 次因网络错误降级，第 3 次完整成功并记录了 `tool_calls`、逐轮 Token/耗时和最终输出。样本只有 3 次，不能据此声明真实调用成功率或多轮稳定性。
 - Phase 2D 的 `native --real` 真实模型工具评测未执行；当前 37 次结果全部来自 `FakeToolProvider`，只能证明生产工具循环与门禁在合成案例上的行为，不能声明真实模型的工具选择准确率、参数合法率、真实 token 或延迟。
+- RAG 的真实 embedding 服务与真实业务语料未验证：默认 hashing embedding 是离线方案，OpenAI 兼容 Provider 只有 MockTransport 测试；6 篇合成 SOP、8 个查询的评测不能声明通用语义检索准确率。PDF/OCR、reranker、文档级 ACL、大规模向量索引未实现。
+- 本次 RAG 改动未重新运行 Playwright 浏览器 E2E；知识库页面由 Vitest + RTL 和生产构建覆盖，未在真实浏览器中复验。
 
 浏览器验收不属于未验证项：Playwright + Chromium 真实页面测试 2/2 通过，截图位于 `docs/screenshots/`。
 

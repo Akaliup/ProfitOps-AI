@@ -1,4 +1,4 @@
-import type { Analysis, Audit, Demo, Execution, Metrics, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, Recommendation, Scope } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public requestId: string, public status: number, public payload?: unknown) { super(message) }
@@ -37,4 +37,8 @@ export const api = {
   decision: (token: string, id: string, kind: 'approve' | 'reject', reason: string) => request<Recommendation>(`/api/recommendations/${id}/${kind}`, token, { method: 'POST', body: JSON.stringify({ reason }) }),
   execute: (token: string, id: string) => request<Execution>(`/api/recommendations/${id}/execute`, token, { method: 'POST', headers: { 'Idempotency-Key': `web-execute-${id}` } }),
   seed: (token: string) => request<{ seeded: boolean; message: string }>('/api/demo/seed', token, { method: 'POST' }),
+  knowledgeDocuments: (token: string) => request<{ items: KnowledgeDocument[] }>('/api/knowledge/documents', token),
+  knowledgeSearch: (token: string, query: string) => request<KnowledgeSearch>('/api/knowledge/search', token, { method: 'POST', body: JSON.stringify({ query, top_k: 5 }) }),
+  createKnowledgeDocument: (token: string, payload: KnowledgeDocumentInput) => request<KnowledgeDocument>('/api/knowledge/documents', token, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteKnowledgeDocument: (token: string, id: string) => request<KnowledgeDocument>(`/api/knowledge/documents/${id}`, token, { method: 'DELETE' }),
 }

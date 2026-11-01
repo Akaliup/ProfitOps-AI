@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { analysis, demo, llmNativeFailure, llmNativeSuccess, llmSuccess, metrics, recommendation } from './test/fixtures'
+import { analysis, demo, knowledgeDocument, knowledgeSearch, llmNativeFailure, llmNativeSuccess, llmSuccess, metrics, recommendation } from './test/fixtures'
 import type { Analysis, Recommendation } from './types'
 
 vi.mock('./components/TrendChart', () => ({ TrendChart: () => <div>经营趋势图</div> }))
@@ -12,9 +12,12 @@ let executeCount: number
 let lastActor: string
 let apiFailure: boolean
 let empty: boolean
+let documents = [structuredClone(knowledgeDocument)]
+let noKnowledgeAnswer: boolean
 
 beforeEach(() => {
   rows = []; history = []; executeCount = 0; lastActor = ''; apiFailure = false; empty = false
+  documents = [structuredClone(knowledgeDocument)]; noKnowledgeAnswer = false
   vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
     const headers = new Headers(options?.headers)
     const actor = headers.get('Authorization') ?? ''
@@ -28,6 +31,21 @@ beforeEach(() => {
     if (path === '/api/analyses') return respond({ items: history })
     if (path === '/api/analyses/analysis-1') return respond(analysis)
     if (path === '/api/recommendations') return respond({ items: rows })
+    if (path === '/api/knowledge/documents' && options?.method === 'POST') {
+      const body = JSON.parse(String(options.body))
+      const item = { ...structuredClone(knowledgeDocument), id: `doc-${documents.length + 1}`, title: body.title, source: body.source, version: body.version, created: true, chunk_count: 1 }
+      documents = [item, ...documents]
+      return respond(item, 201)
+    }
+    if (path === '/api/knowledge/documents') return respond({ items: documents })
+    if (path.startsWith('/api/knowledge/documents/') && options?.method === 'DELETE') {
+      const id = path.split('/').pop()!
+      documents = documents.map(doc => doc.id === id ? { ...doc, active: false } : doc)
+      return respond({ ...documents.find(doc => doc.id === id)!, active: false })
+    }
+    if (path === '/api/knowledge/search') {
+      return respond(noKnowledgeAnswer ? { ...knowledgeSearch, hits: [], no_answer: true } : knowledgeSearch)
+    }
     if (path.startsWith('/api/audit-logs')) return respond({ items: [] })
     if (path.endsWith('/approve') || path.endsWith('/reject')) {
       lastActor = actor
@@ -234,5 +252,57 @@ describe('ProfitOps workspace', () => {
     await user.click(await screen.findByRole('button', { name: '初始化演示数据' }))
     expect(await screen.findByText('销售在增长，利润却没有跟上。')).toBeVisible()
     expect(await screen.findByRole('status')).toHaveTextContent('初始化成功')
+  })
+
+  it('searches the knowledge base and distinguishes no-answer results', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /运营知识库/ }))
+    expect(await screen.findByRole('heading', { name: /运营知识库/, level: 2 })).toBeVisible()
+    expect((await screen.findAllByText('广告预算调整与审批规则')).length).toBeGreaterThan(0)
+    await user.type(screen.getByLabelText('知识库检索'), '广告预算下调审批')
+    await user.click(screen.getByRole('button', { name: '检索知识' }))
+    expect(await screen.findByText('审批流程')).toBeVisible()
+    expect(screen.getAllByText('chunk-ad-1').length).toBeGreaterThan(0)
+    noKnowledgeAnswer = true
+    await user.clear(screen.getByLabelText('知识库检索'))
+    await user.type(screen.getByLabelText('知识库检索'), '如何预订会议室午餐')
+    await user.click(screen.getByRole('button', { name: '检索知识' }))
+    expect(await screen.findByText('无可靠答案')).toBeVisible()
+  })
+
+  it('lets an approver add a knowledge document', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /运营知识库/ }))
+    await user.selectOptions(screen.getByLabelText('演示身份'), 'demo-approver')
+    await user.type(screen.getByLabelText('知识标题'), '退款升级规则')
+    await user.type(screen.getByLabelText('知识正文'), '# 退款升级\n\n退款率连续 7 天高于基线时升级为运营专项。')
+    await user.click(screen.getByRole('button', { name: '添加知识文档' }))
+    expect(await screen.findByText(/知识文档已创建/)).toBeVisible()
+    expect(await screen.findByText('退款升级规则')).toBeVisible()
+  })
+
+  it('shows retrieved knowledge and LLM citation status in recommendations', async () => {
+    rows = [structuredClone(recommendation)]; history = [structuredClone(analysis)]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /审批与执行/ }))
+    expect(await screen.findByRole('heading', { name: /知识库参考/ })).toBeVisible()
+    expect(screen.getByText('✓ LLM 已引用')).toBeVisible()
+    expect(screen.getAllByText('chunk-ad-1').length).toBeGreaterThan(0)
+  })
+
+  it('shows knowledge references in the LLM panel', async () => {
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: llmSuccess } })]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    expect(await screen.findByText('知识引用')).toBeVisible()
+    expect(screen.getAllByText('chunk-ad-1').length).toBeGreaterThan(0)
   })
 })
