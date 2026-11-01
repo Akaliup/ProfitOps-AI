@@ -23,7 +23,9 @@ from app.llm_tools import (
 from app.main import create_app
 from app.metrics import analyze_drivers, build_report, fetch_metrics, resolve_scope
 from app.models import Execution, Recommendation
-from app.schemas import AnalysisRequest, LLMAnalysisOutput, MetricsInput
+from app.schemas import (
+    AnalysisRequest, KnowledgeHit, KnowledgeSearchOutput, LLMAnalysisOutput, MetricsInput,
+)
 from app.security import Actor
 from app.services import plan_action
 from app.tools import ToolContext
@@ -337,6 +339,61 @@ def test_workflow_caps_merged_knowledge_hits(client, analyst):
     assert len(knowledge["hits"]) == 10
     assert [hit["rank"] for hit in knowledge["hits"]] == list(range(1, 11))
     assert detail["recommendation_id"]
+
+
+def test_workflow_keeps_low_score_citation_beyond_merged_cap(client, analyst):
+    calls = {"count": 0}
+
+    def fake_search(payload, context):
+        start = calls["count"] * 10
+        calls["count"] += 1
+        hits = [
+            KnowledgeHit(
+                chunk_id=f"fake-chunk-{start + index}",
+                document_id="fake-doc", title="合成规则",
+                source="synthetic://test/fake", version="v1", heading="测试",
+                content=f"合成内容 {start + index}",
+                score=round(0.95 - (start + index) * 0.01, 4),
+                rank=index + 1,
+            )
+            for index in range(10)
+        ]
+        context.knowledge_hits.extend(hit.model_dump(mode="json") for hit in hits)
+        return KnowledgeSearchOutput(
+            query=payload.query, hits=hits, no_answer=False,
+            embedding_model="hashing-v1", retrieval_ms=1.0,
+        )
+
+    client.app.state.registry.tools["search_knowledge"].handler = fake_search
+    provider = FakeChatProvider([
+        tool_response(make_call(
+            "search_knowledge", {"query": "广告预算审批", "top_k": 10}, "call-1",
+        )),
+        tool_response(make_call(
+            "search_knowledge", {"query": "退款履约成本", "top_k": 10}, "call-2",
+        )),
+        final_response({**VALID_OUTPUT, "knowledge_references": ["fake-chunk-29"]}),
+    ])
+    client.app.state.llm = provider
+    created = client.post("/api/analyses", json={}, headers=analyst)
+    assert created.status_code == 202, created.text
+    detail = client.get(f"/api/analyses/{created.json()['id']}", headers=analyst).json()
+    assert detail["status"] == "waiting_approval", detail
+    run_meta = detail["result"]["llm"]
+    assert run_meta["status"] == "llm_success", run_meta
+    assert run_meta["error"] is None
+    knowledge = detail["result"]["knowledge"]
+    ids = [hit["chunk_id"] for hit in knowledge["hits"]]
+    assert len(ids) == 10
+    assert ids[0] == "fake-chunk-29"
+    assert "fake-chunk-29" in ids
+    recommendation = client.get(
+        f"/api/recommendations/{detail['recommendation_id']}", headers=analyst,
+    ).json()
+    cited = [
+        hit["chunk_id"] for hit in recommendation["body"]["knowledge"]["hits"] if hit["cited"]
+    ]
+    assert cited == ["fake-chunk-29"]
 
 
 def test_knowledge_tool_result_is_sanitized_and_marked_untrusted(client, approver):

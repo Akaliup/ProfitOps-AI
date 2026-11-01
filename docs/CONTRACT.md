@@ -56,13 +56,13 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 
 知识库是服务端运营 SOP 的只读检索层，不是模型可任意写入的记忆。`knowledge_documents` 保存标题、来源、版本、生效日期、正文、SHA-256、元数据与 `active`；`knowledge_chunks` 保存按 Markdown 标题切分的片段、字符数、embedding 向量和 `embedding_model`。删除为软删除（`active=false`），保留审计与历史；创建时相同正文 SHA-256 幂等返回已有文档（`created=false`），不重复入库。`knowledge-v1` 种子包含 6 篇合成 SOP，重复 Seed 不重复插入，也不删除用户文档。
 
-默认 `KNOWLEDGE_EMBEDDING_PROVIDER=hashing`：确定性特征哈希向量（默认 256 维），不联网、无额外依赖，测试与 CI 可复现。`openai` 走任意 OpenAI 兼容 `POST {base_url}/embeddings`，要求显式配置 base URL，密钥使用 SecretStr；响应按 `index` 排序并 L2 归一化，失败映射 `knowledge_embedding_failed`（502），不会静默换模型。检索只使用与当前 provider model 相同的片段；换模型后旧向量不参与检索，需要重新入库。
+默认 `KNOWLEDGE_EMBEDDING_PROVIDER=hashing`：确定性特征哈希向量（默认 256 维），不联网、无额外依赖，测试与 CI 可复现。`openai` 走任意 OpenAI 兼容 `POST {base_url}/embeddings`，要求显式配置 base URL，密钥使用 SecretStr；响应按 `index` 排序并 L2 归一化。入库前严格拒绝 `null`、非数字、`NaN`、`Infinity`、空向量、重复/缺失 `index` 和维度不一致，所有异常映射 `knowledge_embedding_failed`（502），不会写入非法向量，也不会静默换模型。启动时远程 embedding 不可用不会阻断核心 API：知识库 Seed 事务回滚，失败原因写入 `/health` 与 `/api/demo` 的 `knowledge.seed_error`；数据库初始化失败仍会中止启动。检索只使用与当前 provider model 相同的片段；换模型后旧向量不参与检索，需要重新入库。
 
 切分按 Markdown 标题分段，超长段按字符边界切分并保留 overlap；默认 600 字符、100 重叠。检索对候选片段计算 `0.65 * cosine + 0.35 * 词法匹配 + 0.05 * 标题命中`，取 `candidate_k` 后加 `0.03 * 文档标题命中` 重排，返回 `top_k`。词法匹配对中文使用单字/双字/三字 token，单字权重较低；最高分低于 `KNOWLEDGE_MIN_SCORE`（默认 0.15）时判定 `no_answer=true` 并清空 `hits`，低置信度片段不能被引用。该阈值是离线评测校准的工程默认值，不是通用准确率保证。
 
-分析工作流在 `verify_evidence` 之后、LLM 之前执行 `retrieve_knowledge`；查询由确定性指标与主要驱动构造。检索结果写入 `analysis.result.knowledge`，包含 `query`、`hits`、`no_answer`、`embedding_model`、`retrieval_ms`。LLM 输出可返回 `knowledge_references`，`verify_llm_evidence` 校验这些 chunk_id 必须属于本次预检索或工具检索合并后的 hits；未知 ID 触发 `invalid_knowledge_reference`，按 `LLM_FALLBACK_POLICY` 降级或失败。无 LLM 时仍保留检索结果，但所有 `cited=false`。
+分析工作流在 `verify_evidence` 之后、LLM 之前执行 `retrieve_knowledge`；查询由确定性指标与主要驱动构造。检索结果写入 `analysis.result.knowledge`，包含 `query`、`hits`、`no_answer`、`embedding_model`、`retrieval_ms`。LLM 输出可返回 `knowledge_references`，`verify_llm_evidence` 校验这些 chunk_id 必须属于**本次实际提供给模型的集合**（预检索 payload + 工具结果中可见的 ID），而不是仅属于持久化面板；未知 ID 触发 `invalid_knowledge_reference`，按 `LLM_FALLBACK_POLICY` 降级或失败。合并面板最多 10 条，但会优先保留被引用的 chunk，再按分数填充，避免低分有效引用被截断。无 LLM 时仍保留检索结果，但所有 `cited=false`。
 
-`search_knowledge` 是第 9 个注册工具，也是第 3 个模型可见只读工具。模型可以主动补充检索；知识内容在提示词中被标记为不可信数据而不是指令，单条片段截断到 700 字符。工具返回的 hits 与预检索结果按 chunk_id 去重合并。知识库内容不能触发工具调用、审批或执行，也不能改变金额。知识文档的创建和停用仅限 approver，读取与检索对 analyst/approver 开放；创建/停用写入审计。
+`search_knowledge` 是第 9 个注册工具，也是第 3 个模型可见只读工具。模型可以主动补充检索；知识内容在提示词中被标记为不可信数据而不是指令，单条片段截断到 700 字符。工具返回的 hits 与预检索结果按 chunk_id 去重合并，合并面板最多 10 条并优先保留被 LLM 引用的 chunk；工具结果被字节上限截断时，只有 preview 中仍可见的 chunk_id 可被引用。知识库内容不能触发工具调用、审批或执行，也不能改变金额。知识文档的创建和停用仅限 approver，读取与检索对 analyst/approver 开放；创建/停用写入审计。
 
 配置来自后端进程环境：`KNOWLEDGE_EMBEDDING_PROVIDER`（`hashing` 默认 / `openai`）、`KNOWLEDGE_EMBEDDING_MODEL`（默认 `hashing-v1`）、`KNOWLEDGE_EMBEDDING_BASE_URL`、`KNOWLEDGE_EMBEDDING_API_KEY`、`KNOWLEDGE_EMBEDDING_DIMENSIONS`（32–1024，默认 256）、`KNOWLEDGE_CHUNK_CHARS`（200–2000，默认 600）、`KNOWLEDGE_CHUNK_OVERLAP`（0–500，默认 100，必须小于 chunk chars）、`KNOWLEDGE_TOP_K`（1–10，默认 5）、`KNOWLEDGE_CANDIDATE_K`（1–100，默认 20，不小于 top_k）、`KNOWLEDGE_MIN_SCORE`（0–1，默认 0.15）。
 
@@ -70,8 +70,8 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 
 全部 JSON；`/health` 无认证，其余 API 除 `/api/demo` 外需 Bearer。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。
 
-- GET /health：数据库连通性、simulation 标志、`llm.{configured,provider,model}` 与 `knowledge.{provider,model,remote}`（不含密钥）。
-- GET /api/demo：demo mode、演示身份、可用店铺和数据日期（可空）、`llm.{configured,provider,model,fallback_policy}`，以及 `knowledge.{documents,embedding_provider,embedding_model}`。
+- GET /health：数据库连通性、simulation 标志、`llm.{configured,provider,model}` 与 `knowledge.{provider,model,remote,seed_error}`（不含密钥）；`seed_error` 为 `null` 或 `{code,message}`。
+- GET /api/demo：demo mode、演示身份、可用店铺和数据日期（可空）、`llm.{configured,provider,model,fallback_policy}`，以及 `knowledge.{documents,embedding_provider,embedding_model,seed_error}`。
 - POST /api/demo/seed：analyst 可重复初始化，不清除历史；同时幂等初始化 `knowledge-v1` 知识库。
 - GET /api/dashboard/summary：period、previous_period、current、previous、changes、trend、drivers、sku_breakdown、data_quality、anomaly。
 - GET /api/metrics：同一指标契约（支持范围/店铺）。

@@ -9,17 +9,24 @@ import json
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
+from app.config import Settings
+from app.db import build_engine, initialize_database, make_session_factory
 from app.errors import DomainError
 from app.knowledge import (
-    HashingEmbeddingProvider, OpenAIEmbeddingProvider, chunk_text,
-    content_sha256, merge_knowledge_hits, search_knowledge,
+    KNOWLEDGE_SEED_VERSION, HashingEmbeddingProvider, OpenAIEmbeddingProvider,
+    _split_long, chunk_text, content_sha256, create_document, merge_knowledge_hits,
+    search_knowledge,
 )
 from app.llm_analysis import build_llm_payload, validate_knowledge_references
+from app.main import create_app
 from app.metrics import analyze_drivers, build_report, fetch_metrics, resolve_scope
+from app.models import KnowledgeChunk, KnowledgeDocument, SeedVersion
 from app.schemas import (
-    AnalysisRequest, KnowledgeHit, KnowledgeSearchInput, KnowledgeSearchOutput,
-    LLMAnalysisOutput,
+    AnalysisRequest, KnowledgeDocumentInput, KnowledgeHit, KnowledgeSearchInput,
+    KnowledgeSearchOutput, LLMAnalysisOutput,
 )
 from app.services import plan_action
 
@@ -215,6 +222,75 @@ def test_merge_knowledge_hits_caps_schema_and_reranks():
     assert KnowledgeSearchOutput.model_validate(merged.model_dump(mode="json")) == merged
 
 
+def test_merge_knowledge_hits_prefers_cited_chunk_across_cap():
+    def hit(index: int, score: float) -> KnowledgeHit:
+        return KnowledgeHit(
+            chunk_id=f"chunk-{index}", document_id="doc-1", title="规则",
+            source="synthetic://test", version="v1", heading=None,
+            content=f"内容 {index}", score=score, rank=index + 1,
+        )
+
+    base = KnowledgeSearchOutput(
+        query="广告预算", hits=[hit(index, 0.99 - index * 0.01) for index in range(2)],
+        no_answer=False, embedding_model="hashing-v1", retrieval_ms=1.0,
+    )
+    extras = [
+        hit(index, 0.80 - index * 0.01).model_dump(mode="json")
+        for index in range(2, 14)
+    ]
+    cited_low_score = "chunk-13"
+    merged = merge_knowledge_hits(base, extras, preferred_ids=[cited_low_score])
+    assert merged is not None
+    assert len(merged.hits) == 10
+    assert [item.rank for item in merged.hits] == list(range(1, 11))
+    assert merged.hits[0].chunk_id == cited_low_score
+    assert cited_low_score in {item.chunk_id for item in merged.hits}
+    assert KnowledgeSearchOutput.model_validate(merged.model_dump(mode="json")) == merged
+
+
+def test_knowledge_validation_accepts_provided_but_unpersisted_chunk():
+    def hit(index: int) -> KnowledgeHit:
+        return KnowledgeHit(
+            chunk_id=f"panel-{index}", document_id="doc-1", title="规则",
+            source="synthetic://test", version="v1", heading=None,
+            content="内容", score=0.8, rank=index + 1,
+        )
+
+    panel = KnowledgeSearchOutput(
+        query="广告预算", hits=[hit(index) for index in range(10)],
+        no_answer=False, embedding_model="hashing-v1", retrieval_ms=1.0,
+    )
+    output = LLMAnalysisOutput.model_validate({
+        **LLM_OUTPUT, "knowledge_references": ["tool-only-low-score"],
+    })
+    # The persisted panel is capped at 10 and does not contain this chunk, but
+    # it was actually returned by a tool call in this run.
+    assert validate_knowledge_references(
+        output, panel, allowed_chunk_ids=[*[item.chunk_id for item in panel.hits], "tool-only-low-score"],
+    ) == []
+    # An ID that was never provided remains invalid.
+    unknown = LLMAnalysisOutput.model_validate({
+        **LLM_OUTPUT, "knowledge_references": ["never-provided"],
+    })
+    assert validate_knowledge_references(
+        unknown, panel, allowed_chunk_ids=[item.chunk_id for item in panel.hits],
+    ) == ["never-provided"]
+
+
+def test_split_long_flushes_buffered_short_sentences_before_overlong():
+    text = "开头短句。" + "长" * 650 + "。结尾短句。"
+    units = _split_long(text, max_chars=300)
+    assert "".join(units) == text
+    assert units[0] == "开头短句。"
+    assert units[-1] == "结尾短句。"
+    assert all(len(unit) <= 300 for unit in units)
+
+    chunks = chunk_text(f"# 规则\n\n{text}", max_chars=300, overlap=50)
+    assert all(len(chunk["content"]) <= 300 for chunk in chunks)
+    joined = "".join(chunk["content"] for chunk in chunks)
+    assert joined.find("开头短句。") < joined.find("长" * 50) < joined.find("结尾短句。")
+
+
 def test_chunking_keeps_headings_and_bounds():
     content = "# 规则 A\n\n" + "甲" * 500 + "\n\n# 规则 B\n\n" + "乙" * 500
     chunks = chunk_text(content, max_chars=300, overlap=50)
@@ -256,6 +332,145 @@ def test_openai_embedding_provider_fails_closed():
         provider.embed(["x"])
     assert caught.value.code == "knowledge_embedding_failed"
     assert caught.value.status == 502
+
+
+@pytest.mark.parametrize("payload", [
+    {"data": [{"index": 0, "embedding": None}, {"index": 1, "embedding": [1.0]}]},
+    {"data": [{"index": 0, "embedding": ["0.5", 1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0, "embedding": [True, 1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0, "embedding": [float("nan"), 1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0, "embedding": [float("inf"), 1.0]}, {"index": 1, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0, "embedding": []}, {"index": 1, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0, "embedding": [1.0, 2.0]}, {"index": 1, "embedding": [1.0]}]},
+    {"data": [{"index": 0, "embedding": [1.0, 2.0]}, {"index": 0, "embedding": [3.0, 4.0]}]},
+    {"data": [{"index": 0, "embedding": [1.0, 2.0]}]},
+    {"data": [{"index": 0}]},
+    {"data": "not-a-list"},
+    {},
+])
+def test_openai_embedding_provider_rejects_abnormal_values(payload):
+    provider = OpenAIEmbeddingProvider(
+        base_url="http://embed.local/v1", api_key="", model="bge-m3",
+        transport=httpx.MockTransport(lambda request: httpx.Response(
+            200,
+            content=json.dumps(payload, allow_nan=True).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )),
+    )
+    with pytest.raises(DomainError) as caught:
+        provider.embed(["第一条", "第二条"])
+    assert caught.value.code == "knowledge_embedding_failed"
+    assert caught.value.status == 502
+
+
+def test_invalid_embedding_is_not_persisted(client):
+    bad = OpenAIEmbeddingProvider(
+        base_url="http://embed.local/v1", api_key="", model="bge-m3",
+        transport=httpx.MockTransport(lambda request: httpx.Response(
+            200,
+            content=json.dumps(
+                {"data": [{"index": 0, "embedding": [float("nan")]}]},
+                allow_nan=True,
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )),
+    )
+    with client.app.state.factory() as session:
+        before_docs = int(session.scalar(select(func.count()).select_from(KnowledgeDocument)) or 0)
+        before_chunks = int(session.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0)
+    with pytest.raises(DomainError):
+        with client.app.state.factory.begin() as session:
+            create_document(
+                session,
+                KnowledgeDocumentInput(
+                    title="非法向量文档", source="synthetic://test/invalid-embedding",
+                    content="# 测试\n\n这条文档不应被写入。",
+                ),
+                bad,
+            )
+    with client.app.state.factory() as session:
+        after_docs = int(session.scalar(select(func.count()).select_from(KnowledgeDocument)) or 0)
+        after_chunks = int(session.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0)
+    assert after_docs == before_docs
+    assert after_chunks == before_chunks
+
+
+def _failing_remote_provider() -> OpenAIEmbeddingProvider:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("embedding timeout", request=request)
+    return OpenAIEmbeddingProvider(
+        base_url="http://embed.local/v1", api_key="", model="bge-m3",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _remote_settings(database_url: str) -> Settings:
+    return Settings(
+        database_url=database_url, auto_seed=True, llm_api_key="",
+        knowledge_embedding_provider="openai",
+        knowledge_embedding_base_url="http://embed.local/v1",
+        knowledge_embedding_model="bge-m3",
+    )
+
+
+def test_startup_survives_remote_embedding_failure_and_reports_reason(
+    tmp_path, monkeypatch, analyst,
+):
+    provider = _failing_remote_provider()
+    monkeypatch.setattr("app.main.build_embedding_provider", lambda settings: provider)
+    app = create_app(_remote_settings(f"sqlite:///{tmp_path / 'remote-fail.db'}"))
+    with TestClient(app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        knowledge = health.json()["knowledge"]
+        assert knowledge["provider"] == "openai"
+        assert knowledge["seed_error"]["code"] == "knowledge_embedding_failed"
+        assert "ReadTimeout" in knowledge["seed_error"]["message"]
+        assert client.get("/api/knowledge/documents", headers=analyst).json()["items"] == []
+        assert client.get("/api/dashboard/summary", headers=analyst).status_code == 200
+        assert client.get("/api/demo").json()["knowledge"]["seed_error"]["code"] == "knowledge_embedding_failed"
+        with app.state.factory() as session:
+            assert session.get(SeedVersion, KNOWLEDGE_SEED_VERSION) is None
+            assert session.scalar(select(func.count()).select_from(KnowledgeDocument)) == 0
+
+
+def test_startup_remote_embedding_failure_preserves_existing_documents(
+    tmp_path, monkeypatch,
+):
+    database_url = f"sqlite:///{tmp_path / 'remote-fail-existing.db'}"
+    engine = build_engine(database_url)
+    initialize_database(engine)
+    factory = make_session_factory(engine)
+    with factory.begin() as session:
+        session.add(KnowledgeDocument(
+            id="existing-doc", title="已有文档", source="synthetic://test/existing",
+            version="v1", effective_date=None, content="已有正文",
+            content_sha256=content_sha256("已有正文"), metadata_json={}, active=True,
+        ))
+    engine.dispose()
+
+    provider = _failing_remote_provider()
+    monkeypatch.setattr("app.main.build_embedding_provider", lambda settings: provider)
+    app = create_app(_remote_settings(database_url))
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        with app.state.factory() as session:
+            existing = session.get(KnowledgeDocument, "existing-doc")
+            assert existing is not None and existing.active is True
+            assert session.get(SeedVersion, KNOWLEDGE_SEED_VERSION) is None
+
+
+def test_startup_database_failure_still_raises(tmp_path, monkeypatch):
+    def broken_initialize(engine):
+        raise RuntimeError("database init failed")
+
+    monkeypatch.setattr("app.main.initialize_database", broken_initialize)
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path / 'db-fail.db'}", auto_seed=False, llm_api_key="",
+    ))
+    with pytest.raises(RuntimeError, match="database init failed"):
+        with TestClient(app):
+            pass
 
 
 def test_hashing_provider_is_deterministic():

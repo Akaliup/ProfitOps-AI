@@ -29,8 +29,12 @@ class ToolContext:
     # was given, never an arbitrary period or store.
     scope: MetricsInput | None = None
     # Tool-retrieved knowledge chunks are accumulated here so the workflow can
-    # validate citations against everything the model actually saw.
+    # merge them into the persisted panel.
     knowledge_hits: list[dict] = field(default_factory=list)
+    # Chunk IDs present in the exact tool-result content sent to the model. The
+    # workflow seeds this with pre-retrieved IDs and validates citations against
+    # it, so a score-capped panel cannot reject a citation the model really saw.
+    knowledge_provided_ids: list[str] = field(default_factory=list)
 
 
 Policy = Literal["safe", "ask", "deny"]

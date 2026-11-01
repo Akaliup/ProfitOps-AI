@@ -110,8 +110,18 @@ def validate_evidence_references(output: LLMAnalysisOutput, evidence: list[dict[
 
 
 def validate_knowledge_references(
-    output: LLMAnalysisOutput, knowledge: KnowledgeSearchOutput | None,
+    output: LLMAnalysisOutput,
+    knowledge: KnowledgeSearchOutput | None,
+    allowed_chunk_ids: list[str] | None = None,
 ) -> list[str]:
-    """Return cited chunk ids that were not in the retrieved context."""
-    allowed = {hit.chunk_id for hit in (knowledge.hits if knowledge is not None else [])}
+    """Return cited chunk ids that were not actually provided to the model.
+
+    ``knowledge`` is the persisted, score-capped panel and may omit a low-score
+    chunk the model saw in a tool result. Callers that tracked the exact context
+    pass ``allowed_chunk_ids``; only IDs never provided are rejected.
+    """
+    if allowed_chunk_ids is None:
+        allowed = {hit.chunk_id for hit in (knowledge.hits if knowledge is not None else [])}
+    else:
+        allowed = set(allowed_chunk_ids)
     return sorted(set(output.knowledge_references) - allowed)

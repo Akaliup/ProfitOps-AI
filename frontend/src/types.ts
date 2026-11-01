@@ -5,7 +5,10 @@ export interface Demo {
   demo_mode: boolean; simulation: boolean; currency: string; identities: Identity[];
   stores: { id: string; name: string; marketplace: string }[]; data_range: Period | null;
   llm?: LLMConfig;
-  knowledge?: { documents: number; embedding_provider: string; embedding_model: string };
+  knowledge?: {
+    documents: number; embedding_provider: string; embedding_model: string;
+    seed_error?: { code: string; message: string } | null;
+  };
 }
 export interface KnowledgeDocument {
   id: string; title: string; source: string; version: string; effective_date: string | null;

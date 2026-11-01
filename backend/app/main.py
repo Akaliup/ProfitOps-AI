@@ -70,13 +70,27 @@ def create_app(settings: Settings | None = None):
     registry = build_registry(embeddings, settings)
     llm = build_llm_provider(settings)
 
+    knowledge_seed_error: dict[str, str] | None = None
+
     @asynccontextmanager
     async def lifespan(app):
+        nonlocal knowledge_seed_error
+        knowledge_seed_error = None
+        # Database setup failures must still abort startup; only the optional
+        # knowledge seed may degrade so the core API stays available.
         initialize_database(engine)
         if settings.demo_mode and settings.auto_seed:
             seed_demo(factory)
-            seed_knowledge(factory, embeddings, settings)
+            try:
+                seed_knowledge(factory, embeddings, settings)
+            except DomainError as exc:
+                knowledge_seed_error = {"code": exc.code, "message": exc.message}
+                logger.warning(
+                    "knowledge_seed_failed: %s: %s", exc.code, exc.message,
+                    extra={"error_code": exc.code},
+                )
         recover_interrupted(factory)
+        app.state.knowledge_seed_error = knowledge_seed_error
         yield
         engine.dispose()
 
@@ -134,6 +148,7 @@ def create_app(settings: Settings | None = None):
                 "provider": settings.knowledge_embedding_provider,
                 "model": settings.knowledge_embedding_model,
                 "remote": settings.knowledge_embedding_remote,
+                "seed_error": knowledge_seed_error,
             },
         }
 
@@ -152,6 +167,7 @@ def create_app(settings: Settings | None = None):
                 "documents": knowledge_documents,
                 "embedding_provider": settings.knowledge_embedding_provider,
                 "embedding_model": settings.knowledge_embedding_model,
+                "seed_error": knowledge_seed_error,
             },
             "identities": [{"id": "demo-analyst", "name": "经营分析师", "role": "analyst", "token": settings.analyst_token}, {"id": "demo-approver", "name": "审批负责人", "role": "approver", "token": settings.approver_token}] if settings.demo_mode else [],
             "stores": [{"id": store.id, "name": store.name, "marketplace": store.marketplace} for store in stores],

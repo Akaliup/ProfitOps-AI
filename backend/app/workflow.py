@@ -39,6 +39,7 @@ class ProfitState(TypedDict, total=False):
     evidence_valid: bool
     knowledge: dict | None
     knowledge_error: dict | None
+    knowledge_allowed_ids: list[str]
     llm: dict
     recommendation_id: str
     status: str
@@ -180,8 +181,15 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             return {
                 "knowledge": None,
                 "knowledge_error": {"code": exc.code, "message": exc.message},
+                "knowledge_allowed_ids": [],
             }
-        return {"knowledge": result, "knowledge_error": None}
+        return {
+            "knowledge": result,
+            "knowledge_error": None,
+            "knowledge_allowed_ids": [
+                hit["chunk_id"] for hit in result.get("hits", []) if hit.get("chunk_id")
+            ],
+        }
 
     def llm_analyze(state):
         report = MetricsReport.model_validate(state["report"])
@@ -212,13 +220,24 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                     "llm_invalid_scope", "分析范围无法用于工具调用",
                     details={"errors": exc.errors(include_context=False)[:3]},
                 ))
+            pre_ids = [hit.chunk_id for hit in pre_knowledge.hits] if pre_knowledge is not None else []
+            tool_context = replace(
+                context, scope=scope,
+                knowledge_provided_ids=list(dict.fromkeys([
+                    *state.get("knowledge_allowed_ids", []), *pre_ids,
+                ])),
+            )
             loop = run_tool_loop(
-                provider=llm, registry=registry, context=replace(context, scope=scope),
+                provider=llm, registry=registry, context=tool_context,
                 payload=payload, settings=settings, scope=scope,
             )
-            merged = merge_knowledge_hits(pre_knowledge, context.knowledge_hits)
+            cited_ids = loop.output.knowledge_references if loop.output is not None else []
+            merged = merge_knowledge_hits(
+                pre_knowledge, tool_context.knowledge_hits, preferred_ids=cited_ids,
+            )
             knowledge_update = {
                 "knowledge": merged.model_dump(mode="json") if merged is not None else None,
+                "knowledge_allowed_ids": list(dict.fromkeys(tool_context.knowledge_provided_ids)),
             }
             if loop.error is not None:
                 return {**llm_failure(loop.error, loop=loop), **knowledge_update}
@@ -265,7 +284,9 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             except ValidationError:
                 knowledge = None
         unknown_evidence = validate_evidence_references(run.output, state["findings"]["evidence"])
-        unknown_knowledge = validate_knowledge_references(run.output, knowledge)
+        unknown_knowledge = validate_knowledge_references(
+            run.output, knowledge, allowed_chunk_ids=state.get("knowledge_allowed_ids"),
+        )
         if not unknown_evidence and not unknown_knowledge:
             return {}
         if unknown_evidence:

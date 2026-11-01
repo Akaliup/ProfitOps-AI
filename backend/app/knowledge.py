@@ -174,22 +174,56 @@ class OpenAIEmbeddingProvider:
                 502,
             )
         try:
-            data = response.json()["data"]
-            vectors = [
-                item["embedding"]
-                for item in sorted(data, key=lambda item: item.get("index", 0))
-            ]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise DomainError("knowledge_embedding_failed", "Embedding 响应格式无效", 502) from exc
-        if len(vectors) != len(texts) or any(not isinstance(vector, list) or not vector for vector in vectors):
-            raise DomainError("knowledge_embedding_failed", "Embedding 数量或维度无效", 502)
+            payload = response.json()
+        except ValueError as exc:
+            raise DomainError(
+                "knowledge_embedding_failed", "Embedding 响应不是合法 JSON", 502,
+            ) from exc
+        vectors = self._parse_vectors(payload, len(texts))
         return [self._normalize(vector) for vector in vectors]
 
     @staticmethod
-    def _normalize(vector: list[Any]) -> list[float]:
-        values = [float(value) for value in vector]
-        norm = math.sqrt(sum(value * value for value in values))
-        return [value / norm for value in values] if norm else [0.0 for _ in values]
+    def _parse_vectors(payload: Any, expected: int) -> list[list[float]]:
+        """Validate the response before any vector can reach the database."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise DomainError("knowledge_embedding_failed", "Embedding 响应格式无效", 502)
+        data = payload["data"]
+        if len(data) != expected:
+            raise DomainError("knowledge_embedding_failed", "Embedding 数量无效", 502)
+        ordered: list[tuple[int, list[float]]] = []
+        for position, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise DomainError("knowledge_embedding_failed", "Embedding 响应格式无效", 502)
+            index = item.get("index", position)
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < expected:
+                raise DomainError("knowledge_embedding_failed", "Embedding index 无效", 502)
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list) or not embedding:
+                raise DomainError("knowledge_embedding_failed", "Embedding 向量为空或格式无效", 502)
+            values: list[float] = []
+            for value in embedding:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise DomainError("knowledge_embedding_failed", "Embedding 包含非数字值", 502)
+                try:
+                    number = float(value)
+                except (OverflowError, ValueError) as exc:
+                    raise DomainError("knowledge_embedding_failed", "Embedding 数值超出范围", 502) from exc
+                if not math.isfinite(number):
+                    raise DomainError("knowledge_embedding_failed", "Embedding 包含 NaN 或 Infinity", 502)
+                values.append(number)
+            ordered.append((index, values))
+        if len({index for index, _ in ordered}) != expected:
+            raise DomainError("knowledge_embedding_failed", "Embedding index 重复或缺失", 502)
+        if len({len(vector) for _, vector in ordered}) != 1:
+            raise DomainError("knowledge_embedding_failed", "Embedding 维度不一致", 502)
+        ordered.sort(key=lambda pair: pair[0])
+        return [vector for _, vector in ordered]
+
+    @staticmethod
+    def _normalize(vector: list[float]) -> list[float]:
+        # hypot avoids overflow when squaring very large finite components.
+        norm = math.hypot(*vector)
+        return [value / norm for value in vector] if norm else [0.0 for _ in vector]
 
 
 def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
@@ -278,13 +312,20 @@ def _split_section(heading: str | None, text: str, max_chars: int, overlap: int)
 
 
 def _split_long(text: str, max_chars: int) -> list[str]:
-    sentences = re.split(r"(?<=[。！？!?；;\.])\s*", text)
+    # Keep the whitespace after punctuation so joining the units reproduces the
+    # original paragraph; consuming it fused English sentences together.
+    sentences = re.split(r"(?<=[。！？!?；;\.])", text)
     units: list[str] = []
     current = ""
     for sentence in sentences:
         if not sentence:
             continue
         if len(sentence) > max_chars:
+            # Flush buffered short sentences before the long sentence's pieces.
+            # Appending them afterwards would reorder the original text.
+            if current:
+                units.append(current)
+                current = ""
             for index in range(0, len(sentence), max_chars):
                 units.append(sentence[index:index + max_chars])
         elif len(current) + len(sentence) <= max_chars:
@@ -524,6 +565,7 @@ def search_knowledge(
 def merge_knowledge_hits(
     knowledge: KnowledgeSearchOutput | None,
     extra_hits: list[dict[str, Any]] | None,
+    preferred_ids: list[str] | None = None,
 ) -> KnowledgeSearchOutput | None:
     """Merge pre-retrieved and tool-retrieved chunks without exceeding the schema cap.
 
@@ -531,6 +573,9 @@ def merge_knowledge_hits(
     ``KNOWLEDGE_MAX_HITS`` even though each individual search is bounded. Keep the
     highest-scoring unique chunks and re-number them; returning an oversized
     context would make ``KnowledgeSearchOutput`` validation fail downstream.
+
+    ``preferred_ids`` are chunks the model actually cited. They are kept ahead of
+    the score cut so the persisted citation panel never drops a valid citation.
     """
     if knowledge is None and not extra_hits:
         return None
@@ -550,6 +595,12 @@ def merge_knowledge_hits(
         seen.add(hit.chunk_id)
         merged.append(hit)
     merged.sort(key=lambda hit: hit.score, reverse=True)
+    preferred = set(preferred_ids or [])
+    if preferred:
+        merged = (
+            [hit for hit in merged if hit.chunk_id in preferred]
+            + [hit for hit in merged if hit.chunk_id not in preferred]
+        )
     merged = [
         hit.model_copy(update={"rank": rank})
         for rank, hit in enumerate(merged[:KNOWLEDGE_MAX_HITS], start=1)

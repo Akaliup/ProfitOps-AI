@@ -253,6 +253,37 @@ def _sanitize_knowledge_tool_data(data: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _visible_knowledge_ids(content: str, hits: list[Any]) -> list[str]:
+    """Return chunk IDs present in the exact tool-result content sent to the model.
+
+    ``_bounded_json`` may replace an oversized result with a preview. In that
+    case only IDs that survive in the preview are considered provided; citations
+    to chunks that were cut off are rejected rather than silently allowed.
+    """
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    if payload.get("truncated") is True:
+        preview = payload.get("preview")
+        if not isinstance(preview, str):
+            return []
+        return [
+            hit["chunk_id"] for hit in hits
+            if isinstance(hit, dict) and isinstance(hit.get("chunk_id"), str)
+            and json.dumps(hit["chunk_id"], ensure_ascii=False) in preview
+        ]
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("hits"), list):
+        return []
+    return [
+        hit["chunk_id"] for hit in data["hits"]
+        if isinstance(hit, dict) and isinstance(hit.get("chunk_id"), str)
+    ]
+
+
 def _execute_tool_call(
     *,
     round_no: int,
@@ -354,6 +385,11 @@ def _execute_tool_call(
     if call.name == "search_knowledge":
         data = _sanitize_knowledge_tool_data(data)
     content = _bounded_json({"ok": True, "data": data}, max_bytes)
+    if call.name == "search_knowledge":
+        hits = data.get("hits") if isinstance(data, dict) else None
+        for chunk_id in _visible_knowledge_ids(content, hits if isinstance(hits, list) else []):
+            if chunk_id not in context.knowledge_provided_ids:
+                context.knowledge_provided_ids.append(chunk_id)
     return (
         _trace(round_no=round_no, call=call, arguments=arguments, ok=True,
                summary=_tool_summary(call.name, result.data), error_code=None, started=started),
