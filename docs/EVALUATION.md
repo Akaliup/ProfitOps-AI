@@ -123,9 +123,11 @@
 | `backend/evals/llm_cases/review.md` | 汇总对账、SKU 明细、Oracle 和算术校验点 |
 | `backend/evals/graders.py` | 数据完整性、Oracle 对比、Schema/证据/动作/数值/副作用门禁 |
 | `backend/evals/providers.py` | FakeProvider 与 Provider 标签 |
-| `backend/evals/runner.py` | `offline`、`real`、`regrade` 三种运行模式与 JSON 报告 |
+| `backend/evals/runner.py` | `offline`、`real`、`native`、`regrade` 运行模式与 JSON 报告 |
+| `backend/evals/native.py` | Phase 2D 原生工具循环评测：临时账本物化、脚本化 Provider、场景矩阵与指标 |
 | `backend/evals/reports/` | 实际运行报告 |
 | `backend/tests/test_llm_eval.py` | 离线 Runner 与负向对照测试 |
+| `backend/tests/test_native_evals.py` | Phase 2D 原生工具评测与 CLI 测试 |
 | `docs/EVALUATION.md` | 本报告 |
 
 生产业务逻辑没有为了通过评测而修改。生产侧唯一变更：把工作流中硬编码的 `max_tokens=3000` 改为可配置 `LLM_MAX_TOKENS`（默认 4000），用于验证截断是否由长度上限导致；利润口径、审批、执行、数据库契约和前端类型均未改动。
