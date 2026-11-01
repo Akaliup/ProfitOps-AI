@@ -224,17 +224,32 @@ function bounded(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, Math.max(0, limit - 1))}…` : value
 }
 
-function toolArgumentSummary(arguments_: Record<string, unknown>): string {
-  const period = arguments_.period as { start_date?: unknown; end_date?: unknown } | undefined
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+const SAFE_STORE_ID = /^[A-Za-z0-9._-]{1,64}$/
+
+function safeArgumentText(value: unknown, pattern: RegExp, maxLength: number): string | null {
+  return typeof value === 'string' && value.length <= maxLength && pattern.test(value) ? value : null
+}
+
+function toolArgumentSummary(arguments_: Record<string, unknown> | null | undefined): string {
+  if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) return '参数不可用'
   const parts: string[] = []
-  if (period && typeof period.start_date === 'string' && typeof period.end_date === 'string') {
-    parts.push(`${period.start_date} → ${period.end_date}`)
+  const period = arguments_.period
+  if (period && typeof period === 'object' && !Array.isArray(period)) {
+    const fields = period as Record<string, unknown>
+    const start = safeArgumentText(fields.start_date, ISO_DATE, 10)
+    const end = safeArgumentText(fields.end_date, ISO_DATE, 10)
+    if (start && end) parts.push(`${start} → ${end}`)
+    else parts.push('period 已隐藏')
   }
-  if (typeof arguments_.store_id === 'string') parts.push(`店铺 ${arguments_.store_id}`)
-  else if (arguments_.store_id === null) parts.push('全部店铺')
+  if (arguments_.store_id === null) parts.push('全部店铺')
+  else if (arguments_.store_id !== undefined) {
+    const store = safeArgumentText(arguments_.store_id, SAFE_STORE_ID, 64)
+    parts.push(store ? `店铺 ${store}` : 'store_id 已隐藏')
+  }
   const extra = Object.keys(arguments_).filter(key => key !== 'period' && key !== 'store_id')
   if (extra.length) parts.push(`${extra.length} 个其他字段`)
-  if (!parts.length) parts.push(JSON.stringify(arguments_))
+  if (!parts.length) parts.push('无安全参数摘要')
   return bounded(parts.join(' · '), 140)
 }
 

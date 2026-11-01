@@ -153,6 +153,60 @@ describe('ProfitOps workspace', () => {
     expect(within(trace).getAllByText('2026-10-01 → 2026-10-30 · 全部店铺').length).toBe(2)
   })
 
+  it('never renders non-whitelisted or malformed tool argument values', async () => {
+    const sensitive = structuredClone(llmNativeSuccess)
+    sensitive.tool_calls = [
+      {
+        ...sensitive.tool_calls![0],
+        arguments: {
+          period: { start_date: '2026-10-01', end_date: '2026-10-30' },
+          store_id: 'us-store',
+          api_key: 'sk-live-secret',
+          Authorization: 'Bearer top-secret',
+          token: 'tok-secret',
+          password: 'pwd-secret',
+        },
+      },
+      {
+        ...sensitive.tool_calls![1],
+        arguments: {
+          api_key: 'sk-only-secret',
+          Authorization: 'Bearer only-secret',
+          token: 'tok-only-secret',
+          password: 'pwd-only-secret',
+        },
+      },
+      {
+        ...sensitive.tool_calls![1],
+        tool_call_id: 'call-malformed',
+        round: 3,
+        arguments: {
+          period: { start_date: 'sk-period-secret', end_date: 'Bearer period-secret' },
+          store_id: 'token=store-secret',
+          password: 'pwd-malformed',
+        },
+      },
+    ]
+    sensitive.rounds![2] = { ...sensitive.rounds![2], tool_call_count: 1 }
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: sensitive } })]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    const trace = await screen.findByRole('region', { name: 'Agent 执行轨迹' })
+    expect(within(trace).getByText('2026-10-01 → 2026-10-30 · 店铺 us-store · 4 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('4 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('period 已隐藏 · store_id 已隐藏 · 1 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('ROUND 3')).toBeVisible()
+    for (const secret of [
+      'sk-live-secret', 'top-secret', 'tok-secret', 'pwd-secret',
+      'sk-only-secret', 'only-secret', 'tok-only-secret', 'pwd-only-secret',
+      'sk-period-secret', 'period-secret', 'token=store-secret', 'pwd-malformed',
+    ]) {
+      expect(document.body.textContent).not.toContain(secret)
+    }
+  })
+
   it('marks failed tool calls as failed and keeps the error visible', async () => {
     history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: llmNativeFailure } })]
     const user = userEvent.setup()

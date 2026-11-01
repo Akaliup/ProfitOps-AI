@@ -62,6 +62,10 @@ def test_offline_native_suite_passes_without_real_calls(suite):
     assert summary["normal_passed"] == 3
     assert summary["negative_controls"] == 34
     assert summary["negative_controls_detected"] == 34
+    assert summary["dataset_passed"] is True
+    assert summary["valid_cases"] == summary["selected_cases"] == 4
+    assert summary["failed_cases"] == []
+    assert suite["dataset_checks"]["passed"] is True
     assert summary["failed_runs"] == []
     assert summary["metrics"]["safety_gate_pass_rate"] == 1.0
     assert suite["limits"]["calls_made"] == 0
@@ -219,6 +223,98 @@ def test_real_mode_requires_explicit_authorization_and_budget(monkeypatch):
     )
     assert unconfigured["error"] == "not_configured"
     assert "未发起任何真实调用" in unconfigured["message"]
+
+
+def _copy_cases(tmp_path: Path) -> Path:
+    target = tmp_path / "cases"
+    target.mkdir()
+    for source in CASE_DIR.glob("*.json"):
+        (target / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return target
+
+
+def _edit_case(case_dir: Path, case_id: str, mutate) -> None:
+    path = case_dir / f"{case_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mutate(data)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_cli_fails_when_any_selected_case_fails_integrity(tmp_path):
+    case_dir = _copy_cases(tmp_path)
+    _edit_case(case_dir, "ad_spend_pressure", lambda data: data.__setitem__("source_type", "production"))
+    report_path = tmp_path / "report.json"
+
+    code = runner.main(["--case-dir", str(case_dir), "native", "--report", str(report_path)])
+
+    assert code == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    summary = report["summary"]
+    assert summary["dataset_passed"] is False
+    assert summary["valid_cases"] < summary["selected_cases"]
+    failed = {item["case_id"]: item for item in summary["failed_cases"]}
+    assert "ad_spend_pressure" in failed
+    integrity_reasons = [reason for reason in failed["ad_spend_pressure"]["reasons"] if reason["stage"] == "integrity"]
+    assert integrity_reasons
+    failed_names = {check["name"] for reason in integrity_reasons for check in reason["failed_checks"]}
+    assert "source_type_synthetic" in failed_names
+
+
+def test_cli_fails_when_the_only_selected_case_is_invalid(tmp_path):
+    case_dir = _copy_cases(tmp_path)
+    _edit_case(case_dir, "ad_spend_pressure", lambda data: data.__setitem__("source_type", "production"))
+    report_path = tmp_path / "report.json"
+
+    code = runner.main([
+        "--case-dir", str(case_dir), "native",
+        "--cases", "ad_spend_pressure", "--report", str(report_path),
+    ])
+
+    assert code == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["summary"]["valid_cases"] == 0
+    assert report["summary"]["dataset_passed"] is False
+    assert report["summary"]["failed_cases"][0]["case_id"] == "ad_spend_pressure"
+
+
+def test_cli_fails_when_expected_labels_mismatch(tmp_path):
+    case_dir = _copy_cases(tmp_path)
+    _edit_case(
+        case_dir, "ad_spend_pressure",
+        lambda data: data["expected"].__setitem__("primary_driver", "fulfillment"),
+    )
+    report_path = tmp_path / "report.json"
+
+    code = runner.main([
+        "--case-dir", str(case_dir), "native",
+        "--cases", "ad_spend_pressure", "--report", str(report_path),
+    ])
+
+    assert code == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["summary"]["valid_cases"] == 0
+    assert report["summary"]["dataset_passed"] is False
+    reasons = report["summary"]["failed_cases"][0]["reasons"]
+    assert {reason["stage"] for reason in reasons} == {"expected_labels"}
+    failed_names = {check["name"] for reason in reasons for check in reason["failed_checks"]}
+    assert "expected_primary_driver" in failed_names
+
+
+def test_cli_fails_when_no_cases_are_selected(tmp_path):
+    case_dir = tmp_path / "cases"
+    case_dir.mkdir()
+    (case_dir / "manifest.json").write_text(
+        (CASE_DIR / "manifest.json").read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+
+    code = runner.main(["--case-dir", str(case_dir), "native", "--report", str(report_path)])
+
+    assert code == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["summary"]["dataset_passed"] is False
+    assert report["summary"]["valid_cases"] == 0
+    assert report["summary"]["total_runs"] == 0
 
 
 def test_cli_native_mode_returns_nonzero_when_a_run_fails(tmp_path, monkeypatch):

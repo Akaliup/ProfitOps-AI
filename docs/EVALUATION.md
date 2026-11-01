@@ -69,7 +69,7 @@
 .venv/Scripts/python.exe backend/evals/runner.py native
 ```
 
-报告：`data/eval-tmp/native-final.json`（临时目录，未提交）
+报告：`data/eval-tmp/native-failclosed.json`（临时目录，未提交）
 
 | 指标 | 结果 |
 |---|---:|
@@ -85,11 +85,13 @@
 | `unnecessary_tool_calls` | 3（每个异常案例 1 次，来自 `native:unnecessary_tool`） |
 | `invalid_tool_calls` | 24 |
 | 模拟 tokens | prompt 68400 / completion 8760 / total 77160 |
-| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.175 ms、最大 73.503 ms、平均 15.881 ms |
+| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.2 ms、最大 55.123 ms、平均 14.462 ms |
 
 状态分布：`llm_success=6`、`deterministic_fallback=30`、`not_requested=1`。`provider_type=fake_tools`，真实网络调用 **0** 次，付费 token **0**。这些数字是脚本化 Provider 在 4 个合成案例上的门禁结果，**不是真实模型工具选择准确率，也不是真实延迟或成本**。
 
 负向对照的 `negative_control_detected` 定义为整次运行通过：预期状态、错误码、终止原因、工具选择结果、无效调用数和安全门禁全部符合预期；只匹配工具选择不算识别成功。
+
+数据集门禁为 fail-closed：任一 selected case 的 `integrity` 或 `expected_labels` 检查失败、oracle 缺失、没有选中案例或没有有效案例时，`dataset_checks.passed=false`，CLI 退出码为 1。报告 `dataset_checks.failed_cases` 记录 `case_id`、失败阶段（`integrity` / `expected_labels` / `oracle`）和具体失败检查项；不会通过跳过 `oracle=None` 的案例或零运行报告返回成功。CLI 还要求至少存在正常场景且全部通过；若所选案例包含负向对照，负向对照也必须全部被完整识别。
 
 ### D5. 真实模型入口（未执行）
 

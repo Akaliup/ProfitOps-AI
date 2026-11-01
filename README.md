@@ -74,6 +74,8 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 - 默认 `FakeToolProvider`，不联网、不消耗付费 token；脚本化的是模型响应，工具循环、工具注册表、只读处理器、参数/范围/轮次/重复限制和证据校验全部走生产代码。
 - 4 个合成案例物化到独立临时 SQLite 账本，不读写 `data/profitops.db`。
 - 输出机器可读 JSON 报告和终端摘要；正常运行或负向对照未通过时退出码非 0。
+- 任一案例的 integrity 或 expected label 检查失败、oracle 缺失或零有效案例时，整次评测失败；报告 `dataset_checks.failed_cases` 记录案例与具体失败检查项，CLI 退出码非 0。
+- Agent 执行轨迹只展示经过白名单校验的 `period`、`store_id`；其他字段只显示数量，非法或敏感值显示为“已隐藏”，不回显原始参数。
 - 指标包括工具选择准确率、参数合法率、任务完成率、证据引用有效率、安全门禁通过率、降级率、token 与延迟。离线报告的 token/延迟来自脚本化 Provider，不是真实模型性能。
 - 真实模型入口必须显式授权并设置预算：`native --real --authorize-real-calls I_UNDERSTAND_THIS_SPENDS_TOKENS --max-calls N`。CI 只运行默认离线模式。Phase 2D 未执行真实模型评测，不声明真实工具选择准确率。
 
@@ -171,7 +173,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 126 通过（含 Phase 2B 评测 Runner、负向对照、Phase 2C 原生工具测试 28 项与 Phase 2D 原生评测测试 24 项）、前端 10 通过、生产构建通过；Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 独立数据库 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果：后端 130 通过（含 Phase 2B 评测 Runner、负向对照、Phase 2C 原生工具测试 28 项与 Phase 2D 原生评测测试 28 项）、前端 11 通过、生产构建通过；Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 独立数据库 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 

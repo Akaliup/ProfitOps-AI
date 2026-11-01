@@ -1001,12 +1001,91 @@ def _native_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _failed_checks(result: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"name": str(check.get("name")), "detail": str(check.get("detail", ""))}
+        for check in result.get("checks", [])
+        if not check.get("passed")
+    ]
+
+
+def _dataset_checks(
+    cases: list[dict[str, Any]],
+    integrity: list[dict[str, Any]],
+    expected_labels: list[dict[str, Any]],
+    oracles: list[OracleResult | None],
+) -> dict[str, Any]:
+    """Fail closed when any selected case fails integrity, labels or oracle."""
+    integrity_by_id = {str(item.get("case_id")): item for item in integrity}
+    labels_by_id = {str(item.get("case_id")): item for item in expected_labels}
+    failures: list[dict[str, Any]] = []
+    valid_cases = 0
+    for case, oracle in zip(cases, oracles):
+        case_id = str(case.get("case_id"))
+        reasons: list[dict[str, Any]] = []
+        integrity_result = integrity_by_id.get(case_id)
+        integrity_ok = bool(integrity_result and integrity_result.get("passed"))
+        if not integrity_ok:
+            reasons.append({
+                "stage": "integrity",
+                "failed_checks": _failed_checks(integrity_result or {}),
+            })
+        else:
+            label_result = labels_by_id.get(case_id)
+            if label_result is None:
+                reasons.append({
+                    "stage": "expected_labels",
+                    "failed_checks": [],
+                    "message": "expected-label result missing",
+                })
+            elif not label_result.get("passed"):
+                reasons.append({
+                    "stage": "expected_labels",
+                    "failed_checks": _failed_checks(label_result),
+                })
+        if integrity_ok and oracle is None:
+            reasons.append({"stage": "oracle", "message": "oracle unavailable"})
+        if reasons:
+            failures.append({"case_id": case_id, "reasons": reasons})
+        else:
+            valid_cases += 1
+    return {
+        "passed": len(cases) > 0 and not failures and valid_cases == len(cases),
+        "selected_cases": len(cases),
+        "valid_cases": valid_cases,
+        "failed_cases": failures,
+    }
+
+
+def native_suite_passed(report: dict[str, Any]) -> bool:
+    """Return True only for a non-empty, fully validated and fully passing suite."""
+    summary = report.get("summary") or {}
+    total = int(summary.get("total_runs") or 0)
+    normal = int(summary.get("normal_runs") or 0)
+    if summary.get("dataset_passed") is not True or total <= 0 or normal <= 0:
+        return False
+    if summary.get("normal_passed") != normal:
+        return False
+    negative = int(summary.get("negative_controls") or 0)
+    detected = int(summary.get("negative_controls_detected") or 0)
+    # A selected negative control must be fully detected; a subset without
+    # negative controls can still pass if its normal runs and dataset are valid.
+    return negative == detected
+
+
 def _native_report(
     *, mode: str, manifest: dict[str, Any], cases: list[dict[str, Any]],
     integrity: list[dict[str, Any]], expected_labels: list[dict[str, Any]],
-    runs: list[dict[str, Any]], provider: dict[str, Any], limits: dict[str, Any],
-    case_dir: Path,
+    dataset_checks: dict[str, Any], runs: list[dict[str, Any]], provider: dict[str, Any],
+    limits: dict[str, Any], case_dir: Path,
 ) -> dict[str, Any]:
+    summary = _native_summary(runs)
+    summary.update({
+        "dataset_passed": dataset_checks["passed"],
+        "selected_cases": dataset_checks["selected_cases"],
+        "valid_cases": dataset_checks["valid_cases"],
+        "failed_cases": dataset_checks["failed_cases"],
+    })
     return {
         "report_version": "1",
         "generated_at": _now(),
@@ -1023,8 +1102,9 @@ def _native_report(
         "limits": limits,
         "integrity": integrity,
         "expected_labels": expected_labels,
+        "dataset_checks": dataset_checks,
         "runs": runs,
-        "summary": _native_summary(runs),
+        "summary": summary,
         "separation_note": (
             "FakeToolProvider runs execute the production tool loop and production read-only "
             "tool handlers against an isolated synthetic ledger. They are offline and are not "
@@ -1047,6 +1127,7 @@ def run_native_offline(
 ) -> dict[str, Any]:
     cases, manifest, integrity, expected_labels, oracles = _prepare(case_dir, names)
     dataset_version = f"{manifest.get('dataset_id')}+{NATIVE_SUITE_VERSION}"
+    dataset_checks = _dataset_checks(cases, integrity, expected_labels, oracles)
     runs: list[dict[str, Any]] = []
     for case, oracle in zip(cases, oracles):
         if oracle is None:
@@ -1087,6 +1168,7 @@ def run_native_offline(
         cases=cases,
         integrity=integrity,
         expected_labels=expected_labels,
+        dataset_checks=dataset_checks,
         runs=runs,
         case_dir=case_dir,
         provider={"type": "fake_tools", "model": "fake-deepseek-tools", "real_online": False},
@@ -1137,6 +1219,7 @@ def run_native_real(
         return {"mode": "native-real", "error": "not_configured", "message": "未配置 LLM_API_KEY，未发起任何真实调用"}
     cases, manifest, integrity, expected_labels, oracles = _prepare(case_dir, names)
     dataset_version = f"{manifest.get('dataset_id')}+{NATIVE_SUITE_VERSION}"
+    dataset_checks = _dataset_checks(cases, integrity, expected_labels, oracles)
     provider = DeepSeekProvider(
         api_key=settings.llm_api_key.get_secret_value().strip(),
         model=settings.llm_model,
@@ -1216,6 +1299,7 @@ def run_native_real(
         cases=cases,
         integrity=integrity,
         expected_labels=expected_labels,
+        dataset_checks=dataset_checks,
         runs=runs,
         case_dir=case_dir,
         provider={"type": "deepseek", "model": settings.llm_model, "base_url": settings.llm_base_url, "real_online": True},
@@ -1239,6 +1323,8 @@ def print_native_summary(report: dict[str, Any]):
     print("Native Tool Calling evaluation")
     print(f"  mode: {report.get('mode')}")
     print(f"  dataset_version: {report.get('dataset_version')}")
+    print(f"  dataset_passed: {summary.get('dataset_passed')}  "
+          f"selected_cases: {summary.get('selected_cases')}  valid_cases: {summary.get('valid_cases')}")
     print(f"  runs: {summary.get('total_runs')}  normal: {summary.get('normal_runs')}  "
           f"normal_passed: {summary.get('normal_passed')}  "
           f"negative_controls: {summary.get('negative_controls')}  "
@@ -1280,11 +1366,7 @@ def native_main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 2
     print_native_summary(report)
-    summary = report.get("summary") or {}
-    return 0 if (
-        summary.get("normal_runs") == summary.get("normal_passed")
-        and summary.get("negative_controls") == summary.get("negative_controls_detected")
-    ) else 1
+    return 0 if native_suite_passed(report) else 1
 
 
 if __name__ == "__main__":

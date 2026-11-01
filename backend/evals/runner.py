@@ -707,11 +707,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 2
         native_module.print_native_summary(report)
-        summary = report.get("summary") or {}
-        return 0 if (
-            summary.get("normal_runs") == summary.get("normal_passed")
-            and summary.get("negative_controls") == summary.get("negative_controls_detected")
-        ) else 1
+        return 0 if native_module.native_suite_passed(report) else 1
     else:
         report = regrade_report(args.report, args.output)
     if report.get("error") == "not_configured":
