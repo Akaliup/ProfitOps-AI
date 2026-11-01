@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from .audit import record
 from .config import Settings
 from .errors import DomainError
-from .models import KnowledgeChunk, KnowledgeDocument, SeedVersion, new_id
+from .models import KnowledgeChunk, KnowledgeDocument, SeedVersion, new_id, utcnow
 from .schemas import (
     KNOWLEDGE_MAX_HITS, KnowledgeDocumentInput, KnowledgeDocumentOutput, KnowledgeHit,
     KnowledgeSearchInput, KnowledgeSearchOutput,
@@ -39,6 +39,8 @@ from .security import Actor
 
 KNOWLEDGE_SEED_VERSION = "knowledge-v1"
 KNOWLEDGE_SOURCE = "synthetic://profitops/knowledge"
+# Must match KnowledgeChunk.heading (String(200)); PostgreSQL enforces it.
+KNOWLEDGE_HEADING_MAX_CHARS = 200
 
 _ASCII_WORD = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _CJK = re.compile(r"[㐀-䶿一-鿿]")
@@ -240,6 +242,12 @@ def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
     )
 
 
+def _bounded_heading(heading: str | None) -> str | None:
+    if not heading:
+        return None
+    return heading[:KNOWLEDGE_HEADING_MAX_CHARS]
+
+
 def chunk_text(content: str, max_chars: int = 600, overlap: int = 100) -> list[dict[str, str | None]]:
     """Split Markdown-ish text into overlapping chunks with heading metadata."""
     if max_chars <= 0:
@@ -265,7 +273,7 @@ def chunk_text(content: str, max_chars: int = 600, overlap: int = 100) -> list[d
         match = _HEADING.match(line.strip())
         if match:
             flush()
-            heading = match.group(2).strip()
+            heading = _bounded_heading(match.group(2).strip())
         else:
             buffer.append(line)
     flush()
@@ -391,11 +399,15 @@ def build_knowledge_query(report, findings) -> str:
     return " ".join(dict.fromkeys(part.strip() for part in parts if part and part.strip()))[:300]
 
 
-def knowledge_document_output(row: KnowledgeDocument, chunk_count: int, created: bool = False) -> KnowledgeDocumentOutput:
+def knowledge_document_output(
+    row: KnowledgeDocument, chunk_count: int, created: bool = False,
+    reindexed: bool = False,
+) -> KnowledgeDocumentOutput:
     return KnowledgeDocumentOutput(
         id=row.id, title=row.title, source=row.source, version=row.version,
         effective_date=row.effective_date, active=row.active,
-        chunk_count=chunk_count, created=created, created_at=row.created_at,
+        chunk_count=chunk_count, created=created, reindexed=reindexed,
+        created_at=row.created_at,
     )
 
 
@@ -463,10 +475,11 @@ def create_document(
         )
     )
     if existing is not None:
-        count = int(session.scalar(
-            select(func.count()).select_from(KnowledgeChunk).where(KnowledgeChunk.document_id == existing.id)
-        ) or 0)
-        return knowledge_document_output(existing, count, created=False)
+        # Content dedupe must not skip a model switch. Re-embed the existing
+        # chunks in place so the document ID, chunk IDs and content survive.
+        return reindex_document(
+            session, existing.id, embeddings, actor=actor, request_id=request_id,
+        )
 
     document, count = _insert_document(
         session,
@@ -484,6 +497,67 @@ def create_document(
             },
         )
     return knowledge_document_output(document, count, created=True)
+
+
+def reindex_document(
+    session: Session,
+    document_id: str,
+    embeddings: EmbeddingProvider,
+    *,
+    actor: Actor | None = None,
+    request_id: str = "",
+) -> KnowledgeDocumentOutput:
+    """Re-embed an existing document's chunks with the current provider model.
+
+    Chunk boundaries, IDs and content are preserved; only vectors and the model
+    name change. The caller owns the transaction: if embedding or persistence
+    fails, the previous valid chunks remain in the database. Calling this again
+    with the same model is a no-op, so it is safe to retry.
+    """
+    document = session.get(KnowledgeDocument, document_id)
+    if document is None or not document.active:
+        raise DomainError("knowledge_document_not_found", "知识文档不存在", 404)
+    chunks = list(session.scalars(
+        select(KnowledgeChunk)
+        .where(KnowledgeChunk.document_id == document.id)
+        .order_by(KnowledgeChunk.chunk_index)
+    ).all())
+    if not chunks:
+        raise DomainError(
+            "knowledge_document_empty", "知识文档没有可重新索引的片段", 422,
+        )
+    stale = [
+        chunk for chunk in chunks
+        if chunk.embedding_model != embeddings.model or not chunk.embedding
+    ]
+    if not stale:
+        return knowledge_document_output(
+            document, len(chunks), created=False, reindexed=False,
+        )
+    # Embed before mutating any row. A provider failure therefore leaves the
+    # previous vectors and model names untouched even before the rollback.
+    vectors = embeddings.embed([chunk.content for chunk in chunks])
+    if len(vectors) != len(chunks):
+        raise DomainError(
+            "knowledge_embedding_failed", "Embedding 数量与知识片段不一致", 502,
+        )
+    previous_models = sorted({chunk.embedding_model for chunk in chunks})
+    for chunk, vector in zip(chunks, vectors):
+        chunk.embedding = vector
+        chunk.embedding_model = embeddings.model
+    document.updated_at = utcnow()
+    session.flush()
+    if actor is not None:
+        record(
+            session, actor, "knowledge.document.reindexed", "knowledge", document.id,
+            request_id, details={
+                "title": document.title, "chunks": len(chunks),
+                "from_models": previous_models, "to_model": embeddings.model,
+            },
+        )
+    return knowledge_document_output(
+        document, len(chunks), created=False, reindexed=True,
+    )
 
 
 def delete_document(

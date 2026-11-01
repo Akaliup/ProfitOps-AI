@@ -15,7 +15,7 @@ ProfitOps 的 RAG 不是“把文档丢给模型自由发挥”，而是把运�
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `knowledge_documents` | `id`、`title`、`source`、`version`、`effective_date`、`content`、`content_sha256`、`metadata_json`、`active` | 文档主表；相同正文 SHA-256 幂等；删除为软删除 |
-| `knowledge_chunks` | `id`、`document_id`、`chunk_index`、`heading`、`content`、`char_count`、`embedding`、`embedding_model` | Markdown 分段与向量；`(document_id, chunk_index)` 唯一 |
+| `knowledge_chunks` | `id`、`document_id`、`chunk_index`、`heading`、`content`、`char_count`、`embedding`、`embedding_model` | Markdown 分段与向量；`heading` 截断到 200 字符；`(document_id, chunk_index)` 唯一 |
 
 `knowledge-v1` Seed 包含 6 篇合成 SOP：
 
@@ -32,9 +32,10 @@ Seed 通过 `seed_versions` 幂等执行，重复调用不重复插入，也不�
 
 1. `normalize_text` 做 Unicode NFKC、换行统一和空白压缩。
 2. 按 Markdown 标题切 section；超长 section 先按句子聚合，超长句子再按字符边界切分，保留 overlap 和原文顺序。
-3. 默认 `KNOWLEDGE_CHUNK_CHARS=600`、`KNOWLEDGE_CHUNK_OVERLAP=100`；配置校验要求 overlap 小于 chunk chars。
-4. 每个 chunk 生成 embedding 并记录 `embedding_model`。
-5. 创建文档与写入审计在同一事务中完成；重复正文直接返回已有文档（`created=false`），不重复入库。
+3. Markdown 标题在写入 `KnowledgeChunk.heading` 前截断到 200 字符（与 `String(200)` 字段一致）；只截断标题元数据，正文内容与段落顺序不变。
+4. 默认 `KNOWLEDGE_CHUNK_CHARS=600`、`KNOWLEDGE_CHUNK_OVERLAP=100`；配置校验要求 overlap 小于 chunk chars。
+5. 每个 chunk 生成 embedding 并记录 `embedding_model`。
+6. 创建文档与写入审计在同一事务中完成；重复正文直接返回已有文档（`created=false`），不重复入库。
 
 ## 4. Embedding
 
@@ -54,6 +55,15 @@ KNOWLEDGE_EMBEDDING_API_KEY=
 调用 `POST {base_url}/embeddings`，请求 `{model,input}`，响应按 `index` 排序并 L2 归一化。支持 Ollama、vLLM 或私有网关；不绑定某一家云厂商。响应在入库前严格校验：拒绝 `null`、非数字、`NaN`、`Infinity`、空向量、重复/缺失 `index` 和维度不一致；任何异常都统一返回 `knowledge_embedding_failed`（HTTP 502），不会写入非法向量，也不会静默改用 hashing 模型。检索按 `embedding_model` 过滤，换模型后旧片段不会混入新向量空间。
 
 启动时如果远程 embedding 不可用，核心 API 仍会启动；知识库 Seed 事务回滚（不删除已有文档、不记录成功的 SeedVersion），失败原因写入 `/health` 与 `/api/demo` 的 `knowledge.seed_error`，同时记录 `knowledge_seed_failed` 日志。数据库初始化或演示数据 Seed 失败仍会中止启动，不会被吞掉。
+
+### 模型切换与 reindex
+
+检索只使用 `embedding_model` 与当前 provider 相同的 chunk。切换模型后，旧向量不会混入新向量空间，已有文档也不会被自动删除。两种方式可以恢复检索：
+
+- 重新上传相同正文：创建接口检测到相同 SHA-256 的 active 文档后，若当前模型不同，会在原文档上重嵌入现有 chunk，返回 `created=false, reindexed=true`。
+- 显式调用 `POST /api/knowledge/documents/{id}/reindex`（仅 approver）：对指定文档重嵌入现有 chunk。
+
+两种方式都保留文档 ID、source、version、effective_date、active，以及 chunk ID、正文和 heading；重复 reindex 已是最新模型时为 no-op。嵌入或写入失败会回滚事务，旧向量与旧 `embedding_model` 保留，不会把真实 embedding 静默降级为 hashing。审计记录 `knowledge.document.reindexed`。
 
 ## 5. 检索与打分
 
@@ -114,6 +124,10 @@ curl -H "Authorization: Bearer demo-analyst" \
 curl -X POST http://127.0.0.1:8010/api/knowledge/documents \
   -H "Authorization: Bearer demo-approver" -H "Content-Type: application/json" \
   -d '{"title":"退款升级规则","source":"synthetic://profitops/knowledge/refund-escalation","version":"v1","content":"# 退款升级\n\n退款率连续 7 天高于基线时升级为运营专项。"}'
+
+# 重新索引（仅 approver；切换 embedding 模型后对已有文档执行）
+curl -X POST http://127.0.0.1:8010/api/knowledge/documents/<id>/reindex \
+  -H "Authorization: Bearer demo-approver"
 
 # 停用（仅 approver；软删除）
 curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
@@ -183,9 +197,11 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
 
 - 知识内容是**不可信数据**：即使正文包含“忽略之前的指令”或“调用执行工具”，也只能作为文本片段返回，不能改变工具允许列表、角色或审批状态。
 - 提示词明确禁止因知识内容调用工具、改变审批/执行或输出密钥；工具返回也经过清洗、脱敏和不可信标记。但这是**风险降低**，不是形式化防注入保证：模型仍可能被改写后的指令影响叙述，当前也没有文档级 ACL、租户隔离或完整 DLP。
-- 文档写入/停用需要 approver；审计记录 `knowledge.document.created` / `knowledge.document.deleted`。
+- 文档写入/停用/reindex 需要 approver；审计记录 `knowledge.document.created` / `knowledge.document.reindexed` / `knowledge.document.deleted`。
 - 当前没有文档级 ACL、租户隔离、OCR、PDF 解析、reranker 或向量数据库；规模上限是 SQLite/PostgreSQL 上的全量候选打分，适合演示与中小知识库。
 - 远程 embedding 启动失败会保留核心 API 可用，但知识库在配置修复并重新启动前为空；这不是成功状态，调用方必须检查 `knowledge.seed_error`。
+- 切换 embedding 模型后，旧文档必须重新上传相同正文或调用 reindex 才会进入新模型检索；未 reindex 的文档不会出现在结果中。reindex 只重嵌入现有 chunk，不重新切分；修改 chunk 参数后需要重新入库。
+- 超过 200 字符的 Markdown 标题只保留前 200 字符作为 heading 元数据；正文不受影响，但完整标题不会单独保存。
 - hashing embedding 不是语义模型；同义改写召回有限，生产应换真实 embedding 并重新跑评测。
 - `no_answer` 阈值是工程默认值，需要按业务语料校准；当前评测集只有 8 个查询，不能据此声明泛化准确率。
 - 知识库只影响解释与建议文案，不影响利润、动作参数、审批或执行。

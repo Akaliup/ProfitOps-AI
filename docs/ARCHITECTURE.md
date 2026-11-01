@@ -46,7 +46,7 @@ LLM 节点位于确定性利润、异常归因和证据校验之后、创建建�
 
 `backend/app/knowledge.py` 把运营 SOP 作为服务端只读上下文接入分析图。文档与片段分表存储：文档保留标题、来源、版本、生效日期、正文 SHA-256 和 `active`，片段保留 Markdown 标题、正文、字符数、embedding 与模型名。创建时相同正文 SHA-256 幂等返回已有文档；删除是软删除，保留审计和历史；`knowledge-v1` Seed 只在首次插入 6 篇合成 SOP，重复执行不重复插入，也不删除用户文档。
 
-离线默认使用确定性特征哈希 embedding（256 维），不联网、无额外依赖，因此测试、CI 和演示完全可复现。需要语义向量时切换 `KNOWLEDGE_EMBEDDING_PROVIDER=openai`，调用任意 OpenAI 兼容 `/embeddings` 端点（Ollama、vLLM 或私有网关），响应按 index 排序并 L2 归一化；失败映射为 502 `knowledge_embedding_failed`，不会静默回退到另一个模型。检索按 `embedding_model` 过滤，换模型后旧向量不参与，避免把不同向量空间的距离混算。
+离线默认使用确定性特征哈希 embedding（256 维），不联网、无额外依赖，因此测试、CI 和演示完全可复现。需要语义向量时切换 `KNOWLEDGE_EMBEDDING_PROVIDER=openai`，调用任意 OpenAI 兼容 `/embeddings` 端点（Ollama、vLLM 或私有网关），响应按 index 排序并 L2 归一化；失败映射为 502 `knowledge_embedding_failed`，不会静默回退到另一个模型。检索按 `embedding_model` 过滤，换模型后旧向量不参与，避免把不同向量空间的距离混算；已有文档通过重新上传相同正文或显式 reindex 重嵌入现有 chunk（保留文档与 chunk ID/正文），重复执行幂等。
 
 切分按 Markdown 标题分段，超长段按字符边界切分并保留 overlap（默认 600/100）。检索打分是混合式：`0.65 * cosine + 0.35 * 词法 + 0.05 * 标题命中`，先取 `candidate_k`，再用文档标题命中 `+0.03` 重排，返回 `top_k`。词法层对中文使用单字、双字、三字 token，单字权重低，避免“预/订”这类单字造成无关命中。最高分低于 `KNOWLEDGE_MIN_SCORE` 时 `no_answer=true` 且 hits 清空，低置信度片段不能成为引用来源。
 

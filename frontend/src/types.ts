@@ -12,7 +12,7 @@ export interface Demo {
 }
 export interface KnowledgeDocument {
   id: string; title: string; source: string; version: string; effective_date: string | null;
-  active: boolean; chunk_count: number; created: boolean; created_at: string;
+  active: boolean; chunk_count: number; created: boolean; reindexed?: boolean; created_at: string;
 }
 export interface KnowledgeDocumentInput {
   title: string; source: string; version: string; content: string; metadata?: Record<string, unknown>;

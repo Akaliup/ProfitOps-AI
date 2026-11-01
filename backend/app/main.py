@@ -18,7 +18,7 @@ from .db import build_engine, initialize_database, make_session_factory
 from .errors import DomainError
 from .knowledge import (
     build_embedding_provider, create_document, delete_document, list_documents,
-    search_knowledge, seed_knowledge,
+    reindex_document, search_knowledge, seed_knowledge,
 )
 from .llm import build_llm_provider
 from .metrics import build_report, fetch_metrics, resolve_scope
@@ -224,6 +224,16 @@ def create_app(settings: Settings | None = None):
                 actor=actor, request_id=request.state.request_id,
             )
         return JSONResponse(status_code=201 if item.created else 200, content=item.model_dump(mode="json"))
+
+    @app.post("/api/knowledge/documents/{document_id}/reindex", tags=["knowledge"])
+    def reindex_knowledge_document(document_id: str, request: Request, actor: Actor = Depends(identity)):
+        require_role(actor, "approver")
+        with factory.begin() as session:
+            item = reindex_document(
+                session, document_id, embeddings,
+                actor=actor, request_id=request.state.request_id,
+            )
+        return item.model_dump(mode="json")
 
     @app.delete("/api/knowledge/documents/{document_id}", tags=["knowledge"])
     def remove_knowledge_document(document_id: str, request: Request, actor: Actor = Depends(identity)):

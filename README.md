@@ -199,6 +199,10 @@ curl -X POST http://127.0.0.1:8010/api/knowledge/search \
 curl -X POST http://127.0.0.1:8010/api/knowledge/documents \
   -H "Authorization: Bearer demo-approver" -H "Content-Type: application/json" \
   -d '{"title":"退款升级规则","source":"synthetic://profitops/knowledge/refund-escalation","content":"# 退款升级\n\n退款率连续 7 天高于基线时升级为运营专项。"}'
+
+# 重新索引已有文档（仅 approver；切换 embedding 模型后使用）
+curl -X POST http://127.0.0.1:8010/api/knowledge/documents/<id>/reindex \
+  -H "Authorization: Bearer demo-approver"
 ```
 
 错误格式统一为 `{"error":{"code","message","details"},"request_id":"..."}`；响应头也包含 `X-Request-ID`。`/docs` 提供 OpenAPI 文档。九个工具及其 JSON Schema 可通过 `GET /api/tools` 查询。

@@ -6,6 +6,10 @@ All embeddings use the deterministic hashing provider; no network call is made.
 from __future__ import annotations
 
 import json
+import math
+import os
+from datetime import date
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -18,7 +22,7 @@ from app.errors import DomainError
 from app.knowledge import (
     KNOWLEDGE_SEED_VERSION, HashingEmbeddingProvider, OpenAIEmbeddingProvider,
     _split_long, chunk_text, content_sha256, create_document, merge_knowledge_hits,
-    search_knowledge,
+    reindex_document, search_knowledge,
 )
 from app.llm_analysis import build_llm_payload, validate_knowledge_references
 from app.main import create_app
@@ -53,6 +57,49 @@ LLM_OUTPUT = {
     "missing_information": ["广告活动级 ROAS"],
     "confidence": 0.72,
 }
+
+
+class FakeEmbeddingProvider:
+    """Deterministic offline provider used to simulate a model switch."""
+
+    def __init__(self, model: str, dimensions: int = 16):
+        self.model = model
+        self.dimensions = dimensions
+        self.calls = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls += len(texts)
+        vectors: list[list[float]] = []
+        for text in texts:
+            vector = [0.0] * self.dimensions
+            for index, char in enumerate(text):
+                vector[index % self.dimensions] += (ord(char) % 17) + 1.0
+            norm = math.sqrt(sum(value * value for value in vector))
+            vectors.append([value / norm for value in vector] if norm else vector)
+        return vectors
+
+
+class FailingEmbeddingProvider:
+    def __init__(self, model: str = "fake-fail"):
+        self.model = model
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        raise DomainError(
+            "knowledge_embedding_failed", "fake embedding failure", 502,
+        )
+
+
+def _reindex_payload(marker: str) -> KnowledgeDocumentInput:
+    return KnowledgeDocumentInput(
+        title="模型切换测试",
+        source=f"synthetic://test/reindex-{marker}",
+        version="v2",
+        effective_date=date(2026, 10, 1),
+        content=(
+            f"# 预算规则 {marker}\n\n广告预算下调必须经过审批。\n\n"
+            "## 复核\n七天后复核 ROAS 与退款率。"
+        ),
+    )
 
 
 def test_seed_knowledge_is_idempotent_and_does_not_delete_documents(client, analyst):
@@ -393,6 +440,265 @@ def test_invalid_embedding_is_not_persisted(client):
         after_chunks = int(session.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0)
     assert after_docs == before_docs
     assert after_chunks == before_chunks
+
+
+def test_duplicate_content_reindexes_for_new_embedding_model(client):
+    hashing = HashingEmbeddingProvider(model="hashing-v1")
+    fake = FakeEmbeddingProvider("fake-v2")
+    payload = _reindex_payload("duplicate")
+    factory = client.app.state.factory
+
+    with factory.begin() as session:
+        first = create_document(session, payload, hashing)
+    assert first.created is True
+    with factory() as session:
+        original = session.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == first.id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).all()
+        original_ids = [chunk.id for chunk in original]
+        original_contents = [chunk.content for chunk in original]
+        documents_before = int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0)
+        assert all(chunk.embedding_model == "hashing-v1" for chunk in original)
+
+    # Uploading the same content after switching models must re-embed the
+    # existing document rather than returning created=false and leaving it
+    # invisible to the new embedding space.
+    with factory.begin() as session:
+        second = create_document(session, payload, fake)
+    assert second.id == first.id
+    assert second.created is False
+    assert second.reindexed is True
+    assert second.chunk_count == len(original)
+
+    with factory() as session:
+        chunks = session.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == first.id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).all()
+        assert [chunk.id for chunk in chunks] == original_ids
+        assert [chunk.content for chunk in chunks] == original_contents
+        assert all(chunk.embedding_model == "fake-v2" for chunk in chunks)
+        assert int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0) == documents_before
+
+        recovered = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), fake,
+        )
+        assert any(hit.document_id == first.id for hit in recovered.hits)
+        old_space = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), hashing,
+        )
+        assert all(hit.document_id != first.id for hit in old_space.hits)
+
+
+def test_reindex_is_idempotent_and_preserves_document_metadata(client):
+    hashing = HashingEmbeddingProvider(model="hashing-v1")
+    fake = FakeEmbeddingProvider("fake-v2")
+    payload = _reindex_payload("idempotent")
+    factory = client.app.state.factory
+
+    with factory.begin() as session:
+        first = create_document(session, payload, hashing)
+    with factory() as session:
+        document = session.get(KnowledgeDocument, first.id)
+        before_metadata = (
+            document.source, document.version, document.effective_date, document.active,
+        )
+        before_ids = [chunk.id for chunk in session.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == first.id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).all()]
+
+    with factory.begin() as session:
+        once = reindex_document(session, first.id, fake)
+    assert once.reindexed is True
+    calls_after_first = fake.calls
+
+    with factory.begin() as session:
+        twice = reindex_document(session, first.id, fake)
+    assert twice.reindexed is False
+    assert fake.calls == calls_after_first
+
+    with factory() as session:
+        document = session.get(KnowledgeDocument, first.id)
+        assert (
+            document.source, document.version, document.effective_date, document.active,
+        ) == before_metadata
+        assert [chunk.id for chunk in session.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == first.id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).all()] == before_ids
+
+
+def test_reindex_failure_rolls_back_and_old_model_still_retrieves(client):
+    hashing = HashingEmbeddingProvider(model="hashing-v1")
+    payload = _reindex_payload("failure")
+    factory = client.app.state.factory
+
+    with factory.begin() as session:
+        created = create_document(session, payload, hashing)
+    with factory() as session:
+        before = [
+            (chunk.id, chunk.embedding_model, list(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+
+    with pytest.raises(DomainError) as caught:
+        with factory.begin() as session:
+            reindex_document(session, created.id, FailingEmbeddingProvider())
+    assert caught.value.code == "knowledge_embedding_failed"
+
+    with factory() as session:
+        after = [
+            (chunk.id, chunk.embedding_model, list(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+        assert after == before
+        result = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), hashing,
+        )
+        assert any(hit.document_id == created.id for hit in result.hits)
+
+
+def test_reindex_endpoint_requires_approver_and_is_repeatable(client, analyst, approver):
+    hashing = HashingEmbeddingProvider(model="hashing-v1")
+    fake = FakeEmbeddingProvider("fake-v2")
+    payload = _reindex_payload("endpoint")
+    factory = client.app.state.factory
+
+    with factory.begin() as session:
+        created = create_document(session, payload, hashing)
+    with factory.begin() as session:
+        reindex_document(session, created.id, fake)
+    with factory() as session:
+        documents_before = int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0)
+
+    assert client.post(
+        f"/api/knowledge/documents/{created.id}/reindex", headers=analyst,
+    ).status_code == 403
+
+    response = client.post(
+        f"/api/knowledge/documents/{created.id}/reindex", headers=approver,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == created.id
+    assert body["created"] is False
+    assert body["reindexed"] is True
+    assert body["chunk_count"] == created.chunk_count
+    with factory() as session:
+        chunks = session.scalars(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == created.id)
+        ).all()
+        assert all(chunk.embedding_model == "hashing-v1" for chunk in chunks)
+        assert int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0) == documents_before
+
+    repeat = client.post(
+        f"/api/knowledge/documents/{created.id}/reindex", headers=approver,
+    )
+    assert repeat.status_code == 200
+    assert repeat.json()["reindexed"] is False
+
+    logs = client.get(
+        f"/api/audit-logs?object_id={created.id}", headers=analyst,
+    ).json()["items"]
+    assert any(
+        item["action"] == "knowledge.document.reindexed" for item in logs
+    )
+
+    found = client.post(
+        "/api/knowledge/search", headers=analyst,
+        json={"query": "广告预算下调审批 ROAS", "top_k": 5},
+    ).json()
+    assert any(hit["document_id"] == created.id for hit in found["hits"])
+
+
+@pytest.mark.parametrize("length", [200, 201, 500])
+def test_markdown_heading_is_bounded_without_losing_body(length):
+    heading = "标" * length
+    content = f"# {heading}\n\n第一段内容。\n\n第二段内容。"
+    chunks = chunk_text(content, max_chars=300, overlap=50)
+    assert chunks
+    assert all(len(str(chunk["heading"] or "")) <= 200 for chunk in chunks)
+    assert chunks[0]["heading"] == heading[:200]
+    joined = "".join(str(chunk["content"]) for chunk in chunks)
+    assert "第一段内容。" in joined and "第二段内容。" in joined
+    assert joined.find("第一段内容。") < joined.find("第二段内容。")
+
+
+def test_long_heading_is_stored_within_column_limit(client):
+    heading = "长" * 500
+    payload = KnowledgeDocumentInput(
+        title="标题边界测试",
+        source="synthetic://test/heading-limit",
+        content=f"# {heading}\n\n正文内容必须保留。",
+    )
+    factory = client.app.state.factory
+    with factory.begin() as session:
+        created = create_document(
+            session, payload, HashingEmbeddingProvider(model="hashing-v1"),
+        )
+    assert created.created is True
+    assert KnowledgeChunk.__table__.c.heading.type.length == 200
+    with factory() as session:
+        chunks = session.scalars(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == created.id)
+        ).all()
+    assert chunks
+    assert all(len(chunk.heading or "") <= 200 for chunk in chunks)
+    assert all("正文内容必须保留。" in chunk.content for chunk in chunks)
+
+
+@pytest.mark.skipif(
+    not os.getenv("PROFITOPS_TEST_POSTGRES_URL"),
+    reason="PROFITOPS_TEST_POSTGRES_URL is not set",
+)
+def test_postgres_accepts_bounded_long_heading():
+    app = create_app(Settings(
+        database_url=os.environ["PROFITOPS_TEST_POSTGRES_URL"],
+        auto_seed=False, llm_api_key="",
+    ))
+    with TestClient(app) as client:
+        payload = {
+            "title": "PostgreSQL 标题边界",
+            "source": f"synthetic://test/postgres-heading-{uuid4()}",
+            "version": "v1",
+            "content": f"# {'长' * 500}\n\n正文内容必须保留。",
+        }
+        response = client.post(
+            "/api/knowledge/documents",
+            headers={"Authorization": "Bearer demo-approver"},
+            json=payload,
+        )
+        assert response.status_code == 201, response.text
+        item = response.json()
+        with app.state.factory() as session:
+            chunks = session.scalars(
+                select(KnowledgeChunk).where(KnowledgeChunk.document_id == item["id"])
+            ).all()
+        assert chunks
+        assert all(len(chunk.heading or "") <= 200 for chunk in chunks)
+        assert all("正文内容必须保留。" in chunk.content for chunk in chunks)
 
 
 def _failing_remote_provider() -> OpenAIEmbeddingProvider:

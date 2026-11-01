@@ -18,7 +18,7 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 - stores、products、orders、daily_operations：业务事实；daily_operations 为每日覆盖依据。
 - analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID；idempotency_key 全局唯一且绑定请求内容与创建者。`result` 包含确定性 `metrics`、`findings`、`llm` 运行元数据和 `engine`。
 - recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。`body.llm` 保存本次 LLM 运行结果（成功时含结构化输出），`body.knowledge` 保存检索片段及 `cited` 标记。
-- knowledge_documents、knowledge_chunks：运营知识文档与 Markdown 分段；正文 SHA-256 用于创建幂等，文档软删除，片段保存 embedding 与模型名。
+- knowledge_documents、knowledge_chunks：运营知识文档与 Markdown 分段；正文 SHA-256 用于创建幂等，文档软删除，片段保存 embedding 与模型名；`heading` 最长 200 字符。
 - executions：recommendation_id 唯一，idempotency_key 唯一；模拟结果和错误诊断。
 - audit_logs：操作人、动作、对象、时间、请求 ID、结果与详情。
 - schema_versions、seed_versions：可重复初始化版本记录。
@@ -54,9 +54,9 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 
 ## 知识库检索（RAG）
 
-知识库是服务端运营 SOP 的只读检索层，不是模型可任意写入的记忆。`knowledge_documents` 保存标题、来源、版本、生效日期、正文、SHA-256、元数据与 `active`；`knowledge_chunks` 保存按 Markdown 标题切分的片段、字符数、embedding 向量和 `embedding_model`。删除为软删除（`active=false`），保留审计与历史；创建时相同正文 SHA-256 幂等返回已有文档（`created=false`），不重复入库。`knowledge-v1` 种子包含 6 篇合成 SOP，重复 Seed 不重复插入，也不删除用户文档。
+知识库是服务端运营 SOP 的只读检索层，不是模型可任意写入的记忆。`knowledge_documents` 保存标题、来源、版本、生效日期、正文、SHA-256、元数据与 `active`；`knowledge_chunks` 保存按 Markdown 标题切分的片段、字符数、embedding 向量和 `embedding_model`。删除为软删除（`active=false`），保留审计与历史；创建时相同正文 SHA-256 幂等返回已有文档（`created=false`），不重复入库。相同正文但当前 embedding model 不同时，会在原文档上重嵌入现有 chunk（保留文档 ID、source、version、effective_date、active 与 chunk ID/正文），返回 `created=false, reindexed=true`；显式 reindex 可重复执行，已是最新模型时为 no-op。`knowledge-v1` 种子包含 6 篇合成 SOP，重复 Seed 不重复插入，也不删除用户文档。
 
-默认 `KNOWLEDGE_EMBEDDING_PROVIDER=hashing`：确定性特征哈希向量（默认 256 维），不联网、无额外依赖，测试与 CI 可复现。`openai` 走任意 OpenAI 兼容 `POST {base_url}/embeddings`，要求显式配置 base URL，密钥使用 SecretStr；响应按 `index` 排序并 L2 归一化。入库前严格拒绝 `null`、非数字、`NaN`、`Infinity`、空向量、重复/缺失 `index` 和维度不一致，所有异常映射 `knowledge_embedding_failed`（502），不会写入非法向量，也不会静默换模型。启动时远程 embedding 不可用不会阻断核心 API：知识库 Seed 事务回滚，失败原因写入 `/health` 与 `/api/demo` 的 `knowledge.seed_error`；数据库初始化失败仍会中止启动。检索只使用与当前 provider model 相同的片段；换模型后旧向量不参与检索，需要重新入库。
+默认 `KNOWLEDGE_EMBEDDING_PROVIDER=hashing`：确定性特征哈希向量（默认 256 维），不联网、无额外依赖，测试与 CI 可复现。`openai` 走任意 OpenAI 兼容 `POST {base_url}/embeddings`，要求显式配置 base URL，密钥使用 SecretStr；响应按 `index` 排序并 L2 归一化。入库前严格拒绝 `null`、非数字、`NaN`、`Infinity`、空向量、重复/缺失 `index` 和维度不一致，所有异常映射 `knowledge_embedding_failed`（502），不会写入非法向量，也不会静默换模型。启动时远程 embedding 不可用不会阻断核心 API：知识库 Seed 事务回滚，失败原因写入 `/health` 与 `/api/demo` 的 `knowledge.seed_error`；数据库初始化失败仍会中止启动。检索只使用与当前 provider model 相同的片段；换模型后旧向量不参与检索，需要对已有文档执行 reindex（重嵌入现有 chunk，保留文档与 chunk ID/正文）；重复 reindex 幂等。Markdown 标题写入 `knowledge_chunks.heading` 前截断到 200 字符（与字段长度一致），正文与段落顺序不受影响。
 
 切分按 Markdown 标题分段，超长段按字符边界切分并保留 overlap；默认 600 字符、100 重叠。检索对候选片段计算 `0.65 * cosine + 0.35 * 词法匹配 + 0.05 * 标题命中`，取 `candidate_k` 后加 `0.03 * 文档标题命中` 重排，返回 `top_k`。词法匹配对中文使用单字/双字/三字 token，单字权重较低；最高分低于 `KNOWLEDGE_MIN_SCORE`（默认 0.15）时判定 `no_answer=true` 并清空 `hits`，低置信度片段不能被引用。该阈值是离线评测校准的工程默认值，不是通用准确率保证。
 
@@ -79,7 +79,8 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 - GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据、错误、`result.engine`、`result.llm` 和 `result.knowledge`；原生路径的 `result.llm` 另含 `native_tools`、`termination_reason`、`rounds` 和 `tool_calls`。检索失败时保留 `result.knowledge_error`，不阻断确定性分析。
 - GET /api/tools：工具输入输出 JSON Schema、权限和副作用分类。
 - GET /api/knowledge/documents：当前 active 知识文档及 chunk 数。
-- POST /api/knowledge/documents：仅 approver；`{title,source,version,effective_date?,content,metadata?}`；新建返回 201，相同正文幂等返回已有文档 200（`created=false`）。
+- POST /api/knowledge/documents：仅 approver；`{title,source,version,effective_date?,content,metadata?}`；新建返回 201，相同正文幂等返回已有文档 200（`created=false`）；若当前 embedding model 不同则重嵌入并返回 `reindexed=true`。
+- POST /api/knowledge/documents/{id}/reindex：仅 approver；用当前 embedding provider 重嵌入该文档现有 chunk，保留文档 ID、source、version、effective_date、active 与 chunk ID/正文；返回 200，已是最新模型时 `reindexed=false`；文档不存在或已停用返回 404。
 - DELETE /api/knowledge/documents/{id}：仅 approver；软删除，保留片段与审计。
 - POST /api/knowledge/search：`{query,top_k?}`；返回 `{query,hits,no_answer,embedding_model,retrieval_ms}`，`hits[{chunk_id,document_id,title,source,version,heading,content,score,rank}]`。
 - GET /api/recommendations、GET /api/recommendations/{id}：建议及 simulation 动作与执行记录；`body.knowledge` 保存本次检索片段和 LLM 是否引用（`cited`）。

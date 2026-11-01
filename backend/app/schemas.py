@@ -275,6 +275,7 @@ class KnowledgeDocumentOutput(StrictModel):
     active: bool
     chunk_count: int = Field(ge=0)
     created: bool = False
+    reindexed: bool = False
     created_at: datetime
 
 
