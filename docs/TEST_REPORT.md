@@ -2,6 +2,24 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-01 PR #8 最终合并门禁（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `fb02522`。本轮只处理三项明确问题：真实历史库迁移（P1）、指标标签基数（P2）、租约到期严格保护（P3）；不扩展功能，不调用付费模型，不修改 `data/profitops.db`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（120.71s，1 个第三方 DeprecationWarning） |
+| 历史 SQLite 迁移 | `python -m pytest backend/tests/test_migrations.py -q` | 4 passed；真实前租户 schema（无 `tenants`/`users`、`tenant_id`、任务字段）+ `stamp 0001_baseline → upgrade head`；行数与外键保留；列宽 200、复合唯一、租约字段、索引到位；重复 upgrade no-op；跨租户同键可用、同租户重复键拒绝；重复活跃文档保留最新一行并软删除其余；含跨租户同键时 downgrade 因唯一约束失败且保留原行 |
+| 历史 PostgreSQL 迁移 | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests/test_postgres_migrations.py -q` | 2 passed；一次性 schema + 真实前租户 schema，原地升级、数据与外键保留、约束与索引正确、重复 upgrade no-op；downgrade 冲突时失败且保留行；schema 结束后删除 |
+| 指标标签基数 | `python -m pytest backend/tests/test_observability.py -q` | 16 passed；40 个随机未匹配路径只产生一个 `<unmatched>` 404 序列；匹配路由使用模板 `/api/analyses/{analysis_id}`；25 个随机路径的提前 429 只产生一个 `<rate_limited>` 序列 |
+| 租约到期保护 | `python -m pytest backend/tests/test_worker.py -q` | 22 passed；恰好到期、到期未接管（`write_job` 与 `create_recommendation`）、`assert_owned`、心跳延迟、已被接管、活跃租约正常续租 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件，7.82s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，4.57s |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| Alembic 新库与降级 | 临时 SQLite：`python scripts/migrate.py upgrade head` / `current` / `python -m alembic -c backend/alembic.ini check` / `downgrade base` | `0002_tenant_scoped_idempotency (head)`；`No new upgrade operations detected`；降级成功 |
+
+真实进程 kill/restart **本轮未重跑**：上一轮（基线 `40a629c`）已在临时库完成真实 `taskkill /F` 与重启恢复；本轮 P3 只增加写入时的租约校验，`requeue_expired` / `finalize_job` 的恢复路径未改，并由 22 个 worker 测试覆盖。真实 LLM、浏览器 E2E、Python 3.11 **未验证**（本机 `.venv` 为 3.12.8，`LLM_API_KEY` 为空）；CI 结果在推送后确认。迁移测试与冒烟均使用临时数据库，未修改 `data/profitops.db`。
+
 ## 2026-11-01 PR #8 P2 收口复验（Claude Code）
 
 分支 `feat/platform-reliability`，基线 `40a629c`。本轮只修复四项 P2：跨租户幂等键冲突、租户前缀后的列宽、并发手工重试状态回退、`run_analysis` 写入 failed 后 `finalize_job` 前退出的恢复；不新增功能，不修改 RAG、前端页面或执行语义。

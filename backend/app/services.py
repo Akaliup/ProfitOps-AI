@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .audit import record
 from .errors import DomainError, LeaseLost
 from .metrics import verify_evidence
-from .models import Analysis, Execution, Recommendation, new_id, utcnow
+from .models import Analysis, Execution, Recommendation, lease_is_live, new_id, utcnow
 from .schemas import (
     DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsReport,
     RecommendationInput, RecommendationOutput, StrictModel,
@@ -76,8 +76,11 @@ def create_recommendation(
         if expected_attempt is None:
             raise LeaseLost("analysis lease attempt missing")
         # Lock the analysis row in this same transaction before writing. A
-        # worker whose lease was reclaimed fails here, so it cannot insert a
-        # recommendation first and discover the lost lease afterwards.
+        # worker whose lease was reclaimed, or whose lease merely ran out
+        # before a takeover, fails here, so it cannot insert a recommendation
+        # first and discover the lost lease afterwards. The expiry comparison
+        # runs in SQL: SQLite hands back naive datetimes while ``utcnow()`` is
+        # aware, so evaluating it in Python would be wrong or raise.
         owned = session.execute(
             update(Analysis)
             .where(
@@ -85,8 +88,10 @@ def create_recommendation(
                 Analysis.status == "running",
                 Analysis.worker_id == worker_id,
                 Analysis.attempts == expected_attempt,
+                lease_is_live(utcnow()),
             )
             .values(updated_at=utcnow())
+            .execution_options(synchronize_session=False)
         )
         if owned.rowcount != 1:
             raise LeaseLost("analysis lease lost")

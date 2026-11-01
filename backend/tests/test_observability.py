@@ -1,10 +1,15 @@
+import re
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.llm import CircuitBreakerProvider, LLMError, LLMResult
 from app.main import create_app
-from app.observability import METRICS
+from app.observability import (
+    METRICS, RATE_LIMITED_ROUTE_LABEL, UNMATCHED_ROUTE_LABEL,
+)
 
 
 def make_client(tmp_path, **overrides):
@@ -77,7 +82,10 @@ def test_login_rate_limit_returns_429_with_retry_after(tmp_path):
 
         metrics = http.get("/metrics").text
         assert 'profitops_rate_limited_total{scope="login"} 1' in metrics
-        assert 'profitops_http_requests_total{method="POST",path="/api/auth/login",status="429"} 1' in metrics
+        assert (
+            'profitops_http_requests_total{method="POST",'
+            f'path="{RATE_LIMITED_ROUTE_LABEL}",status="429"' '} 1'
+        ) in metrics
 
 
 def test_login_rate_limit_ignores_unverified_bearer_tokens(tmp_path):
@@ -120,6 +128,56 @@ def test_default_rate_limit_is_per_bearer_token(tmp_path):
         assert http.get("/api/analyses", headers=analyst).status_code == 429
         # A different identity has its own bucket.
         assert http.get("/api/analyses", headers=approver).status_code == 200
+
+
+def _metric_paths(body: str, status: str) -> set[str]:
+    pattern = re.compile(
+        r'profitops_http_requests_total\{[^}]*path="([^"]+)"[^}]*status="'
+        + re.escape(status) + r'"[^}]*\}'
+    )
+    return set(pattern.findall(body))
+
+
+def test_unmatched_paths_use_one_fixed_metric_label(tmp_path):
+    with make_client(tmp_path) as http:
+        for _ in range(40):
+            assert http.get(f"/missing/{uuid4()}").status_code == 404
+        body = http.get("/metrics").text
+        assert _metric_paths(body, "404") == {UNMATCHED_ROUTE_LABEL}
+        assert (
+            'profitops_http_requests_total{method="GET",'
+            f'path="{UNMATCHED_ROUTE_LABEL}",status="404"' "} 40"
+        ) in body
+
+
+def test_matched_routes_use_route_template_not_concrete_path(tmp_path):
+    with make_client(tmp_path) as http:
+        for _ in range(10):
+            response = http.get(f"/api/analyses/{uuid4()}")
+            assert response.status_code == 401
+        body = http.get("/metrics").text
+        assert _metric_paths(body, "401") == {"/api/analyses/{analysis_id}"}
+        assert (
+            'profitops_http_requests_total{method="GET",'
+            'path="/api/analyses/{analysis_id}",status="401"} 10'
+        ) in body
+
+
+def test_rate_limited_early_returns_use_one_fixed_metric_label(tmp_path):
+    with make_client(
+        tmp_path, rate_limit_enabled=True, rate_limit_requests=1,
+        rate_limit_window_seconds=60,
+    ) as http:
+        assert http.get("/api/tools").status_code != 429
+        for _ in range(25):
+            assert http.get(f"/missing/{uuid4()}").status_code == 429
+        body = http.get("/metrics").text
+        assert _metric_paths(body, "429") == {RATE_LIMITED_ROUTE_LABEL}
+        assert (
+            'profitops_http_requests_total{method="GET",'
+            f'path="{RATE_LIMITED_ROUTE_LABEL}",status="429"' "} 25"
+        ) in body
+        assert 'profitops_rate_limited_total{scope="default"} 25' in body
 
 
 def test_circuit_opens_after_consecutive_retryable_failures():

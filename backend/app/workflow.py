@@ -18,7 +18,7 @@ from .llm_analysis import (
 )
 from .llm_tools import ToolLoopResult, run_tool_loop
 from .metrics import verify_evidence
-from .models import Analysis, utcnow
+from .models import Analysis, lease_is_live, utcnow
 from .schemas import (
     DriverReport, KnowledgeSearchOutput, LLMAnalysisOutput, LLMErrorInfo, LLMRun,
     LLMUsage, MetricsInput, MetricsReport,
@@ -114,12 +114,21 @@ def run_analysis(
     fence: tuple[str, int] | None = None
     with factory.begin() as session:
         if claimed:
-            analysis = session.get(Analysis, analysis_id)
-            if analysis is None or analysis.status != "running":
+            if worker_id is None:
                 return
-            if worker_id is None or analysis.worker_id != worker_id:
-                return
-            if expected_attempt is not None and analysis.attempts != expected_attempt:
+            # Ownership is checked in SQL, including the lease expiry: a worker
+            # whose lease ran out before anyone reclaimed the job must not
+            # start work it can no longer commit.
+            conditions = [
+                Analysis.id == analysis_id,
+                Analysis.status == "running",
+                Analysis.worker_id == worker_id,
+                lease_is_live(utcnow()),
+            ]
+            if expected_attempt is not None:
+                conditions.append(Analysis.attempts == expected_attempt)
+            analysis = session.scalar(select(Analysis).where(*conditions))
+            if analysis is None:
                 return
             fence = (worker_id, analysis.attempts)
         else:
@@ -152,8 +161,15 @@ def run_analysis(
                 Analysis.id == analysis_id,
                 Analysis.worker_id == fence[0],
                 Analysis.attempts == fence[1],
+                # An expired lease is lost even if no newer worker has claimed
+                # the row yet: the job may already be requeued for retry.
+                lease_is_live(utcnow()),
             )
             .values(**values)
+            # The expiry predicate is a database comparison; skip ORM-side
+            # evaluation, which would compare a naive SQLite value to an aware
+            # ``utcnow()``.
+            .execution_options(synchronize_session=False)
         )
         if owned.rowcount != 1:
             raise LeaseLost("analysis lease lost")
@@ -168,8 +184,10 @@ def run_analysis(
                 Analysis.id == analysis_id,
                 Analysis.worker_id == fence[0],
                 Analysis.attempts == fence[1],
+                lease_is_live(utcnow()),
             )
             .values(updated_at=utcnow())
+            .execution_options(synchronize_session=False)
         )
         if owned.rowcount != 1:
             raise LeaseLost("analysis lease lost")

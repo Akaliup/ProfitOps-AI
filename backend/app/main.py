@@ -27,8 +27,8 @@ from .models import (
     Recommendation, Store, User, new_id, utcnow,
 )
 from .observability import (
-    METRICS, RATE_LIMIT_EXEMPT_PATHS, TokenBucketLimiter, normalize_path,
-    rate_limit_key, rate_limit_scope, retry_after_header,
+    METRICS, RATE_LIMIT_EXEMPT_PATHS, RATE_LIMITED_ROUTE_LABEL, TokenBucketLimiter,
+    normalize_path, rate_limit_key, rate_limit_scope, retry_after_header, route_label,
 )
 from .schemas import (
     AnalysisRequest, DecisionRequest, KnowledgeDocumentInput, KnowledgeSearchInput,
@@ -157,7 +157,9 @@ def create_app(settings: Settings | None = None):
             )
             if not allowed:
                 duration = perf_counter() - started
-                record_http(request.method, path, 429, duration)
+                # Routing has not run yet, so the matched template is unknown.
+                # A fixed label prevents arbitrary paths from minting series.
+                record_http(request.method, RATE_LIMITED_ROUTE_LABEL, 429, duration)
                 if settings.metrics_enabled:
                     METRICS.inc("rate_limited_total", scope=scope)
                 response = JSONResponse(
@@ -186,12 +188,11 @@ def create_app(settings: Settings | None = None):
         try:
             response = await call_next(request)
         except Exception:
-            record_http(request.method, path, 500, perf_counter() - started)
+            record_http(request.method, route_label(request.scope), 500, perf_counter() - started)
             raise
         duration = perf_counter() - started
         response.headers["X-Request-ID"] = request.state.request_id
-        route = request.scope.get("route")
-        record_http(request.method, getattr(route, "path", None) or path, response.status_code, duration)
+        record_http(request.method, route_label(request.scope), response.status_code, duration)
         logger.info("http_request", extra={"request_id": request.state.request_id, "method": request.method, "path": path, "status": response.status_code, "duration_ms": round(duration * 1000, 2)})
         return response
 

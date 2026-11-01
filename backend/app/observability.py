@@ -19,6 +19,12 @@ BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
 
 RATE_LIMIT_EXEMPT_PATHS = frozenset({"/health", "/metrics", "/openapi.json", "/docs", "/redoc"})
 
+# Fixed labels keep HTTP metric cardinality bounded. A request that matches no
+# route (or is rejected before routing by the rate limiter) must never use its
+# raw URL as a label: an arbitrary client can mint unlimited distinct paths.
+UNMATCHED_ROUTE_LABEL = "<unmatched>"
+RATE_LIMITED_ROUTE_LABEL = "<rate_limited>"
+
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -29,6 +35,17 @@ def normalize_path(path: str) -> str:
         for segment in path.split("/")
     ]
     return "/".join(parts)[:120]
+
+
+def route_label(scope, default: str = UNMATCHED_ROUTE_LABEL) -> str:
+    """Prefer the matched route template over the concrete request path.
+
+    Starlette sets ``scope["route"]`` only after routing. Requests that never
+    match (404s, or the rate limiter's early return) get a fixed label.
+    """
+    route = scope.get("route")
+    template = getattr(route, "path", None)
+    return template or default
 
 
 def _metric_name(name: str) -> str:

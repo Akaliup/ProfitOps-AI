@@ -20,6 +20,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.db import upgrade_legacy_schema
 from app.models import Analysis, Execution
 
 revision: str = "0002_tenant_scoped_idempotency"
@@ -75,15 +76,12 @@ def _upgrade_postgres(bind) -> None:
 def _recreate_sqlite(table: str, copy_from: sa.Table) -> None:
     # SQLite's table rebuild drops the old table. Child rows (recommendations
     # reference analyses; executions reference recommendations) would otherwise
-    # fail that DROP while foreign keys are enforced. Alembic's SQLite DDL is
-    # non-transactional, so the PRAGMA is effective here.
+    # fail that DROP while foreign keys are enforced. ``upgrade()`` turns
+    # enforcement off on this connection before any DML, because the pragma is
+    # ignored inside a transaction and the knowledge dedupe above opens one.
     bind = op.get_bind()
-    bind.execute(sa.text("PRAGMA foreign_keys=OFF"))
-    try:
-        with op.batch_alter_table(table, copy_from=copy_from, recreate="always"):
-            pass
-    finally:
-        bind.execute(sa.text("PRAGMA foreign_keys=ON"))
+    with op.batch_alter_table(table, copy_from=copy_from, recreate="always"):
+        pass
     # The rebuild does not recreate indexes that exist only in the supplied
     # table definition (notably ``index=True`` columns such as tenant_id).
     # Restore every declared index that the rebuilt table is missing.
@@ -183,6 +181,18 @@ def _downgrade_postgres(bind) -> None:
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
+        # SQLite ignores this pragma inside a transaction, and the knowledge
+        # dedupe below issues UPDATEs that open one. Set it before any DML:
+        # both table rebuilds drop a parent table while child rows still
+        # reference it. Every row is copied to the replacement table, so the
+        # relationships stay intact. The pragma is connection-scoped; the
+        # engine's next connection turns enforcement back on.
+        bind.execute(sa.text("PRAGMA foreign_keys=OFF"))
+    # A genuine pre-tenancy database has no tenant_id or durable-job columns.
+    # It can only be stamped as 0001_baseline, and stamping runs no DDL, so the
+    # baseline shape must be materialized here before the constraint changes.
+    upgrade_legacy_schema(bind)
+    if bind.dialect.name == "sqlite":
         _upgrade_sqlite()
     else:
         _upgrade_postgres(bind)
@@ -191,6 +201,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
+        # Same parent-table rebuild as the upgrade: disable enforcement before
+        # any DML in this migration's transaction.
+        bind.execute(sa.text("PRAGMA foreign_keys=OFF"))
         _downgrade_sqlite()
     else:
         _downgrade_postgres(bind)

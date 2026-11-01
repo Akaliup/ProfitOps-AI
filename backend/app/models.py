@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey,
-    Index, Integer, String, Text, UniqueConstraint, text,
+    Index, Integer, String, Text, UniqueConstraint, and_, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -192,6 +192,17 @@ class Analysis(Base):
     worker_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+def lease_is_live(now: datetime):
+    """SQL predicate: this analysis still holds a non-expired worker lease.
+
+    The comparison runs in the database. SQLite returns naive datetimes while
+    ``now`` is timezone-aware, so evaluating the lease in Python would either
+    raise or disagree with the stored value. A NULL ``lease_until`` means the
+    row was never claimed or its lease was already cleared; neither is owned.
+    """
+    return and_(Analysis.lease_until.is_not(None), Analysis.lease_until > now)
 
 
 class Recommendation(Base):

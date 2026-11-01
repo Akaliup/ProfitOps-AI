@@ -21,7 +21,7 @@ from .audit import record
 from .config import Settings
 from .db import begin_write
 from .errors import LeaseLost
-from .models import Analysis, utcnow
+from .models import Analysis, lease_is_live, utcnow
 from .observability import METRICS
 from .workflow import run_analysis
 
@@ -350,21 +350,39 @@ class LeaseHeartbeat:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="analysis-heartbeat", daemon=True)
 
+    def _beat(self) -> bool:
+        """Extend the lease only if this worker still holds a live one.
+
+        Returns ``False`` when the lease is gone: expired before the beat ran,
+        reclaimed by another worker, or the row left ``running``. A stale
+        worker must never revive its own lease, so the caller stops beating.
+        """
+        now = utcnow()
+        with self.factory.begin() as session:
+            stmt = update(Analysis).where(
+                Analysis.id == self.analysis_id,
+                Analysis.status == "running",
+                Analysis.worker_id == self.worker_id,
+                lease_is_live(now),
+            )
+            if self.attempt is not None:
+                stmt = stmt.where(Analysis.attempts == self.attempt)
+            renewed = session.execute(
+                stmt.values(lease_until=now + timedelta(seconds=self.lease_seconds))
+                .execution_options(synchronize_session=False)
+            )
+            return renewed.rowcount == 1
+
     def _run(self):
         interval = max(1.0, self.lease_seconds / 3)
         while not self._stop.wait(interval):
             try:
-                with self.factory.begin() as session:
-                    stmt = update(Analysis).where(
-                        Analysis.id == self.analysis_id,
-                        Analysis.status == "running",
-                        Analysis.worker_id == self.worker_id,
+                if not self._beat():
+                    logger.warning(
+                        "lease_heartbeat_lost",
+                        extra={"analysis_id": self.analysis_id, "worker_id": self.worker_id},
                     )
-                    if self.attempt is not None:
-                        stmt = stmt.where(Analysis.attempts == self.attempt)
-                    session.execute(
-                        stmt.values(lease_until=utcnow() + timedelta(seconds=self.lease_seconds))
-                    )
+                    return
             except Exception:
                 logger.warning(
                     "lease_heartbeat_failed",
@@ -480,8 +498,17 @@ def process_claimed_job(factory, engine, registry, analysis_id: str, settings: S
     owned = False
     try:
         with factory() as session:
-            row = session.get(Analysis, analysis_id)
-            if row is not None and row.status == "running" and row.worker_id == worker_id:
+            # Starting a job whose lease already expired would only produce
+            # writes that the lease predicate rejects; leave it to recovery.
+            row = session.scalar(
+                select(Analysis).where(
+                    Analysis.id == analysis_id,
+                    Analysis.status == "running",
+                    Analysis.worker_id == worker_id,
+                    lease_is_live(utcnow()),
+                )
+            )
+            if row is not None:
                 attempt = row.attempts
                 owned = True
         if not owned:
@@ -512,6 +539,7 @@ def process_claimed_job(factory, engine, registry, analysis_id: str, settings: S
                             Analysis.status == "running",
                             Analysis.worker_id == worker_id,
                             Analysis.attempts == attempt,
+                            lease_is_live(utcnow()),
                         )
                         .values(
                             status="failed",
@@ -522,6 +550,7 @@ def process_claimed_job(factory, engine, registry, analysis_id: str, settings: S
                             },
                             updated_at=utcnow(),
                         )
+                        .execution_options(synchronize_session=False)
                     )
                     if failed.rowcount == 1:
                         row = session.get(Analysis, analysis_id)

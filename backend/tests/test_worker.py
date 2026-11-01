@@ -1,11 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
 from sqlalchemy import delete, func, select
 
-from app.models import Analysis, AuditLog, Recommendation, utcnow
+from app.models import Analysis, AuditLog, Recommendation, lease_is_live, utcnow
 from app import main as main_module
 from app import worker, workflow
 
@@ -351,6 +351,224 @@ def test_create_recommendation_rejects_reclaimed_lease_before_write(client, monk
         # rejected and the step was not marked completed.
         assert row.steps[-1]["name"] == "create_recommendation"
         assert row.steps[-1]["status"] == "running"
+
+
+def test_lease_predicate_treats_exact_expiry_as_expired(client):
+    """The boundary belongs to expiry, matching ``requeue_expired``'s ``<= now``."""
+    boundary = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    add_analysis(
+        client, id="boundary", idempotency_key="boundary", status="running",
+        attempts=1, worker_id="worker-a", lease_until=boundary,
+    )
+    factory = client.app.state.factory
+
+    def owned(now) -> bool:
+        with factory() as session:
+            return session.scalar(select(Analysis.id).where(
+                Analysis.id == "boundary", lease_is_live(now),
+            )) is not None
+
+    assert owned(boundary) is False
+    assert owned(boundary - timedelta(microseconds=1)) is True
+    assert owned(boundary + timedelta(microseconds=1)) is False
+
+
+def test_expired_lease_stops_writes_without_takeover(client, monkeypatch):
+    """An expired lease blocks result writes even before anyone reclaims the job."""
+    created = client.post("/api/analyses", json={}, headers={"Authorization": "Bearer demo-analyst"})
+    assert created.status_code == 202
+    analysis_id = created.json()["id"]
+    factory, registry, settings = (
+        client.app.state.factory, client.app.state.registry, client.app.state.settings,
+    )
+    now = utcnow()
+    with factory.begin() as session:
+        row = session.get(Analysis, analysis_id)
+        row.steps = []
+        row.snapshot = {}
+        row.result = None
+        row.recommendation_id = None
+        row.error = None
+        row.status = "running"
+        row.attempts = 1
+        row.worker_id = "worker-a"
+        row.lease_until = now + timedelta(seconds=60)
+
+    original = registry.invoke
+    expired = []
+
+    def invoke(name, arguments, context):
+        if not expired:
+            expired.append(name)
+            # The lease runs out while the step is executing. No newer worker
+            # claims the row: worker_id and attempts stay untouched, so only a
+            # lease check can reject the write.
+            with factory.begin() as session:
+                session.get(Analysis, analysis_id).lease_until = utcnow() - timedelta(seconds=1)
+        return original(name, arguments, context)
+
+    monkeypatch.setattr(registry, "invoke", invoke)
+    workflow.run_analysis(
+        factory, registry, analysis_id, settings, None, claimed=True,
+        worker_id="worker-a", expected_attempt=1,
+    )
+
+    assert expired == ["get_sales_metrics"]
+    with factory() as session:
+        row = session.get(Analysis, analysis_id)
+        assert row.status == "running"
+        assert row.worker_id == "worker-a" and row.attempts == 1
+        # The step started under a live lease, but its result was not persisted.
+        assert row.result is None
+        assert "raw" not in row.snapshot and "report" not in row.snapshot
+        assert [step["name"] for step in row.steps] == ["receive_request", "get_sales_metrics"]
+        assert row.steps[-1]["status"] == "running"
+        # A stale worker never revives its own lease.
+        assert session.scalar(select(Analysis.id).where(
+            Analysis.id == analysis_id, lease_is_live(utcnow()),
+        )) is None
+
+
+def test_create_recommendation_rejects_expired_lease_without_takeover(client, monkeypatch):
+    created = client.post("/api/analyses", json={}, headers={"Authorization": "Bearer demo-analyst"})
+    assert created.status_code == 202
+    analysis_id = created.json()["id"]
+    factory, registry, settings = (
+        client.app.state.factory, client.app.state.registry, client.app.state.settings,
+    )
+    now = utcnow()
+    with factory.begin() as session:
+        session.execute(delete(Recommendation).where(Recommendation.analysis_id == analysis_id))
+        row = session.get(Analysis, analysis_id)
+        row.steps = []
+        row.snapshot = {}
+        row.result = None
+        row.recommendation_id = None
+        row.error = None
+        row.status = "running"
+        row.attempts = 1
+        row.worker_id = "worker-a"
+        row.lease_until = now + timedelta(seconds=60)
+
+    original = registry.invoke
+    calls = []
+
+    def invoke(name, arguments, context):
+        calls.append(name)
+        if name == "create_recommendation":
+            # Expire the lease in the same worker/attempt, without a takeover.
+            with factory.begin() as session:
+                session.get(Analysis, analysis_id).lease_until = utcnow() - timedelta(seconds=1)
+        return original(name, arguments, context)
+
+    monkeypatch.setattr(registry, "invoke", invoke)
+    workflow.run_analysis(
+        factory, registry, analysis_id, settings, None, claimed=True,
+        worker_id="worker-a", expected_attempt=1,
+    )
+
+    assert "create_recommendation" in calls
+    with factory() as session:
+        assert session.scalar(select(Recommendation).where(
+            Recommendation.analysis_id == analysis_id,
+        )) is None
+        row = session.get(Analysis, analysis_id)
+        assert row.recommendation_id is None
+        assert row.status == "running"
+        assert row.worker_id == "worker-a" and row.attempts == 1
+        assert row.steps[-1]["name"] == "create_recommendation"
+        assert row.steps[-1]["status"] == "running"
+
+
+def test_assert_owned_rejects_expired_lease_before_audit(client, monkeypatch):
+    created = client.post("/api/analyses", json={}, headers={"Authorization": "Bearer demo-analyst"})
+    assert created.status_code == 202
+    analysis_id = created.json()["id"]
+    factory, registry, settings = (
+        client.app.state.factory, client.app.state.registry, client.app.state.settings,
+    )
+    now = utcnow()
+    with factory.begin() as session:
+        session.execute(delete(AuditLog).where(AuditLog.object_id == analysis_id))
+        row = session.get(Analysis, analysis_id)
+        row.steps = []
+        row.snapshot = {}
+        row.result = None
+        row.recommendation_id = None
+        row.error = None
+        row.status = "running"
+        row.attempts = 1
+        row.worker_id = "worker-a"
+        row.lease_until = now + timedelta(seconds=60)
+
+    original_plan = workflow.plan_action
+    expired = []
+
+    def plan(report, findings):
+        if not expired:
+            expired.append(True)
+            with factory.begin() as session:
+                session.get(Analysis, analysis_id).lease_until = utcnow() - timedelta(seconds=1)
+        return original_plan(report, findings)
+
+    monkeypatch.setattr(workflow, "plan_action", plan)
+    workflow.run_analysis(
+        factory, registry, analysis_id, settings, None, claimed=True,
+        worker_id="worker-a", expected_attempt=1,
+    )
+
+    assert expired
+    with factory() as session:
+        row = session.get(Analysis, analysis_id)
+        # assert_owned runs before the LLM audit, so the expired lease kept the
+        # audit row out entirely.
+        assert session.scalar(select(AuditLog).where(
+            AuditLog.object_id == analysis_id,
+            AuditLog.action == "analysis.llm_fallback",
+        )) is None
+        assert row.steps[-1]["name"] == "llm_root_cause_analysis"
+        assert row.steps[-1]["status"] == "running"
+
+
+def test_heartbeat_does_not_renew_expired_or_taken_over_lease(client):
+    now = utcnow()
+    add_analysis(
+        client, id="delayed", idempotency_key="delayed", status="running",
+        attempts=1, worker_id="worker-a", lease_until=now - timedelta(seconds=1),
+    )
+    add_analysis(
+        client, id="taken", idempotency_key="taken", status="running",
+        attempts=2, worker_id="worker-b", lease_until=now + timedelta(seconds=60),
+    )
+    factory = client.app.state.factory
+    with factory() as session:
+        delayed_before = session.get(Analysis, "delayed").lease_until
+        taken_before = session.get(Analysis, "taken").lease_until
+
+    # A delayed beat that finds an expired lease must not renew it.
+    assert worker.LeaseHeartbeat(factory, "delayed", "worker-a", 30, attempt=1)._beat() is False
+    # A stale worker must not touch the newer worker's lease.
+    assert worker.LeaseHeartbeat(factory, "taken", "worker-a", 30, attempt=1)._beat() is False
+
+    with factory() as session:
+        assert session.get(Analysis, "delayed").lease_until == delayed_before
+        taken = session.get(Analysis, "taken")
+        assert taken.lease_until == taken_before
+        assert taken.worker_id == "worker-b" and taken.attempts == 2
+
+
+def test_heartbeat_renews_a_live_lease(client):
+    now = utcnow()
+    add_analysis(
+        client, id="live", idempotency_key="live", status="running",
+        attempts=1, worker_id="worker-a", lease_until=now + timedelta(seconds=5),
+    )
+    factory = client.app.state.factory
+    assert worker.LeaseHeartbeat(factory, "live", "worker-a", 30, attempt=1)._beat() is True
+    with factory() as session:
+        assert session.scalar(select(Analysis.id).where(
+            Analysis.id == "live", lease_is_live(utcnow() + timedelta(seconds=20)),
+        )) is not None
 
 
 def test_manual_retry_endpoint_requeues_failed_job(client, analyst):

@@ -37,7 +37,11 @@ python scripts/migrate.py upgrade head
 python scripts/migrate.py current
 ```
 
-`upgrade head` 会应用 `0002_tenant_scoped_idempotency`：把 analyses/executions 的 idempotency_key 从全局唯一、`VARCHAR(100)` 改为 `(tenant_id, idempotency_key)` 复合唯一、`VARCHAR(200)`，保留既有行。该约束变更**必须由 Alembic 执行**；应用启动的 `initialize_database` 兼容迁移只补充 `tenant_id`、任务字段和知识库索引，不会修改这两个唯一约束。未执行 0002 的旧库仍会遇到跨租户键冲突和 105 字符键超限。`downgrade` 只用于本地验证，会删除表，不要对含审批/审计数据的库执行。
+真正的前租户库（没有 `tenants`/`users` 表，没有 `tenant_id`，也没有 `attempts`/`lease_until` 等任务字段）同样走上面的官方路径。`stamp 0001_baseline` 只写版本号、不执行 DDL，因此 `0002_tenant_scoped_idempotency` 会先调用启动兼容迁移的 `upgrade_legacy_schema` 把基线结构补齐，再把 analyses/executions 的 idempotency_key 从全局唯一、`VARCHAR(100)` 改为 `(tenant_id, idempotency_key)` 复合唯一、`VARCHAR(200)`。全过程原地升级：不删业务表、不清库、不要求手工重置，既有 Analysis/Recommendation/Execution/Audit 行与外键关系保留，旧行补齐 `tenant_id='demo'`。
+
+SQLite 的表重建会临时删除被引用的父表；迁移在写入任何 DML 之前于当前连接关闭 `PRAGMA foreign_keys`，行复制完成后外键关系仍然有效，迁移结束可用 `PRAGMA foreign_key_check` 验证（应为空）。PostgreSQL 使用常规 `ALTER TABLE`，无需关闭外键。若历史库存在重复的活跃知识文档，迁移保留最新一行并把其余行 `active=false`，避免新部分唯一索引创建失败。
+
+该约束变更**必须由 Alembic 执行**；应用启动的 `initialize_database` 兼容迁移只补充 `tenant_id`、任务字段和知识库索引，不会修改这两个唯一约束。未执行 0002 的旧库仍会遇到跨租户键冲突和 105 字符键超限。`downgrade` 只用于本地验证：若库中存在跨租户同键行，唯一约束会让降级失败并保留原行；其余情况会删除表，不要对含审批/审计数据的库执行。
 
 SQLite 备份：
 
@@ -68,11 +72,15 @@ curl -s http://127.0.0.1:8010/metrics
 - `profitops_llm_requests_total{outcome,code}`、`profitops_llm_circuit_state`（0 closed、1 half-open、2 open）。
 - `profitops_rate_limited_total{scope}`。
 
+HTTP 请求指标的 `path` 标签使用路由模板（如 `/api/analyses/{analysis_id}`），未匹配路由固定为 `<unmatched>`，限流器在路由前提前返回的 429 固定为 `<rate_limited>`。标签基数不随客户端路径增长；不要改回原始 URL。
+
 `PROFITOPS_METRICS_ENABLED=false` 会关闭 `/metrics` 并停止记录。日志为 JSON，带 `request_id`；API 错误响应也返回同一个 `request_id`，可用 `GET /api/audit-logs?request_id=...` 追踪。
 
 ## 4. 分析任务队列
 
 分析任务持久化在 `analyses` 表。正常状态流转：`queued → running → waiting_approval / completed / insufficient_data / failed`。worker 用条件 UPDATE 抢占并写 `attempts`、`worker_id`、`lease_until`；执行期间心跳续租。
+
+租约是写入许可，不只是抢占标记：创建建议、持久化步骤/结果、写审计前的所有权确认和心跳续租都要求 `status='running'`、`worker_id`、`attempts` 匹配且 `lease_until > 数据库当前时间`（比较在 SQL 中完成，`lease_until == now` 即到期）。因此租约到期后即使还没有新 worker 接管，旧 worker 也不能再写入或续租；心跳发现租约丢失会停止。`finalize_job` 仍会清理到期行并按重试/死信规则处理，恢复语义不变。
 
 排查：
 
