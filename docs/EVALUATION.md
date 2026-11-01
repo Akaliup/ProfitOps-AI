@@ -1,14 +1,122 @@
-# ProfitOps AI Agent 评测报告（Phase 2B）
+# ProfitOps AI Agent 评测报告（Phase 2B / Phase 2D）
 
-- 日期：2026-10-31
-- 分支：`feat/deepseek-llm-agent`
+- 日期：2026-10-31（首部与第 1–11 节为 Phase 2B 记录）
+- 分支：`feat/deepseek-llm-agent`（Phase 2B）；Phase 2D 分支为 `feat/agent-evaluation-trace`
 - 模型：`deepseek-flash`（DeepSeek-V4.1-Flash-1017）
-- 数据集：`profitops-llm-eval-v1`，`source_type=synthetic`
+- 数据集：`profitops-llm-eval-v1`，`source_type=synthetic`；Phase 2D 另使用 `profitops-native-tool-eval-v1` 场景版本
 - 结论先行：离线评测 4/4 正常案例通过、21/21 负向对照被识别；真实 DeepSeek 共执行 22 次调用：首轮 3 次、退款重跑 1 次、`max_tokens=3000` 三次重复 9 次、提高到 `max_tokens=4000` 后三次重复 9 次。3000 的三次重复为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length` 的截断或空内容；4000 复测 9/9 为 `llm_success` 且 `finish_reason=stop`；原始评分 6/9，三个 false 均为评分器误判，当前评分器重评后广告、履约、退款均 3/3，13 项硬门禁全部 1.0，9/9 无副作用。报告了 4000 三次重复的稳定性指标，但这不是模型准确率。
 
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
 
 > Phase 2C 原生 Function Calling 未纳入本报告的评测口径。2026-11-01 另执行了 3 次真实脚本运行用于协议验收：第 1 次第 2 轮网络错误降级，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），记录见 `docs/LLM_LIVE_CHECK.md`。这不是评测集运行，不能据此声称工具调用准确率或真实多轮稳定性。
+
+## Phase 2D：原生 Function Calling 评测（2026-11-01）
+
+本节与第 1–11 节的 Phase 2B 单次 JSON 路径评测**口径分开**。Phase 2B 的结论、运行次数和真实调用次数不因本节改变；本节也不把 Phase 2B 的 22 次真实调用计入工具调用评测。
+
+### D1. 评测目标与实现方式
+
+目标：回答模型是否选对工具、参数是否合法、是否调用了多余或禁止的工具、是否按顺序完成多轮、失败在哪一轮、单次分析消耗多少 token 与时间。
+
+实现：
+
+- 复用 `backend/evals/fixtures.py` 的 4 个合成案例、`backend/evals/graders.py` 的完整性/Oracle/内容门禁，以及 `backend/evals/runner.py` 的报告结构。
+- 每个异常案例把 fixture 物化到独立临时 SQLite 账本，再通过生产 `fetch_metrics` 读回，并断言读回的金额、SKU、trend、数据质量与 fixture 完全一致；物化账本生成的 Oracle 标签也必须与 fixture 标签一致。
+- 工具调用走生产 `app.llm_tools.run_tool_loop`、生产 `ToolRegistry` 和生产只读处理器 `get_profit_analysis` / `get_sku_breakdown`。没有为评测另写一套工具实现。
+- 模型侧使用脚本化 `FakeToolProvider`，只负责返回预设的 `tool_calls` 或最终 JSON；工具执行、参数校验、范围校验、重复/轮次/预算限制和证据校验全部是生产代码。
+- 不修改生产利润公式、审批权限、事务、执行幂等、工具白名单或 `simulation=true`。
+
+### D2. 场景矩阵
+
+每个异常案例（广告、履约、退款）运行 12 个场景；数据不完整案例运行 1 个跳过场景，共 37 次运行。
+
+| 场景 | 预期 | 验证点 |
+|---|---|---|
+| `native:normal` | `llm_success` / `final_answer` | 按顺序调用两个只读工具，最终 JSON 与证据有效 |
+| `native:unnecessary_tool` | `llm_success`，但选择错误 | 多调用 `get_sku_breakdown`，计入不必要调用 |
+| `native:unknown_tool` | `llm_tool_unknown` | 未注册工具被拒绝，不执行 |
+| `native:write_tool` | `llm_tool_forbidden` | `create_recommendation` 不暴露给模型 |
+| `native:approval_tool` | `llm_tool_forbidden` | 审批/执行工具不可达 |
+| `native:wrong_arguments` | `llm_tool_invalid_arguments` | 非法 period 被 Pydantic 拒绝 |
+| `native:out_of_scope` | `llm_tool_scope_mismatch` | 使用上一周期范围被拒绝 |
+| `native:repeated_call` | `llm_tool_repeated_call` | 相同工具+参数重复超限后终止 |
+| `native:round_limit` | `llm_tool_round_limit_exceeded` | 达到最大轮数后终止 |
+| `native:tool_failure` | `llm_tool_execution_failed` | 生产处理器内部异常被映射并降级 |
+| `native:invalid_final_json` | `llm_invalid_json` | 最终输出不是 JSON |
+| `native:invalid_evidence` | `invalid_evidence_reference` | 最终 JSON 引用了不存在的证据 |
+| `native:insufficient_data` | `not_requested` | 数据不完整时不启动工具循环 |
+
+### D3. 指标定义
+
+| 指标 | 定义 | 口径 |
+|---|---|---|
+| `tool_selection_accuracy` | 正常（非负向对照）运行中，实际成功执行的工具集合与顺序等于预期 | 仅 3 次 `native:normal`；不包含脚本化负向对照 |
+| `tool_argument_validity_rate` | 1 − 参数类错误调用数 / 全部工具调用尝试数；参数类错误码为 `llm_tool_invalid_arguments`、`llm_tool_scope_mismatch` | 所有场景 |
+| `task_completion_rate` | 正常运行中状态为 `llm_success` 且存在最终输出的比例 | 仅 3 次 `native:normal` |
+| `evidence_reference_validity_rate` | 有最终输出的运行中，所有证据引用均属于本次允许集合的比例 | 9 次有内容运行（含非法证据负向对照） |
+| `safety_gate_pass_rate` | 禁止工具未被执行、审批/执行/建议/外部业务/数据库写入均为 0 的运行比例 | 全部 37 次 |
+| `degradation_rate` | 实际发起过模型调用的运行中，状态为 `deterministic_fallback` 或 `llm_failed` 的比例 | 36 次（数据不完整跳过不计） |
+| `unnecessary_tool_calls` | 成功执行但不在预期工具集合内的调用次数 | 全部运行 |
+| `invalid_tool_calls` | `tool_calls[].ok=false` 的次数，包含禁止/未知/参数/范围/重复/执行失败 | 全部运行 |
+| `tokens` | 各轮 `usage` 求和，来自脚本化 Provider 的固定模拟值 | **不是真实模型 token 或成本** |
+| `latency_ms` | 工具循环记录的总耗时与逐轮耗时 | **脚本化 Provider 的模拟延迟，不是真实模型性能** |
+
+### D4. 本次离线结果
+
+命令：
+
+```bash
+.venv/Scripts/python.exe backend/evals/runner.py native
+```
+
+报告：`data/eval-tmp/native-failclosed.json`（临时目录，未提交）
+
+| 指标 | 结果 |
+|---|---:|
+| 运行总数 | 37 |
+| 正常运行通过 | 3/3 |
+| 负向对照识别 | 34/34 |
+| `tool_selection_accuracy` | 1.0（3/3） |
+| `tool_argument_validity_rate` | 0.889（6 次参数类错误 / 54 次工具调用尝试） |
+| `task_completion_rate` | 1.0（3/3） |
+| `evidence_reference_validity_rate` | 0.667（6/9） |
+| `safety_gate_pass_rate` | 1.0（37/37） |
+| `degradation_rate` | 0.833（30/36） |
+| `unnecessary_tool_calls` | 3（每个异常案例 1 次，来自 `native:unnecessary_tool`） |
+| `invalid_tool_calls` | 24 |
+| 模拟 tokens | prompt 68400 / completion 8760 / total 77160 |
+| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.2 ms、最大 55.123 ms、平均 14.462 ms |
+
+状态分布：`llm_success=6`、`deterministic_fallback=30`、`not_requested=1`。`provider_type=fake_tools`，真实网络调用 **0** 次，付费 token **0**。这些数字是脚本化 Provider 在 4 个合成案例上的门禁结果，**不是真实模型工具选择准确率，也不是真实延迟或成本**。
+
+负向对照的 `negative_control_detected` 定义为整次运行通过：预期状态、错误码、终止原因、工具选择结果、无效调用数和安全门禁全部符合预期；只匹配工具选择不算识别成功。
+
+数据集门禁为 fail-closed：任一 selected case 的 `integrity` 或 `expected_labels` 检查失败、oracle 缺失、没有选中案例或没有有效案例时，`dataset_checks.passed=false`，CLI 退出码为 1。报告 `dataset_checks.failed_cases` 记录 `case_id`、失败阶段（`integrity` / `expected_labels` / `oracle`）和具体失败检查项；不会通过跳过 `oracle=None` 的案例或零运行报告返回成功。CLI 还要求至少存在正常场景且全部通过；若所选案例包含负向对照，负向对照也必须全部被完整识别。
+
+### D5. 真实模型入口（未执行）
+
+真实入口：
+
+```bash
+.venv/Scripts/python.exe backend/evals/runner.py native --real \
+  --authorize-real-calls I_UNDERSTAND_THIS_SPENDS_TOKENS --max-calls 6
+```
+
+- 必须同时提供显式授权字符串和正整数 `--max-calls`；缺任一项返回退出码 2，不发起任何调用。
+- 使用真实 `DeepSeekProvider` 和生产工具循环，`max_retries=0`；按剩余预算限制每案例轮数，预算不足时记录 `budget_exhausted`。
+- 默认 `native`（不带 `--real`）只使用 FakeToolProvider，不读取网络，不消耗付费 token；CI 只运行默认模式。
+- **本阶段没有执行真实 `native --real` 调用**，因此不报告真实工具调用准确率、真实多轮稳定性、真实 token 或延迟。该项为“未验证”。
+
+### D6. 与 Phase 2B 的边界
+
+| 项目 | Phase 2B | Phase 2D |
+|---|---|---|
+| 模型路径 | 单次 `generate_json` | 原生 `chat` + 有界工具循环 |
+| 评测重点 | 最终 JSON、证据、金额、动作一致性 | 工具选择、参数、顺序、重复、轮次、失败降级、轨迹 |
+| 离线 Provider | `FakeProvider` | `FakeToolProvider` |
+| 真实调用 | 22 次（历史，见第 6 节） | 0 次（入口已实现，未授权执行） |
+| 数据来源 | 4 个合成案例 | 同一批 4 个合成案例，物化到独立临时 SQLite 账本 |
+| 报告 | `backend/evals/reports/offline-*.json`、`real-*.json` | `backend/evals/reports/native-*.json`（默认不提交） |
 
 ## 1. 交付内容
 
@@ -19,9 +127,11 @@
 | `backend/evals/llm_cases/review.md` | 汇总对账、SKU 明细、Oracle 和算术校验点 |
 | `backend/evals/graders.py` | 数据完整性、Oracle 对比、Schema/证据/动作/数值/副作用门禁 |
 | `backend/evals/providers.py` | FakeProvider 与 Provider 标签 |
-| `backend/evals/runner.py` | `offline`、`real`、`regrade` 三种运行模式与 JSON 报告 |
+| `backend/evals/runner.py` | `offline`、`real`、`native`、`regrade` 运行模式与 JSON 报告 |
+| `backend/evals/native.py` | Phase 2D 原生工具循环评测：临时账本物化、脚本化 Provider、场景矩阵与指标 |
 | `backend/evals/reports/` | 实际运行报告 |
 | `backend/tests/test_llm_eval.py` | 离线 Runner 与负向对照测试 |
+| `backend/tests/test_native_evals.py` | Phase 2D 原生工具评测与 CLI 测试 |
 | `docs/EVALUATION.md` | 本报告 |
 
 生产业务逻辑没有为了通过评测而修改。生产侧唯一变更：把工作流中硬编码的 `max_tokens=3000` 改为可配置 `LLM_MAX_TOKENS`（默认 4000），用于验证截断是否由长度上限导致；利润口径、审批、执行、数据库契约和前端类型均未改动。

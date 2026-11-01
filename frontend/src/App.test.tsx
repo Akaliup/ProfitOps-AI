@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { analysis, demo, llmSuccess, metrics, recommendation } from './test/fixtures'
+import { analysis, demo, llmNativeFailure, llmNativeSuccess, llmSuccess, metrics, recommendation } from './test/fixtures'
 import type { Analysis, Recommendation } from './types'
 
 vi.mock('./components/TrendChart', () => ({ TrendChart: () => <div>经营趋势图</div> }))
@@ -130,6 +130,95 @@ describe('ProfitOps workspace', () => {
     expect((await screen.findAllByText('已降级为确定性规则')).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/未配置 API Key/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/不是 LLM 输出/).length).toBeGreaterThan(0)
+    expect(screen.getByText('本次分析走单次 JSON 路径，未产生原生工具轮次。')).toBeVisible()
+  })
+
+  it('renders native rounds, tool arguments, per-round tokens and termination', async () => {
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: llmNativeSuccess } })]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    expect(await screen.findByRole('heading', { name: /Agent 执行轨迹/ })).toBeVisible()
+    const trace = screen.getByRole('region', { name: 'Agent 执行轨迹' })
+    expect(within(trace).getByText('ROUND 1')).toBeVisible()
+    expect(within(trace).getByText('ROUND 3')).toBeVisible()
+    expect(within(trace).getAllByText('get_profit_analysis').length).toBeGreaterThan(0)
+    expect(within(trace).getAllByText('get_sku_breakdown').length).toBeGreaterThan(0)
+    expect(within(trace).getAllByText('✓ 成功').length).toBe(2)
+    expect(within(trace).getByText('模型给出最终答案')).toBeVisible()
+    expect(within(trace).getByText('3900')).toBeVisible()
+    expect(within(trace).getByText('1080 tokens')).toBeVisible()
+    expect(within(trace).getByText('0 次工具')).toBeVisible()
+    expect(within(trace).getAllByText('2026-10-01 → 2026-10-30 · 全部店铺').length).toBe(2)
+  })
+
+  it('never renders non-whitelisted or malformed tool argument values', async () => {
+    const sensitive = structuredClone(llmNativeSuccess)
+    sensitive.tool_calls = [
+      {
+        ...sensitive.tool_calls![0],
+        arguments: {
+          period: { start_date: '2026-10-01', end_date: '2026-10-30' },
+          store_id: 'us-store',
+          api_key: 'sk-live-secret',
+          Authorization: 'Bearer top-secret',
+          token: 'tok-secret',
+          password: 'pwd-secret',
+        },
+      },
+      {
+        ...sensitive.tool_calls![1],
+        arguments: {
+          api_key: 'sk-only-secret',
+          Authorization: 'Bearer only-secret',
+          token: 'tok-only-secret',
+          password: 'pwd-only-secret',
+        },
+      },
+      {
+        ...sensitive.tool_calls![1],
+        tool_call_id: 'call-malformed',
+        round: 3,
+        arguments: {
+          period: { start_date: 'sk-period-secret', end_date: 'Bearer period-secret' },
+          store_id: 'token=store-secret',
+          password: 'pwd-malformed',
+        },
+      },
+    ]
+    sensitive.rounds![2] = { ...sensitive.rounds![2], tool_call_count: 1 }
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: sensitive } })]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    const trace = await screen.findByRole('region', { name: 'Agent 执行轨迹' })
+    expect(within(trace).getByText('2026-10-01 → 2026-10-30 · 店铺 us-store · 4 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('4 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('period 已隐藏 · store_id 已隐藏 · 1 个其他字段')).toBeVisible()
+    expect(within(trace).getByText('ROUND 3')).toBeVisible()
+    for (const secret of [
+      'sk-live-secret', 'top-secret', 'tok-secret', 'pwd-secret',
+      'sk-only-secret', 'only-secret', 'tok-only-secret', 'pwd-only-secret',
+      'sk-period-secret', 'period-secret', 'token=store-secret', 'pwd-malformed',
+    ]) {
+      expect(document.body.textContent).not.toContain(secret)
+    }
+  })
+
+  it('marks failed tool calls as failed and keeps the error visible', async () => {
+    history = [structuredClone({ ...analysis, result: { ...analysis.result!, llm: llmNativeFailure } })]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
+    expect(await screen.findByRole('heading', { name: /Agent 执行轨迹/ })).toBeVisible()
+    const trace = screen.getByRole('region', { name: 'Agent 执行轨迹' })
+    expect(within(trace).getAllByText('✓ 成功').length).toBe(1)
+    expect(within(trace).getAllByText('× 失败').length).toBe(1)
+    expect(within(trace).getByText('错误码：llm_tool_execution_failed')).toBeVisible()
+    expect(within(trace).getByText('工具执行失败')).toBeVisible()
   })
 
   it('shows API error and correlation id', async () => {

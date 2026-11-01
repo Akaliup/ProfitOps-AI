@@ -56,6 +56,28 @@
 
 测试库使用临时目录或独立 `data/*.db`，未修改 `data/profitops.db`。
 
+## 2026-11-01 Phase 2D：Agent 评测与执行轨迹（Claude Code）
+
+分支 `feat/agent-evaluation-trace`，基线 `origin/master` `69aae77`。以下均为本次实际输出：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 130 passed，0 failed，0 skipped（1 个第三方 DeprecationWarning，25.17s） |
+| 原生评测测试 | 同上，`backend/tests/test_native_evals.py` | 28 项：fixture 到临时账本可复现、正常多轮、多余/未知/写/审批工具、非法参数、越界、重复、轮次上限、工具失败、非法 JSON、非法证据、数据不完整、负向对照必须整次运行通过、真实 Provider 标签、真实入口授权/预算/未配置、CLI 失败退出码、integrity / expected label 失败与零案例 fail-closed |
+| 原生 Tool Calling 离线评测 | `.venv/Scripts/python.exe backend/evals/runner.py native --report data/eval-tmp/native-failclosed.json` | 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37；`dataset_passed=true`、`valid_cases=4/4`；`tool_selection_accuracy=1.0`、`tool_argument_validity_rate=0.889`、`task_completion_rate=1.0`、`evidence_reference_validity_rate=0.667`、`degradation_rate=0.833`、不必要调用 3、无效调用 24；`provider_type=fake_tools`，真实网络调用 0 |
+| 前端单元/交互 | `npm --prefix frontend test -- --run` | 11 passed（Vitest + RTL，6.11s），含敏感工具参数不回显测试 |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，5.66s |
+| HTTP 冒烟 | 独立数据库 `data/smoke-phase2d.db`、端口 8011、`LLM_PROVIDER=disabled`：`.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8011` | 11/11 通过，failed=0 |
+| 真实浏览器 E2E | `.venv/Scripts/python.exe scripts/browser_test.py --skip-install` | 3/3 通过（16.4s）：真实 API 闭环、拒绝分支/手机视图、Agent Trace 桌面与 390px 移动端 |
+| Agent Trace 截图 | 同上 | `docs/screenshots/agent-trace.png`、`docs/screenshots/agent-trace-mobile.png` |
+| 真实 `native --real` | 未执行 | **未验证**：入口要求显式授权和调用预算，本阶段未消耗真实 DeepSeek Token |
+
+Phase 2D 离线评测的 token 与延迟来自脚本化 `FakeToolProvider` 的固定值，不是真实模型性能；`tool_selection_accuracy` 只统计 3 次正常场景，不包含负向对照。真实浏览器 Trace 测试使用 Playwright 路由注入一条已记录的原生失败轨迹，验证前端渲染与 390px 布局，不代表真实模型调用。
+
+fail-closed 回归：复制案例并破坏 `source_type`、`expected.primary_driver`，或使用空案例目录时，CLI 均返回 1；报告 `dataset_checks.failed_cases` 记录 `case_id`、失败阶段和具体失败检查项。前端测试注入 `api_key`、`Authorization`、`token`、`password` 及非法 `period` / `store_id`，断言页面文本不包含其值，同时保留轮次、成功/失败和耗时展示。
+
+测试数据库为临时目录或独立 `data/*.db`，未修改 `data/profitops.db`；`data/smoke-phase2d.db` 与 `data/e2e.db` 均在 `data/` 下且被 Git 忽略。
+
 ## 已验证（2026-10-30 基线）
 
 | 检查 | 命令 | 结果 |
@@ -94,6 +116,7 @@
 
 - Docker Compose 已于 2026-10-31 在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 通过。其他机器仍需按本文件复验；本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
 - Phase 2C 原生 Function Calling 已对真实 DeepSeek 执行 3 次脚本运行：第 1 次因网络错误降级，第 3 次完整成功并记录了 `tool_calls`、逐轮 Token/耗时和最终输出。样本只有 3 次，不能据此声明真实调用成功率或多轮稳定性。
+- Phase 2D 的 `native --real` 真实模型工具评测未执行；当前 37 次结果全部来自 `FakeToolProvider`，只能证明生产工具循环与门禁在合成案例上的行为，不能声明真实模型的工具选择准确率、参数合法率、真实 token 或延迟。
 
 浏览器验收不属于未验证项：Playwright + Chromium 真实页面测试 2/2 通过，截图位于 `docs/screenshots/`。
 
