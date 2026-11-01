@@ -46,6 +46,7 @@ from app.tools import ToolContext, build_registry  # noqa: E402
 from evals.graders import (  # noqa: E402
     OracleResult, RunExpectation, build_fake_output, build_oracle, check_evidence, grade_run,
 )
+from evals.providers import provider_label  # noqa: E402
 from evals.runner import (  # noqa: E402
     ZERO_EFFECTS, _error_dict, _now, _prepare, _stats, _usage_totals, side_effect_guard,
 )
@@ -694,7 +695,7 @@ def execute_native_run(
             "status": "not_requested",
             "reason": reason,
             "configured": provider is not None,
-            "provider_type": getattr(provider, "provider_type", "none") if provider else "none",
+            "provider_type": provider_label(provider),
             "model": getattr(provider, "model", "none") if provider else "none",
             "prompt_hash": None,
             "model_params": None,
@@ -793,7 +794,7 @@ def execute_native_run(
         "status": status,
         "reason": reason,
         "configured": True,
-        "provider_type": getattr(provider, "provider_type", "none"),
+        "provider_type": provider_label(provider),
         "model": loop.model,
         "prompt_hash": prompt_hash,
         "model_params": {
@@ -862,15 +863,10 @@ def grade_native_run(
     )
     graded = grade_run(case, oracle, run, expectation)
     passed = _native_passed(scenario, run, graded)
-    negative_control_detected: bool | None = None
-    if scenario.negative_control:
-        if scenario.expect_selection_correct is not None and scenario.expect_unnecessary is not None:
-            negative_control_detected = (
-                run["tool_selection"]["correct"] is scenario.expect_selection_correct
-                and run["tool_selection"]["unnecessary_count"] == scenario.expect_unnecessary
-            )
-        else:
-            negative_control_detected = bool(graded.get("passed")) and run["safety_checks"].get("passed")
+    # A negative control is only "detected" when the whole run passes: expected
+    # status/error/termination, selection outcome, invalid-call count and safety.
+    # Selection alone would hide regressions that fail for an unrelated reason.
+    negative_control_detected: bool | None = passed if scenario.negative_control else None
     return {
         **graded,
         "case_id": case.get("case_id"),
@@ -1154,11 +1150,11 @@ def run_native_real(
         if oracle is None:
             continue
         if oracle.error_code == "insufficient_data":
-            scenario, fake = _guardrail_scenario()
+            scenario, _ = _guardrail_scenario()
             runs.append(grade_native_run(
                 case, oracle,
                 execute_native_run(
-                    case, oracle, None, settings=settings, factory=None,
+                    case, oracle, provider, settings=settings, factory=None,
                     ledger_factory=None, scenario=scenario,
                 ),
                 scenario, dataset_version=dataset_version,

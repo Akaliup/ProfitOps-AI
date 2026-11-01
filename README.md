@@ -171,7 +171,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 124 通过（含 Phase 2B 评测 Runner、负向对照、Phase 2C 原生工具测试 28 项与 Phase 2D 原生评测测试 22 项）、前端 10 通过、生产构建通过；Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 独立数据库 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果：后端 126 通过（含 Phase 2B 评测 Runner、负向对照、Phase 2C 原生工具测试 28 项与 Phase 2D 原生评测测试 24 项）、前端 10 通过、生产构建通过；Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 独立数据库 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 

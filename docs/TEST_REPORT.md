@@ -62,8 +62,8 @@
 
 | 检查 | 命令 | 结果 |
 |---|---|---|
-| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 124 passed，0 failed，0 skipped（1 个第三方 DeprecationWarning，63.07s） |
-| 原生评测测试 | 同上，`backend/tests/test_native_evals.py` | 22 项：fixture 到临时账本可复现、正常多轮、多余/未知/写/审批工具、非法参数、越界、重复、轮次上限、工具失败、非法 JSON、非法证据、数据不完整、真实入口授权/预算/未配置、CLI 失败退出码 |
+| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 126 passed，0 failed，0 skipped（1 个第三方 DeprecationWarning，39.48s） |
+| 原生评测测试 | 同上，`backend/tests/test_native_evals.py` | 24 项：fixture 到临时账本可复现、正常多轮、多余/未知/写/审批工具、非法参数、越界、重复、轮次上限、工具失败、非法 JSON、非法证据、数据不完整、负向对照必须整次运行通过、真实 Provider 标签、真实入口授权/预算/未配置、CLI 失败退出码 |
 | 原生 Tool Calling 离线评测 | `.venv/Scripts/python.exe backend/evals/runner.py native --report data/eval-tmp/native-final.json` | 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37；`tool_selection_accuracy=1.0`、`tool_argument_validity_rate=0.889`、`task_completion_rate=1.0`、`evidence_reference_validity_rate=0.667`、`degradation_rate=0.833`、不必要调用 3、无效调用 24；`provider_type=fake_tools`，真实网络调用 0 |
 | 前端单元/交互 | `npm --prefix frontend test -- --run` | 10 passed（Vitest + RTL，8.31s） |
 | TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，10.61s |

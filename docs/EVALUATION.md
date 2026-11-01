@@ -85,9 +85,11 @@
 | `unnecessary_tool_calls` | 3（每个异常案例 1 次，来自 `native:unnecessary_tool`） |
 | `invalid_tool_calls` | 24 |
 | 模拟 tokens | prompt 68400 / completion 8760 / total 77160 |
-| 模拟延迟 | 36 次有调用运行，最小 1.415 ms、最大 67.475 ms、平均 17.943 ms |
+| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.175 ms、最大 73.503 ms、平均 15.881 ms |
 
 状态分布：`llm_success=6`、`deterministic_fallback=30`、`not_requested=1`。`provider_type=fake_tools`，真实网络调用 **0** 次，付费 token **0**。这些数字是脚本化 Provider 在 4 个合成案例上的门禁结果，**不是真实模型工具选择准确率，也不是真实延迟或成本**。
+
+负向对照的 `negative_control_detected` 定义为整次运行通过：预期状态、错误码、终止原因、工具选择结果、无效调用数和安全门禁全部符合预期；只匹配工具选择不算识别成功。
 
 ### D5. 真实模型入口（未执行）
 

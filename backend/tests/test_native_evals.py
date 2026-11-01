@@ -7,11 +7,14 @@ ledger. No network call and no real DeepSeek token is used here.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
 import pytest
 
+from app.llm import DeepSeekProvider, LLMError
+from app.llm_tools import ToolLoopResult
 from evals import native, runner
 from evals.graders import build_oracle, check_integrity, load_cases
 
@@ -132,6 +135,51 @@ def test_negative_controls_degrade_and_never_touch_approval_or_execution(suite, 
     assert run["safety_checks"]["approval_execution_unreachable"] is True
     assert run["safety_checks"]["database_rows"] == {"recommendations": 0, "executions": 0, "audit_logs": 0}
     assert run["negative_control_detected"] is True
+
+
+def test_negative_control_detection_requires_the_whole_run_to_pass(cases, suite):
+    case = cases["ad_spend_pressure"]
+    integrity = check_integrity(case)
+    assert integrity.raw is not None
+    oracle = build_oracle(integrity.raw)
+    scenario = next(
+        item for item, _ in native.build_scenarios(case, oracle) if item.name == "native:unknown_tool"
+    )
+    run = copy.deepcopy(_run(suite, "ad_spend_pressure", "native:unknown_tool"))
+    assert run["negative_control_detected"] is True
+
+    # Keep the expected tool-selection outcome but break the expected status.
+    # Selection alone must not count this negative control as detected.
+    run["status"] = "llm_success"
+    graded = native.grade_native_run(case, oracle, run, scenario)
+    assert graded["native_passed"] is False
+    assert graded["negative_control_detected"] is False
+
+
+def test_real_provider_is_labelled_deepseek_without_network(monkeypatch, cases):
+    case = cases["ad_spend_pressure"]
+    integrity = check_integrity(case)
+    assert integrity.raw is not None
+    oracle = build_oracle(integrity.raw)
+    scenario = next(
+        item for item, _ in native.build_scenarios(case, oracle) if item.name == "native:unknown_tool"
+    )
+    provider = DeepSeekProvider(api_key="test-key", model="deepseek-flash", base_url="https://example.invalid")
+
+    def fake_loop(**kwargs):
+        return ToolLoopResult(
+            output=None,
+            error=LLMError("llm_tool_unknown", "blocked by the registry", retryable=False),
+            rounds=[], tool_calls=[], attempts=1, latency_ms=1.0,
+            usage=None, termination_reason="llm_tool_unknown", model="deepseek-flash",
+        )
+
+    monkeypatch.setattr(native, "run_tool_loop", fake_loop)
+    run = native.execute_native_run(
+        case, oracle, provider,
+        settings=native.eval_settings(), factory=None, ledger_factory=None, scenario=scenario,
+    )
+    assert run["provider_type"] == "deepseek"
 
 
 def test_write_and_approval_tools_are_never_exposed(suite):
