@@ -111,8 +111,16 @@ def claim_next_job(factory, engine, settings: Settings, worker_id: str, now: dat
 
 
 def requeue_expired(factory, engine, now: datetime | None = None) -> int:
-    """Return running jobs whose worker lease expired to the queue."""
+    """Return expired jobs to the queue, or dead-letter exhausted attempts.
+
+    A job that has already used every allowed attempt must not be requeued
+    forever after repeated worker crashes. Each transition is a conditional
+    UPDATE so a heartbeat that extended the lease after the scan is not
+    overwritten by a stale recovery decision.
+    """
     now = now or utcnow()
+    requeued = 0
+    dead_lettered = 0
     with factory.begin() as session:
         if engine is not None:
             begin_write(session, engine)
@@ -123,23 +131,88 @@ def requeue_expired(factory, engine, now: datetime | None = None) -> int:
             )
         ).all()
         for row in rows:
-            row.status = "queued"
-            row.next_run_at = now
-            row.lease_until = None
-            row.worker_id = None
-            row.error = {
-                "code": "lease_expired",
-                "message": "执行租约已过期，任务重新排队",
-            }
-            record(
-                session, "system", "analysis.recovered", "analysis", row.id,
-                row.request_id, "degraded",
-                {"reason": "lease_expired", "attempts": row.attempts},
-                tenant_id=row.tenant_id,
+            row_id = row.id
+            request_id = row.request_id
+            tenant_id = row.tenant_id
+            attempts = row.attempts
+            max_attempts = row.max_attempts
+            owner = row.worker_id
+            exhausted = attempts >= max_attempts
+            if exhausted:
+                values = {
+                    "status": "failed",
+                    "next_run_at": None,
+                    "lease_until": None,
+                    "worker_id": None,
+                    "updated_at": now,
+                    "error": {
+                        "code": "lease_expired",
+                        "message": "执行租约连续过期，任务已进入死信",
+                        "dead_letter": True,
+                        "attempt": attempts,
+                        "max_attempts": max_attempts,
+                    },
+                }
+            else:
+                values = {
+                    "status": "queued",
+                    "next_run_at": now,
+                    "lease_until": None,
+                    "worker_id": None,
+                    "updated_at": now,
+                    "error": {
+                        "code": "lease_expired",
+                        "message": "执行租约已过期，任务重新排队",
+                        "attempt": attempts,
+                        "max_attempts": max_attempts,
+                    },
+                }
+            changed = session.execute(
+                update(Analysis)
+                .where(
+                    Analysis.id == row_id,
+                    Analysis.status == "running",
+                    Analysis.attempts == attempts,
+                    Analysis.worker_id == owner,
+                    or_(Analysis.lease_until.is_(None), Analysis.lease_until <= now),
+                )
+                .values(**values)
+                # SQLite returns naive datetimes while ``now`` is aware; do not
+                # ask the ORM to evaluate the lease predicate in Python.
+                .execution_options(synchronize_session=False)
             )
-        if rows:
-            METRICS.inc("analysis_jobs_total", event="recovered", value=len(rows))
-        return len(rows)
+            if changed.rowcount != 1:
+                continue
+            if exhausted:
+                record(
+                    session, "system", "analysis.dead_letter", "analysis", row_id,
+                    request_id, "failure",
+                    {
+                        "attempt": attempts,
+                        "max_attempts": max_attempts,
+                        "code": "lease_expired",
+                        "retryable": False,
+                    },
+                    tenant_id=tenant_id,
+                )
+                dead_lettered += 1
+            else:
+                record(
+                    session, "system", "analysis.recovered", "analysis", row_id,
+                    request_id, "degraded",
+                    {
+                        "reason": "lease_expired",
+                        "attempts": attempts,
+                        "max_attempts": max_attempts,
+                    },
+                    tenant_id=tenant_id,
+                )
+                requeued += 1
+        if requeued:
+            METRICS.inc("analysis_jobs_total", event="recovered", value=requeued)
+        if dead_lettered:
+            METRICS.inc("analysis_jobs_total", event="dead_letter", code="lease_expired", value=dead_lettered)
+    return requeued + dead_lettered
 
 
 class LeaseHeartbeat:

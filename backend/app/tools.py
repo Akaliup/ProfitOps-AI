@@ -6,7 +6,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .errors import DomainError
+from .errors import DomainError, LeaseLost
 from .knowledge import HashingEmbeddingProvider, search_knowledge
 from .metrics import analyze_drivers, build_report, fetch_metrics
 from .models import Recommendation
@@ -38,6 +38,9 @@ class ToolContext:
     # workflow seeds this with pre-retrieved IDs and validates citations against
     # it, so a score-capped panel cannot reject a citation the model really saw.
     knowledge_provided_ids: list[str] = field(default_factory=list)
+    # Worker lease fence for write tools. ``None`` outside a claimed worker run.
+    analysis_id: str | None = None
+    lease_fence: tuple[str, int] | None = None
 
 
 Policy = Literal["safe", "ask", "deny"]
@@ -89,6 +92,10 @@ class ToolRegistry:
         try:
             output = spec.output_model.model_validate(spec.handler(payload, context))
             return ToolResult(ok=True, data=output.model_dump(mode="json"))
+        except LeaseLost:
+            # Internal control flow: the worker lost the job lease. It must
+            # abort the workflow instead of being reported as a tool failure.
+            raise
         except DomainError as exc:
             return ToolResult(ok=False, error=ToolFailure(code=exc.code, message=exc.message, details=exc.details))
         except Exception as exc:
@@ -143,7 +150,14 @@ def sku_breakdown(payload, context):
 
 def create(payload, context):
     with context.factory.begin() as session:
-        return create_recommendation(session, payload, context.actor, context.request_id)
+        lease = context.lease_fence
+        if lease is not None and context.analysis_id != payload.analysis_id:
+            raise LeaseLost("analysis lease does not cover this recommendation")
+        return create_recommendation(
+            session, payload, context.actor, context.request_id,
+            worker_id=lease[0] if lease is not None else None,
+            expected_attempt=lease[1] if lease is not None else None,
+        )
 
 
 def approval(payload, context):

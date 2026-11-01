@@ -82,7 +82,7 @@ sqlite3 data/profitops.db "select status, count(*) from analyses group by status
 sqlite3 data/profitops.db "select id, attempts, max_attempts, error from analyses where status='failed' order by updated_at desc limit 20;"
 ```
 
-- 进程崩溃后，启动或下一轮 poll 会把过期租约改回 `queued`，审计动作 `analysis.recovered`，错误码 `lease_expired`。
+- 进程崩溃后，启动或下一轮 poll 会把未耗尽 `max_attempts` 的过期租约改回 `queued`，审计动作 `analysis.recovered`，错误码 `lease_expired`；已耗尽的租约行标记 `dead_letter`，审计动作 `analysis.dead_letter`。
 - 可重试错误：`workflow_failed`、`step_timeout`、`database_locked`、`worker_crashed`，按指数退避；达到 `max_attempts` 后标记 `dead_letter`。
 - 确定性失败（如 `llm_failed`）不自动重试。人工确认后调用：
 

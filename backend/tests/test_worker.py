@@ -1,8 +1,8 @@
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from app.models import Analysis, AuditLog, utcnow
+from app.models import Analysis, AuditLog, Recommendation, utcnow
 from app import worker, workflow
 
 
@@ -45,6 +45,48 @@ def test_expired_lease_is_requeued_but_live_lease_is_kept(client):
         assert expired.worker_id is None and expired.lease_until is None
         assert live.status == "running" and live.worker_id == "alive"
         assert session.scalar(select(AuditLog).where(AuditLog.action == "analysis.recovered")) is not None
+
+
+def test_requeue_expired_dead_letters_after_max_attempts(client):
+    first_now = utcnow()
+    add_analysis(
+        client, id="exhausted", idempotency_key="exhausted", status="running",
+        attempts=1, max_attempts=2, worker_id="worker-a",
+        lease_until=first_now - timedelta(seconds=1),
+    )
+    factory, engine = client.app.state.factory, client.app.state.engine
+    settings = client.app.state.settings
+
+    assert worker.requeue_expired(factory, engine, now=first_now) == 1
+    with factory() as session:
+        row = session.get(Analysis, "exhausted")
+        assert row.status == "queued" and row.attempts == 1
+        assert row.error["code"] == "lease_expired"
+        assert row.error.get("dead_letter") is not True
+
+    assert worker.claim_job(factory, engine, "exhausted", settings, "worker-b", now=first_now) is True
+    second_now = first_now + timedelta(seconds=1)
+    with factory.begin() as session:
+        row = session.get(Analysis, "exhausted")
+        row.lease_until = second_now - timedelta(seconds=1)
+
+    assert worker.requeue_expired(factory, engine, now=second_now) == 1
+    with factory() as session:
+        row = session.get(Analysis, "exhausted")
+        assert row.status == "failed"
+        assert row.attempts == 2
+        assert row.error["code"] == "lease_expired"
+        assert row.error["dead_letter"] is True
+        assert row.error["attempt"] == 2
+        assert row.error["max_attempts"] == 2
+        assert row.worker_id is None and row.lease_until is None and row.next_run_at is None
+        assert session.scalar(select(AuditLog).where(
+            AuditLog.action == "analysis.dead_letter", AuditLog.object_id == "exhausted",
+        )) is not None
+
+    # A dead-lettered row is no longer running, so later recovery passes leave
+    # it untouched instead of requeueing it forever.
+    assert worker.requeue_expired(factory, engine, now=second_now + timedelta(seconds=1)) == 0
 
 
 def test_finalize_schedules_backoff_then_dead_letters(client):
@@ -246,6 +288,65 @@ def test_run_analysis_stops_writing_after_lease_is_reclaimed(client, monkeypatch
         assert [step["name"] for step in row.steps] == ["receive_request", "get_sales_metrics"]
         assert row.steps[0]["status"] == "completed"
         assert row.steps[1]["status"] == "running"
+
+
+def test_create_recommendation_rejects_reclaimed_lease_before_write(client, monkeypatch):
+    created = client.post("/api/analyses", json={}, headers={"Authorization": "Bearer demo-analyst"})
+    assert created.status_code == 202
+    analysis_id = created.json()["id"]
+    factory, registry, settings = (
+        client.app.state.factory, client.app.state.registry, client.app.state.settings,
+    )
+    now = utcnow()
+    with factory.begin() as session:
+        # The API background run already produced a recommendation; remove it
+        # so this test starts from the same pre-write state as the old worker.
+        session.execute(delete(Recommendation).where(Recommendation.analysis_id == analysis_id))
+        row = session.get(Analysis, analysis_id)
+        row.steps = []
+        row.snapshot = {}
+        row.result = None
+        row.recommendation_id = None
+        row.error = None
+        row.status = "running"
+        row.attempts = 1
+        row.worker_id = "worker-a"
+        row.lease_until = now + timedelta(seconds=60)
+
+    original = registry.invoke
+    calls = []
+
+    def invoke(name, arguments, context):
+        calls.append(name)
+        if name == "create_recommendation":
+            # Interleave a newer worker claiming the next attempt just before
+            # the old worker enters the recommendation write.
+            with factory.begin() as session:
+                row = session.get(Analysis, analysis_id)
+                row.worker_id = "worker-b"
+                row.attempts = 2
+                row.lease_until = utcnow() + timedelta(seconds=60)
+        return original(name, arguments, context)
+
+    monkeypatch.setattr(registry, "invoke", invoke)
+    workflow.run_analysis(
+        factory, registry, analysis_id, settings, None, claimed=True,
+        worker_id="worker-a", expected_attempt=1,
+    )
+
+    assert "create_recommendation" in calls
+    with factory() as session:
+        assert session.scalar(select(Recommendation).where(
+            Recommendation.analysis_id == analysis_id,
+        )) is None
+        row = session.get(Analysis, analysis_id)
+        assert row.status == "running"
+        assert row.worker_id == "worker-b" and row.attempts == 2
+        assert row.recommendation_id is None
+        # The step was started under the old lease, but the write itself was
+        # rejected and the step was not marked completed.
+        assert row.steps[-1]["name"] == "create_recommendation"
+        assert row.steps[-1]["status"] == "running"
 
 
 def test_manual_retry_endpoint_requeues_failed_job(client, analyst):

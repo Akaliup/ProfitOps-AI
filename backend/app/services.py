@@ -7,9 +7,9 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .audit import record
-from .errors import DomainError
+from .errors import DomainError, LeaseLost
 from .metrics import verify_evidence
-from .models import Analysis, Execution, Recommendation, new_id
+from .models import Analysis, Execution, Recommendation, new_id, utcnow
 from .schemas import (
     DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsReport,
     RecommendationInput, RecommendationOutput, StrictModel,
@@ -59,7 +59,10 @@ def plan_action(report: MetricsReport, findings: DriverReport) -> ActionPlan:
     return ActionPlan(action=action, target=target, days=days, is_budget=is_budget, potential=potential)
 
 
-def create_recommendation(session: Session, payload: RecommendationInput, actor: Actor, request_id: str):
+def create_recommendation(
+    session: Session, payload: RecommendationInput, actor: Actor, request_id: str,
+    worker_id: str | None = None, expected_attempt: int | None = None,
+):
     require_role(actor, "analyst", "approver")
     verify_evidence(payload.report, payload.findings)
     if not payload.findings.anomaly:
@@ -69,6 +72,24 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
     ))
     if analysis is None:
         raise DomainError("analysis_not_found", "分析不存在", 404)
+    if worker_id is not None:
+        if expected_attempt is None:
+            raise LeaseLost("analysis lease attempt missing")
+        # Lock the analysis row in this same transaction before writing. A
+        # worker whose lease was reclaimed fails here, so it cannot insert a
+        # recommendation first and discover the lost lease afterwards.
+        owned = session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == analysis.id,
+                Analysis.status == "running",
+                Analysis.worker_id == worker_id,
+                Analysis.attempts == expected_attempt,
+            )
+            .values(updated_at=utcnow())
+        )
+        if owned.rowcount != 1:
+            raise LeaseLost("analysis lease lost")
     existing = session.scalar(select(Recommendation).where(
         Recommendation.analysis_id == analysis.id,
         Recommendation.tenant_id == actor.tenant_id,

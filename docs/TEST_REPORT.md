@@ -2,6 +2,21 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-01 可靠性 P1 修复复验（Claude Code）
+
+分支 `feat/platform-reliability`，只修复两个 P1：过期租约遵守 `max_attempts` 并进入死信；推荐建议写入与租约所有权校验处于同一数据库事务。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 217 passed, 0 failed, 0 skipped（76.87s） |
+| 新增故障测试 | `python -m pytest backend/tests/test_worker.py -q -k 'requeue_expired_dead_letters or create_recommendation_rejects_reclaimed'` | 2 passed |
+| Alembic 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 1 passed |
+| PostgreSQL 专项 | 既有 3 个 PostgreSQL 测试 + 一次性脚本验证死信与推荐租约守卫 | 3 passed；脚本两项断言通过 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules |
+
+真实进程 kill/restart **未验证**：本轮只通过数据库租约过期/回收与旧/新 worker 交错测试模拟故障，没有真实终止操作系统进程后重启。真实 LLM、浏览器 E2E 未在本轮执行。
+
 ## 2026-11-01 阶段十一验证（Claude Code）
 
 分支 `feat/agent-evaluation-trace`，工作区包含持久化任务队列、认证与租户隔离、可观测性/限流/熔断、Alembic 基线、离线回放评测和运行手册。以下为本次实际输出：

@@ -131,7 +131,10 @@ def run_analysis(
         request_id = analysis.request_id
         attempt = analysis.attempts
         initial = ProfitState(analysis_id=analysis_id, scope=analysis.request, status="running")
-    context = ToolContext(factory, actor, request_id)
+    context = ToolContext(
+        factory, actor, request_id,
+        analysis_id=analysis_id, lease_fence=fence,
+    )
     timeout_seconds = settings.step_timeout_seconds
 
     def write_job(session, **values) -> None:
