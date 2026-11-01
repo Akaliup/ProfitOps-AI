@@ -5,6 +5,10 @@ Verified against https://api-docs.deepseek.com on 2026-10-31:
 - endpoint: POST /chat/completions
 - model id: deepseek-flash (DeepSeek-V4.1-Flash-1017)
 - JSON mode: response_format={"type": "json_object"} and the word "json" in the prompt
+- native tool calling: tools=[{type: "function", function: {...}}], tool_choice
+  "auto"/"none", assistant tool_calls (id/type/function.name/function.arguments),
+  and role="tool" messages carrying tool_call_id. Thinking mode supports
+  auto/none but rejects named/required tool_choice.
 - auth: Authorization: Bearer <key>
 """
 
@@ -12,7 +16,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
@@ -20,7 +24,7 @@ import httpx
 
 from .config import Settings
 
-Message = dict[str, str]
+Message = dict[str, Any]
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -38,6 +42,22 @@ class LLMError(Exception):
 
 
 @dataclass
+class LLMToolCall:
+    """A model-generated function call. Arguments remain the raw JSON string."""
+
+    id: str
+    name: str
+    arguments: str
+
+    def as_message(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
+
+@dataclass
 class LLMResult:
     content: str
     model: str
@@ -46,6 +66,7 @@ class LLMResult:
     attempts: int
     request_id: str | None = None
     finish_reason: str | None = None
+    tool_calls: list[LLMToolCall] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +115,41 @@ def extract_usage(payload: dict[str, Any]) -> dict[str, int] | None:
         if isinstance(cached, int) and not isinstance(cached, bool):
             values["cached_tokens"] = cached
     return values or None
+
+
+def parse_tool_calls(raw: Any) -> list[LLMToolCall]:
+    """Validate the OpenAI-compatible assistant ``tool_calls`` array.
+
+    The model controls this payload, so malformed entries are rejected before
+    any tool can be invoked. Arguments are kept as text and parsed by the
+    bounded loop, where schema and scope checks happen.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise LLMError("llm_invalid_tool_call", "tool_calls 必须是数组")
+    calls: list[LLMToolCall] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise LLMError("llm_invalid_tool_call", "tool_call 必须是对象")
+        call_id = item.get("id")
+        if not isinstance(call_id, str) or not call_id.strip() or len(call_id) > 200:
+            raise LLMError("llm_invalid_tool_call", "tool_call 缺少有效 id 或 id 过长")
+        if item.get("type") != "function":
+            raise LLMError("llm_invalid_tool_call", "当前只支持 function 类型工具")
+        function = item.get("function")
+        if not isinstance(function, dict):
+            raise LLMError("llm_invalid_tool_call", "tool_call 缺少 function 对象")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 128:
+            raise LLMError("llm_invalid_tool_call", "tool_call 缺少函数名或函数名过长")
+        arguments = function.get("arguments")
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        if not isinstance(arguments, str):
+            raise LLMError("llm_invalid_tool_call", "tool_call arguments 必须是 JSON 字符串")
+        calls.append(LLMToolCall(id=call_id, name=name, arguments=arguments))
+    return calls
 
 
 class DeepSeekProvider:
@@ -146,7 +202,10 @@ class DeepSeekProvider:
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
         content = message.get("content") if isinstance(message, dict) else None
         finish_reason = choices[0].get("finish_reason") if isinstance(choices, list) and choices else None
-        if not isinstance(content, str) or not content.strip():
+        tool_calls = parse_tool_calls(message.get("tool_calls") if isinstance(message, dict) else None)
+        if not isinstance(content, str):
+            content = ""
+        if not content.strip() and not tool_calls:
             raise LLMError(
                 "llm_empty_response", "DeepSeek 返回了空内容", retryable=True,
                 details={"finish_reason": finish_reason},
@@ -159,6 +218,7 @@ class DeepSeekProvider:
             attempts=0,
             request_id=payload.get("id") if isinstance(payload.get("id"), str) else None,
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            tool_calls=tool_calls,
         )
 
     @staticmethod
@@ -173,23 +233,7 @@ class DeepSeekProvider:
             return "llm_server_error", True
         return "llm_http_error", status in RETRYABLE_STATUS
 
-    def generate(
-        self,
-        messages: list[Message],
-        *,
-        response_format: dict[str, str] | None = None,
-        max_tokens: int = 1200,
-        temperature: float = 0.2,
-    ) -> LLMResult:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        if response_format:
-            payload["response_format"] = response_format
+    def _request(self, payload: dict[str, Any]) -> LLMResult:
         started = perf_counter()
         with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
             for attempt in range(1, self.max_retries + 2):
@@ -212,6 +256,55 @@ class DeepSeekProvider:
                 if self.retry_backoff:
                     time.sleep(self.retry_backoff * attempt)
         raise LLMError("llm_unknown_error", "LLM 调用未返回结果")
+
+    def generate(
+        self,
+        messages: list[Message],
+        *,
+        response_format: dict[str, str] | None = None,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMResult:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if response_format:
+            payload["response_format"] = response_format
+        return self._request(payload)
+
+    def chat(
+        self,
+        messages: list[Message],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, str] | None = None,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMResult:
+        """Call the chat endpoint with native function definitions.
+
+        ``tool_choice`` is intentionally limited to ``auto``/``none`` in the
+        agent loop: DeepSeek rejects named/required choices in thinking mode.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+        if response_format:
+            payload["response_format"] = response_format
+        return self._request(payload)
 
     def generate_json(self, *, system: str, user: str, max_tokens: int = 1400) -> LLMJsonResult:
         meta = self.generate(

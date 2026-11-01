@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from time import perf_counter
 from typing import TypedDict
 
@@ -11,10 +12,11 @@ from .config import Settings
 from .errors import DomainError
 from .llm import LLMError
 from .llm_analysis import SYSTEM_PROMPT, build_llm_payload, build_user_prompt, validate_evidence_references
+from .llm_tools import ToolLoopResult, run_tool_loop
 from .metrics import verify_evidence
 from .models import Analysis, utcnow
 from .schemas import (
-    DriverReport, LLMAnalysisOutput, LLMErrorInfo, LLMRun, LLMUsage, MetricsReport,
+    DriverReport, LLMAnalysisOutput, LLMErrorInfo, LLMRun, LLMUsage, MetricsInput, MetricsReport,
 )
 from .security import Actor
 from .services import plan_action
@@ -67,13 +69,25 @@ def result_summary(name, update):
     if "llm" in update and update["llm"].get("status") != "not_requested":
         run = update["llm"]
         if run.get("status") == "llm_success":
-            return f"{run.get('model')} 完成根因分析（{run.get('latency_ms')} ms）"
+            tools = len(run.get("tool_calls") or [])
+            suffix = f"，{tools} 次工具调用" if run.get("native_tools") else ""
+            return f"{run.get('model')} 完成根因分析（{run.get('latency_ms')} ms{suffix}）"
         if run.get("status") == "deterministic_fallback":
             return f"LLM 未参与（{run.get('reason') or '未配置'}），使用确定性规则"
         return "LLM 分析失败"
     if "recommendation_id" in update:
         return f"已创建建议 {update['recommendation_id']}"
     return LABELS[name]
+
+
+def usage_model(usage: dict[str, int] | None) -> LLMUsage | None:
+    if not usage:
+        return None
+    allowed = {
+        key: value for key, value in usage.items()
+        if key in {"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"}
+    }
+    return LLMUsage(**allowed) if allowed else None
 
 
 def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=None):
@@ -96,6 +110,9 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             "error": run.error.model_dump() if run.error else None,
             "evidence_references": run.output.evidence_references if run.output else None,
             "confidence": run.output.confidence if run.output else None,
+            "native_tools": run.native_tools, "termination_reason": run.termination_reason,
+            "rounds": [item.model_dump(mode="json") for item in run.rounds],
+            "tool_calls": [item.model_dump(mode="json") for item in run.tool_calls],
         }
         with factory.begin() as session:
             record(session, actor, action, "analysis", analysis_id, request_id, outcome, details)
@@ -107,19 +124,29 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             result["llm"] = run.model_dump(mode="json")
             row.result = result
 
-    def llm_failure(exc: LLMError):
+    def llm_failure(exc: LLMError, loop: ToolLoopResult | None = None):
         error = LLMErrorInfo(code=exc.code, message=exc.message, retryable=exc.retryable)
+        attempts = loop.attempts if loop is not None else exc.attempts
+        latency_ms = loop.latency_ms if loop is not None else exc.latency_ms
+        model = loop.model if loop is not None else settings.llm_model
+        trace = {
+            "native_tools": loop is not None,
+            "termination_reason": loop.termination_reason if loop is not None else None,
+            "rounds": loop.rounds if loop is not None else [],
+            "tool_calls": loop.tool_calls if loop is not None else [],
+            "usage": usage_model(loop.usage) if loop is not None else None,
+        }
         if settings.llm_fallback_policy == "fail":
             failed = LLMRun(
-                status="llm_failed", configured=True, provider=settings.llm_provider, model=settings.llm_model,
-                reason=exc.code, attempts=exc.attempts, latency_ms=exc.latency_ms, error=error,
+                status="llm_failed", configured=True, provider=settings.llm_provider, model=model,
+                reason=exc.code, attempts=attempts, latency_ms=latency_ms, error=error, **trace,
             )
             audit_llm(failed, "analysis.llm_failed", "failure")
             persist_llm_run(failed)
-            raise DomainError("llm_failed", f"LLM 调用失败且降级策略为 fail：{exc.message}", 502, {"llm_code": exc.code, "attempts": exc.attempts})
+            raise DomainError("llm_failed", f"LLM 调用失败且降级策略为 fail：{exc.message}", 502, {"llm_code": exc.code, "attempts": attempts})
         fallback = LLMRun(
-            status="deterministic_fallback", configured=True, provider=settings.llm_provider, model=settings.llm_model,
-            reason=exc.code, attempts=exc.attempts, latency_ms=exc.latency_ms, error=error,
+            status="deterministic_fallback", configured=True, provider=settings.llm_provider, model=model,
+            reason=exc.code, attempts=attempts, latency_ms=latency_ms, error=error, **trace,
         )
         audit_llm(fallback, "analysis.llm_fallback", "degraded")
         return {"llm": fallback.model_dump(mode="json")}
@@ -136,6 +163,31 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             audit_llm(fallback, "analysis.llm_fallback", "degraded")
             return {"llm": fallback.model_dump(mode="json")}
         payload = build_llm_payload(report, findings, plan.action.model_dump(mode="json"))
+
+        if settings.llm_native_tools and callable(getattr(llm, "chat", None)):
+            try:
+                scope = MetricsInput.model_validate(state["scope"])
+            except ValidationError as exc:
+                return llm_failure(LLMError(
+                    "llm_invalid_scope", "分析范围无法用于工具调用",
+                    details={"errors": exc.errors(include_context=False)[:3]},
+                ))
+            loop = run_tool_loop(
+                provider=llm, registry=registry, context=replace(context, scope=scope),
+                payload=payload, settings=settings, scope=scope,
+            )
+            if loop.error is not None:
+                return llm_failure(loop.error, loop=loop)
+            assert loop.output is not None
+            run = LLMRun(
+                status="llm_success", configured=True, provider=settings.llm_provider, model=loop.model,
+                attempts=loop.attempts, latency_ms=loop.latency_ms, usage=usage_model(loop.usage),
+                output=loop.output, native_tools=True, termination_reason=loop.termination_reason,
+                rounds=loop.rounds, tool_calls=loop.tool_calls,
+            )
+            audit_llm(run, "analysis.llm_succeeded", "success")
+            return {"llm": run.model_dump(mode="json")}
+
         try:
             result = llm.generate_json(
                 system=SYSTEM_PROMPT, user=build_user_prompt(payload), max_tokens=settings.llm_max_tokens
@@ -149,13 +201,10 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                 details={"errors": exc.errors(include_context=False)[:5]},
             )
             return llm_failure(error)
-        usage = None
-        if result.meta.usage:
-            allowed = {key: value for key, value in result.meta.usage.items() if key in {"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"}}
-            usage = LLMUsage(**allowed) if allowed else None
         run = LLMRun(
             status="llm_success", configured=True, provider=settings.llm_provider, model=result.meta.model,
-            attempts=result.meta.attempts, latency_ms=result.meta.latency_ms, usage=usage, output=output,
+            attempts=result.meta.attempts, latency_ms=result.meta.latency_ms,
+            usage=usage_model(result.meta.usage), output=output,
         )
         audit_llm(run, "analysis.llm_succeeded", "success")
         return {"llm": run.model_dump(mode="json")}

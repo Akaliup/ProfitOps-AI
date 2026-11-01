@@ -7,8 +7,8 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
                                           |
                                           +-- LangGraph 分析图（异常路径 9 个持久化步骤）
                                           +-- LangGraph 执行图（3 个步骤，事务内）
-                                          +-- Tool Registry（6 个 Pydantic 工具）
-                                          +-- LLM Provider（DeepSeek，可选，超时/重试/结构化输出）
+                                          +-- Tool Registry（8 个 Pydantic 工具）
+                                          +-- LLM Provider（DeepSeek，可选，超时/重试/结构化输出/原生工具调用）
                                           +-- 审计事件 + 请求 ID
 ```
 
@@ -33,11 +33,13 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 
 ## LLM 推理层
 
-`backend/app/llm.py` 定义统一 Provider 语义：`generate()` 返回文本、模型、耗时、Token 用量、尝试次数；`generate_json()` 额外要求 OpenAI 兼容的 `response_format={"type":"json_object"}`。`DeepSeekProvider` 使用 `httpx`，基址默认 `https://api.deepseek.com`，请求 `POST /chat/completions`，模型默认 `deepseek-flash`（DeepSeek-V4.1-Flash-1017）。401/403/402 不重试，429/5xx/超时/网络错误/空响应按 `LLM_MAX_RETRIES` 有界重试；每次错误映射稳定错误码，并记录尝试次数和耗时。
+`backend/app/llm.py` 定义统一 Provider 语义：`generate()` 返回文本、模型、耗时、Token 用量、尝试次数；`generate_json()` 额外要求 OpenAI 兼容的 `response_format={"type":"json_object"}`；`chat()` 接受 `tools`/`tool_choice` 并解析 assistant 的 `tool_calls`（`id`、`type=function`、`function.name`、`function.arguments`）。`DeepSeekProvider` 使用 `httpx`，基址默认 `https://api.deepseek.com`，请求 `POST /chat/completions`，模型默认 `deepseek-flash`（DeepSeek-V4.1-Flash-1017）。401/403/402 不重试，429/5xx/超时/网络错误/空响应按 `LLM_MAX_RETRIES` 有界重试；每次错误映射稳定错误码，并记录尝试次数和耗时。空 `content` 只有在存在 `tool_calls` 时才算有效响应。
 
-工作流只调用一次 LLM，位置在确定性利润、异常归因和证据校验之后、创建建议之前。输入由 `build_llm_payload` 从已计算结果构造，包括周期、总额、变化、主要驱动、8 项证据、紧凑 SKU 摘要和 `plan_action` 已确定的模拟动作；金额字段为整数美分并显式标注 `amount_unit`。提示词要求只引用给定证据、不编造数字、不承诺收益、保持 simulation 边界、限制各字段长度，并输出严格 JSON。调用使用可配置的 `LLM_MAX_TOKENS`（默认 4000）；Provider 记录 `finish_reason`，截断导致的非法 JSON 会在错误信息中明确标注。输出经 `LLMAnalysisOutput`（Pydantic）校验；独立节点 `verify_llm_evidence` 检查 `summary/root_causes/recommendations/evidence_references` 中的全部证据 ID 是否属于本次 `findings.evidence`。任何未知 ID 都会使本次 LLM 输出作废，不能进入审批流。
+LLM 节点位于确定性利润、异常归因和证据校验之后、创建建议之前。输入由 `build_llm_payload` 从已计算结果构造，包括周期、总额、变化、主要驱动、8 项证据、紧凑 SKU 摘要和 `plan_action` 已确定的模拟动作；金额字段为整数美分并显式标注 `amount_unit`。提示词要求只引用给定证据、不编造数字、不承诺收益、保持 simulation 边界、限制各字段长度，并输出严格 JSON。启用 `LLM_NATIVE_TOOLS` 时，`backend/app/llm_tools.py` 执行有界循环：普通轮 `tool_choice=auto`，最后一轮强制 `none`；模型请求的工具必须同时通过显式名称允许列表（`get_profit_analysis`、`get_sku_breakdown`）、Registry 存在性、`policy=safe`、`effect=read|pure`、服务端角色、Pydantic 输入 Schema 和本次 period/store 范围校验。工具由服务端读取可信账本并用既有指标函数计算，模型只提交 `MetricsInput`，不能提交 `RawMetrics` 或完整报告。工具结果以 `role=tool` 消息回传，循环受轮次、调用次数、重复次数、总预算和结果字节数限制；任何拒绝或异常都会终止循环并按降级策略处理，不会落到写工具。`result.llm` 持久化 `native_tools`、`termination_reason`、逐轮 `rounds` 和逐次 `tool_calls`。不支持 `chat()` 的 FakeProvider 继续使用单次 `generate_json` 路径。
 
-数字权威性没有转移：建议标题、动作参数、预算和预期影响金额仍由确定性 `plan_action` 生成；LLM 成功时只把 `summary` 用于建议的“问题”描述，并附加根因、风险、待补充信息和置信度。`recommendations.body.engine` 与 `analysis.result.engine` 只有在 `llm_success` 时为 `deepseek-llm-v1`。降级状态完整持久化：无 Key 为 `deterministic_fallback/not_configured`，调用或证据失败为 `deterministic_fallback` 并带错误码，`LLM_FALLBACK_POLICY=fail` 时为 `llm_failed` 且分析失败，无异常/数据不足为 `not_requested`。审计分别记录 `analysis.llm_succeeded`、`analysis.llm_fallback`（degraded）和 `analysis.llm_failed`。LLM 步骤不叠加通用 15s 步骤超时，由 Provider 的 `LLM_TIMEOUT` + 有界重试负责。
+调用使用可配置的 `LLM_MAX_TOKENS`（默认 4000）；Provider 记录 `finish_reason`，截断导致的非法 JSON 会在错误信息中明确标注。最终输出经 `LLMAnalysisOutput`（Pydantic）校验；独立节点 `verify_llm_evidence` 检查 `summary/root_causes/recommendations/evidence_references` 中的全部证据 ID 是否属于本次 `findings.evidence`。任何未知 ID 都会使本次 LLM 输出作废，不能进入审批流。
+
+数字权威性没有转移：建议标题、动作参数、预算和预期影响金额仍由确定性 `plan_action` 生成；LLM 成功时只把 `summary` 用于建议的“问题”描述，并附加根因、风险、待补充信息和置信度。`recommendations.body.engine` 与 `analysis.result.engine` 只有在 `llm_success` 时为 `deepseek-llm-v1`。降级状态完整持久化：无 Key 为 `deterministic_fallback/not_configured`，调用或证据失败为 `deterministic_fallback` 并带错误码，`LLM_FALLBACK_POLICY=fail` 时为 `llm_failed` 且分析失败，无异常/数据不足为 `not_requested`。审计分别记录 `analysis.llm_succeeded`、`analysis.llm_fallback`（degraded）和 `analysis.llm_failed`。LLM 步骤不叠加通用 15s 步骤超时，由 Provider 的 `LLM_TIMEOUT` + 有界重试负责；原生工具循环另受 `LLM_TOOL_BUDGET_SECONDS` 总预算约束。
 
 ## 状态机与并发
 
@@ -47,7 +49,7 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 
 演示 Bearer token 在服务端映射为 analyst / approver。客户端传入的 `X-Role`、`X-Actor` 不参与身份判断。Tool Registry 和业务服务都做角色校验，普通分析师即使调用 API 或隐藏前端按钮也无法批准或执行。
 
-工具在 `/api/tools` 中显式声明 `policy`：`safe` 表示只读、纯计算或仅写入本系统提案；`ask` 表示需要人工审批后才能执行的模拟动作；`deny` 表示外部系统副作用，注册表在调用前直接拒绝（当前没有注册任何 deny 工具）。`simulate_execute_approved_action` 是唯一的 `ask` 工具，同时受 approver 角色、`approved` 条件 UPDATE 和唯一执行记录约束。审批页面在执行前展示待模拟动作的参数（SKU、参考日预算、模拟新预算），避免“只看到建议、看不到具体动作”。
+工具在 `/api/tools` 中显式声明 `policy`：`safe` 表示只读、纯计算或仅写入本系统提案；`ask` 表示需要人工审批后才能执行的模拟动作；`deny` 表示外部系统副作用，注册表在调用前直接拒绝（当前没有注册任何 deny 工具）。`simulate_execute_approved_action` 是唯一的 `ask` 工具，同时受 approver 角色、`approved` 条件 UPDATE 和唯一执行记录约束。审批页面在执行前展示待模拟动作的参数（SKU、参考日预算、模拟新预算），避免“只看到建议、看不到具体动作”。模型可见工具另受 `LLM_TOOL_ALLOWLIST`、`effect`、`policy` 和角色四重限制：`create_recommendation` 虽为 `safe`，但 `effect=database_write`，不会暴露给模型；审批与模拟执行工具也不在允许列表。
 
 审计接口支持按 `object_id` 或 `request_id` 精确过滤；时间戳统一输出 UTC ISO 8601（`Z`），SQLite 与 PostgreSQL 行为一致。这个机制明确是本地演示身份，不是生产认证；生产需要 OIDC、租户隔离、密钥管理、速率限制和真实授权策略。
 

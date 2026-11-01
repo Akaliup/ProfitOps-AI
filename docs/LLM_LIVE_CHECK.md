@@ -145,3 +145,54 @@ ev-other_costs, ev-platform_fees, ev-refunds, ev-sales
 ```
 
 脚本只有在 `llm_success` 时才以 0 退出；未配置 Key 时安全跳过（退出码 2）；调用失败或降级时退出码 1（可用 `--allow-fallback` 放宽）。脚本不会打印 API Key，也不会触碰运行库。
+
+## 2026-11-01 Phase 2C 原生 Function Calling 真实调用
+
+分支：`feat/native-function-calling`（基线 `1134ff4`）
+
+命令：`.venv/Scripts/python.exe scripts/llm_check.py`
+
+数据：脚本创建的临时 SQLite 数据库，自动 Seed；不读写 `data/profitops.db`
+
+密钥：仅从本地 `.env` 读取；本文不包含 API Key
+
+共执行 3 次脚本运行，全部为真实 `deepseek-flash` 调用，不包含 Mock：
+
+1. 第 1 次：第 1 轮真实返回 2 个 `tool_calls`，服务端执行成功；第 2 轮遇到 `llm_network_error`，按 `rules` 策略降级。记录：`deterministic_fallback`、`native_tools=true`、`termination_reason=llm_network_error`、`attempts=4`、`latency_ms=8761.279`、`total_tokens=3254`；两个工具调用均 `ok=true`。
+2. 第 2 次：脚本成功，`engine=deepseek-llm-v1`；未保存完整元数据，因此不作为下面的数值证据。
+3. 第 3 次：完整成功并保存报告。以下为第 3 次实际值。
+
+| 字段 | 实际值 |
+|---|---|
+| 分析状态 | `waiting_approval` |
+| LLM 状态 | `llm_success` |
+| `engine` | `deepseek-llm-v1` |
+| 模型 | `deepseek-flash` |
+| `native_tools` | `true` |
+| `termination_reason` | `final_answer` |
+| 总耗时 | `20482.961 ms` |
+| `attempts` | `3` |
+| prompt_tokens | `8678` |
+| completion_tokens | `2028` |
+| total_tokens | `10706` |
+| cached_tokens | `8192` |
+| 证据引用 | `all_references_valid=true` |
+| 副作用 | 仅生成待审批建议，未自动批准或执行 |
+
+逐轮轨迹：
+
+| round | finish_reason | tool_call_count | latency_ms | total_tokens |
+|---|---|---|---|---|
+| 1 | `tool_calls` | 2 | 3963.087 | 3283 |
+| 2 | `stop` | 0 | 16333.509 | 7423 |
+
+工具调用：
+
+| tool_call_id | 工具 | 参数 | 结果摘要 | 耗时 |
+|---|---|---|---|---|
+| `call_00_QgtEEdXRnhYnJ3WYAq7X8051` | `get_profit_analysis` | period `2026-10-01..2026-10-30`，store `null` | `ok; net_profit=-570300; anomaly=True; evidence=8` | 72.595 ms |
+| `call_01_238f3Mw9LcJeWLi1eiTb4080` | `get_sku_breakdown` | 同上 | `ok; rows=3` | 109.029 ms |
+
+这次真实调用验证了：模型确实按原生协议返回 `tool_calls`；服务端只执行了允许列表内的两个只读工具；工具结果以 `role=tool` 回传后，模型在下一轮输出符合 `LLMAnalysisOutput` 的最终 JSON；全部证据 ID 有效，建议进入待审批状态，未自动批准或执行。第 1 次的网络失败也按预期以 `deterministic_fallback` 暴露，没有被伪装成成功。
+
+这不是稳定性或准确率评测：只有 3 次脚本运行，其中第 1 次失败、第 3 次有完整元数据；不据此声明成功率。复现命令会发起真实调用并消耗 Token。

@@ -8,6 +8,8 @@
 
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
 
+> Phase 2C 原生 Function Calling 未纳入本报告的评测口径。2026-11-01 另执行了 3 次真实脚本运行用于协议验收：第 1 次第 2 轮网络错误降级，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），记录见 `docs/LLM_LIVE_CHECK.md`。这不是评测集运行，不能据此声称工具调用准确率或真实多轮稳定性。
+
 ## 1. 交付内容
 
 | 文件 | 作用 |

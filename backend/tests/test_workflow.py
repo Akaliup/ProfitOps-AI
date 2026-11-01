@@ -62,7 +62,7 @@ def test_tool_validation_permission_unknown_and_failure(client):
     assert registry.invoke("simulate_execute_approved_action", {"recommendation_id": "x", "idempotency_key": "test"}, context).error.code == "forbidden"
     assert registry.invoke("get_sales_metrics", {"period": {"start_date": "2026-10-30", "end_date": "2026-10-01"}}, context).error.code == "invalid_tool_input"
     catalog = registry.catalog()
-    assert len(catalog) == 6
+    assert len(catalog) == 8
     assert all(item["input_schema"] and item["output_schema"] for item in catalog)
     spec = registry.tools["get_sales_metrics"]
     spec.handler = lambda payload, ctx: (_ for _ in ()).throw(RuntimeError("data-source-offline"))
@@ -93,10 +93,12 @@ def test_failed_node_and_timeout_are_visible(client, analyst, monkeypatch):
 def test_tool_policy_catalog_and_deny(client, analyst):
     registry = client.app.state.registry
     response = client.get("/api/tools", headers=analyst)
-    assert response.status_code == 200 and len(response.json()["items"]) == 6
+    assert response.status_code == 200 and len(response.json()["items"]) == 8
     catalog = {item["name"]: item for item in registry.catalog()}
     assert {item["policy"] for item in catalog.values()} == {"safe", "ask"}
     assert catalog["get_sales_metrics"]["policy"] == "safe"
+    assert catalog["get_profit_analysis"]["effect"] == "read"
+    assert catalog["get_sku_breakdown"]["effect"] == "read"
     assert catalog["simulate_execute_approved_action"]["policy"] == "ask"
     context = ToolContext(client.app.state.factory, Actor("demo-approver", "approver"), "policy-test")
     registry.register(ToolSpec(
