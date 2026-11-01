@@ -387,6 +387,30 @@ def test_openai_embedding_provider_normalizes_and_orders_by_index():
     assert provider.dimensions == 2
 
 
+@pytest.mark.parametrize(("base_url", "expected"), [
+    ("http://127.0.0.1:11434/v1", False),
+    ("http://localhost:11434/v1", False),
+    ("http://embed.local/v1", True),
+])
+def test_embedding_provider_proxy_policy_follows_endpoint(monkeypatch, base_url, expected):
+    seen: dict[str, object] = {}
+    real_client = httpx.Client
+
+    def capture_client(*args, **kwargs):
+        seen.update(kwargs)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", capture_client)
+    provider = OpenAIEmbeddingProvider(
+        base_url=base_url, api_key="", model="bge-m3",
+        transport=httpx.MockTransport(lambda request: httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]},
+        )),
+    )
+    provider.embed(["x"])
+    assert seen["trust_env"] is expected
+
+
 def test_openai_embedding_provider_fails_closed():
     provider = OpenAIEmbeddingProvider(
         base_url="http://embed.local/v1", api_key="", model="bge-m3",

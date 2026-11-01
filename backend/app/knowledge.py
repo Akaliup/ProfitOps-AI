@@ -21,6 +21,7 @@ from collections import Counter
 from datetime import date
 from time import perf_counter
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import func, select
@@ -160,7 +161,14 @@ class OpenAIEmbeddingProvider:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
+            # A loopback embedding gateway must not be routed through a
+            # machine-wide HTTP proxy: on Windows that proxy often answers
+            # localhost with 502 before the request reaches Ollama.
+            host = (urlparse(self.base_url).hostname or "").lower()
+            trust_env = host not in {"127.0.0.1", "localhost", "::1"}
+            with httpx.Client(
+                timeout=self.timeout, transport=self.transport, trust_env=trust_env,
+            ) as client:
                 response = client.post(
                     f"{self.base_url}/embeddings",
                     headers=headers,
