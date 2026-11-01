@@ -2,6 +2,23 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-02 PR #9 成本与调用口径收口（Claude Code）
+
+分支 `feat/final-agent-validation`，PR #9，基线 `7da915e`。本轮只修复 native Function Calling 的逐轮成本完整性与模型调用/Provider 请求计数口径，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史运行数据。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | **266 passed, 0 failed, 0 skipped**（114.35s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 同上，使用 `.venv311/Scripts/python.exe` | **266 passed, 0 failed, 0 skipped**（189.64s，1 个第三方 DeprecationWarning） |
+| 运维汇总定向回归 | `.venv/Scripts/python.exe -m pytest backend/tests/test_ops.py -q` | **17 passed**（8.01s） |
+| 前端单元/交互 | `npm --prefix frontend test -- --run` | **16 passed**（1 file，9.15s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | **PASS**；Vite 6.4.5，2252 modules，4.57s |
+| Playwright 浏览器 E2E | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e` | **7 passed**（21.7s）；独立临时库，`LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| 真实 LLM | 未调用 | **NOT RUN**；本轮没有真实调用授权，付费 token 0 |
+| GitHub Actions | 推送后由 `.github/workflows/ci.yml` 执行 | 推送后确认，不以本地结果代替 CI |
+
+本轮定向回归覆盖：native 两轮均有 Usage 且可定价时 `cost.status=complete`，总额为两轮独立估算之和；第一轮有 Usage、第二轮缺失时 `partial`、`amount_usd=null`，`known_subtotal_usd` 只含第一轮；一轮成功、一轮失败且失败轮缺 Usage 时同样为 `partial`；native 两轮但 `attempts=3` 时 `model_calls=2`、`provider_requests=3`、`provider_retries=1`；非 native 单次逻辑调用 `attempts=3` 时 `model_calls=1`、`provider_requests=3`；请求发出前即失败（`attempts=0`、无 Usage、无轮次）不计入模型调用与成本分母。`verify_llm` 成功事件与随后终止事件的去重测试已改为两轮 native 记录，确保不会把同一次运行重复计数。
+
 ## 2026-11-02 PR #9 运维汇总 P2 修复复验（Claude Code）
 
 分支 `feat/final-agent-validation`，PR #9，基线 `e99a016`。本轮只修复 `GET /api/ops/summary` 的成本口径、审计历史去重与查询边界，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史失败数据。

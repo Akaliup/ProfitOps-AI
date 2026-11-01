@@ -125,7 +125,8 @@ export interface OpsSummary {
     error_codes: { code: string; count: number }[];
   };
   llm: {
-    runs: number; model_calls: number; no_model_call_runs: number;
+    runs: number; model_calls: number; provider_requests: number; provider_retries: number;
+    no_model_call_runs: number;
     by_status: Record<string, number>; native_tool_runs: number;
     termination_reasons: { reason: string; count: number }[];
   };
@@ -140,7 +141,9 @@ export interface OpsSummary {
   cost: {
     status: 'complete' | 'partial' | 'no_data'; currency: string; amount_usd: number | null;
     known_subtotal_usd: number | null;
-    priced_runs: number; unpriced_runs: number; pricing_version: string | null;
+    priced_runs: number; unpriced_runs: number;
+    priced_calls: number; unpriced_calls: number;
+    pricing_version: string | null;
     source: string; note: string;
   };
   approvals: { current_state: boolean; by_status: Record<string, number> };

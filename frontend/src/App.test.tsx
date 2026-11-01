@@ -25,7 +25,7 @@ const opsSummary: OpsSummary = {
     error_codes: [{ code: 'llm_network_error', count: 2 }],
   },
   llm: {
-    runs: 2, model_calls: 1, no_model_call_runs: 1,
+    runs: 2, model_calls: 1, provider_requests: 2, provider_retries: 1, no_model_call_runs: 1,
     by_status: { llm_success: 1, deterministic_fallback: 1, llm_failed: 0, not_requested: 0 },
     native_tool_runs: 1, termination_reasons: [{ reason: 'final_answer', count: 1 }],
   },
@@ -33,7 +33,7 @@ const opsSummary: OpsSummary = {
   tokens: { runs_with_usage: 1, runs_without_usage: 1, prompt: 1000, completion: 100, total: 1100, cached: 200 },
   cost: {
     status: 'partial', currency: 'USD', amount_usd: null, known_subtotal_usd: 0.00042,
-    priced_runs: 1, unpriced_runs: 1,
+    priced_runs: 1, unpriced_runs: 1, priced_calls: 1, unpriced_calls: 1,
     pricing_version: '2026-11-02', source: 'https://api-docs.deepseek.com/quick_start/pricing', note: '估算',
   },
   approvals: { current_state: true, by_status: { pending_approval: 1, approved: 0, rejected: 0, executed: 0, execution_failed: 0 } },
@@ -350,6 +350,7 @@ describe('ProfitOps workspace', () => {
 
     await user.selectOptions(screen.getByLabelText('演示身份'), 'demo-approver')
     expect((await screen.findAllByText('部分未知')).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Provider 请求 2（内部重试 1）/)).toBeVisible()
     expect(screen.getByText(/1 次调用缺少 Usage 或价格，未按 0 计。/)).toBeVisible()
     expect(screen.getAllByText(/已知小计/).length).toBeGreaterThan(0)
     expect(screen.getByText(/仅作诊断，不是总成本/)).toBeVisible()

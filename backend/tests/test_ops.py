@@ -3,6 +3,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from app.models import Analysis, AuditLog, Execution, Recommendation, Tenant, User, utcnow
+from app.pricing import estimate_cost_usd
 from app.security import hash_password
 
 ACME_APPROVER_EMAIL = "approver@acme.test"
@@ -75,9 +76,16 @@ def llm_result(*, usage=None, model="deepseek-flash", status="llm_success"):
     }
 
 
+def llm_round(round_no, usage, *, finish_reason="tool_calls", tool_call_count=1):
+    return {
+        "round": round_no, "finish_reason": finish_reason,
+        "tool_call_count": tool_call_count, "latency_ms": 10.0, "usage": usage,
+    }
+
+
 def llm_details(
     *, usage=None, model="deepseek-flash", status="llm_success", configured=True,
-    reason=None, latency_ms=15.0, native_tools=True,
+    reason=None, latency_ms=15.0, native_tools=True, attempts=1, rounds=None,
 ):
     return {
         "status": status,
@@ -85,7 +93,7 @@ def llm_details(
         "provider": "deepseek",
         "model": model,
         "reason": reason,
-        "attempts": 1,
+        "attempts": attempts,
         "latency_ms": latency_ms,
         "usage": usage,
         "error": None,
@@ -94,12 +102,9 @@ def llm_details(
         "confidence": None,
         "native_tools": native_tools,
         "termination_reason": "final_answer" if native_tools else None,
-        "rounds": [
-            {
-                "round": 1, "finish_reason": "tool_calls", "tool_call_count": 1,
-                "latency_ms": 10.0, "usage": usage,
-            },
-        ] if native_tools else [],
+        "rounds": rounds if rounds is not None else (
+            [llm_round(1, usage)] if native_tools else []
+        ),
         "tool_calls": [
             {
                 "round": 1, "tool_call_id": "call-1", "name": "get_profit_analysis",
@@ -195,6 +200,9 @@ def test_ops_aggregates_persisted_jobs_tools_tokens_and_cost(client, approver):
     assert jobs["error_codes"] == [{"code": "llm_network_error", "count": 1}]
 
     assert body["llm"]["runs"] == 1
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 2
+    assert body["llm"]["provider_retries"] == 0
     assert body["llm"]["by_status"]["llm_success"] == 1
     assert body["llm"]["native_tool_runs"] == 1
     assert body["llm"]["termination_reasons"] == [{"reason": "final_answer", "count": 1}]
@@ -214,6 +222,8 @@ def test_ops_aggregates_persisted_jobs_tools_tokens_and_cost(client, approver):
     assert body["cost"]["known_subtotal_usd"] == body["cost"]["amount_usd"]
     assert body["cost"]["priced_runs"] == 1
     assert body["cost"]["unpriced_runs"] == 0
+    assert body["cost"]["priced_calls"] == 2
+    assert body["cost"]["unpriced_calls"] == 0
     assert body["cost"]["pricing_version"] == "2026-11-02"
     assert body["approvals"]["by_status"]["pending_approval"] == 1
     assert body["approvals"]["by_status"]["approved"] == 1
@@ -329,7 +339,9 @@ def test_ops_partial_cost_keeps_known_subtotal_separate(client, approver):
 
     body = client.get("/api/ops/summary", headers=approver).json()
     assert body["llm"]["runs"] == 2
-    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["model_calls"] == 3
+    assert body["llm"]["provider_requests"] == 3
+    assert body["llm"]["provider_retries"] == 0
     assert body["tokens"] == {
         "runs_with_usage": 2, "runs_without_usage": 0,
         "prompt": 3000, "completion": 300, "total": 3300, "cached": 200,
@@ -339,6 +351,8 @@ def test_ops_partial_cost_keeps_known_subtotal_separate(client, approver):
     assert body["cost"]["known_subtotal_usd"] > 0
     assert body["cost"]["priced_runs"] == 1
     assert body["cost"]["unpriced_runs"] == 1
+    assert body["cost"]["priced_calls"] == 1
+    assert body["cost"]["unpriced_calls"] == 2
 
 
 def test_ops_retry_history_counts_each_llm_call_once(client, approver):
@@ -378,7 +392,13 @@ def test_ops_retry_history_counts_each_llm_call_once(client, approver):
 
 
 def test_ops_success_then_invalid_evidence_fallback_counts_once(client, approver):
-    success = llm_details(usage=USAGE_A)
+    success = llm_details(
+        usage=USAGE_A, attempts=2,
+        rounds=[
+            llm_round(1, USAGE_A),
+            llm_round(2, USAGE_A, finish_reason="stop", tool_call_count=0),
+        ],
+    )
     fallback = {
         **success,
         "status": "deterministic_fallback",
@@ -399,7 +419,9 @@ def test_ops_success_then_invalid_evidence_fallback_counts_once(client, approver
 
     body = client.get("/api/ops/summary", headers=approver).json()
     assert body["llm"]["runs"] == 1
-    assert body["llm"]["model_calls"] == 1
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 2
+    assert body["llm"]["provider_retries"] == 0
     assert body["llm"]["by_status"]["deterministic_fallback"] == 1
     assert body["llm"]["by_status"]["llm_success"] == 0
     assert body["tools"]["calls"] == 1
@@ -409,6 +431,8 @@ def test_ops_success_then_invalid_evidence_fallback_counts_once(client, approver
     assert body["cost"]["amount_usd"] > 0
     assert body["cost"]["priced_runs"] == 1
     assert body["cost"]["unpriced_runs"] == 0
+    assert body["cost"]["priced_calls"] == 2
+    assert body["cost"]["unpriced_calls"] == 0
 
 
 def test_ops_failed_call_without_usage_is_partial(client, approver):
@@ -498,8 +522,168 @@ def test_ops_many_analyses_aggregate_with_bounded_recent_details(client, approve
     assert len(body["recent_failures"]) == 10
     assert body["llm"]["runs"] == 150
     assert body["llm"]["model_calls"] == 150
+    assert body["llm"]["provider_requests"] == 150
+    assert body["llm"]["provider_retries"] == 0
     assert body["tokens"]["prompt"] == 150_000
     assert body["tokens"]["completion"] == 15_000
     assert body["tokens"]["total"] == 165_000
     assert body["cost"]["status"] == "complete"
     assert body["cost"]["amount_usd"] > 0
+    assert body["cost"]["priced_calls"] == 150
+    assert body["cost"]["unpriced_calls"] == 0
+
+
+def test_ops_native_two_priced_rounds_are_complete(client, approver):
+    details = llm_details(
+        usage=USAGE_A, attempts=2,
+        rounds=[
+            llm_round(1, USAGE_A),
+            llm_round(2, USAGE_B, finish_reason="stop", tool_call_count=0),
+        ],
+    )
+    add_analysis(
+        client, "job-native-two-priced",
+        result={"engine": "deterministic-rules-v1", "llm": details},
+    )
+    add_llm_audit(client, "job-native-two-priced", details=details)
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["runs"] == 1
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 2
+    assert body["llm"]["provider_retries"] == 0
+    assert body["cost"]["status"] == "complete"
+    expected = round(
+        estimate_cost_usd("deepseek-flash", USAGE_A)["amount_usd"]
+        + estimate_cost_usd("deepseek-flash", USAGE_B)["amount_usd"],
+        6,
+    )
+    assert abs(body["cost"]["amount_usd"] - expected) < 1e-9
+    assert body["cost"]["known_subtotal_usd"] == body["cost"]["amount_usd"]
+    assert body["cost"]["priced_calls"] == 2
+    assert body["cost"]["unpriced_calls"] == 0
+    assert body["cost"]["priced_runs"] == 1
+    assert body["cost"]["unpriced_runs"] == 0
+
+
+def test_ops_native_missing_round_usage_is_partial(client, approver):
+    details = llm_details(
+        usage=USAGE_A, attempts=2,
+        rounds=[
+            llm_round(1, USAGE_A),
+            llm_round(2, None, finish_reason="stop", tool_call_count=0),
+        ],
+    )
+    add_analysis(
+        client, "job-native-missing-usage",
+        result={"engine": "deterministic-rules-v1", "llm": details},
+    )
+    add_llm_audit(client, "job-native-missing-usage", details=details)
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 2
+    assert body["llm"]["provider_retries"] == 0
+    assert body["cost"]["status"] == "partial"
+    assert body["cost"]["amount_usd"] is None
+    expected = estimate_cost_usd("deepseek-flash", USAGE_A)["amount_usd"]
+    assert abs(body["cost"]["known_subtotal_usd"] - expected) < 1e-9
+    assert body["cost"]["priced_calls"] == 1
+    assert body["cost"]["unpriced_calls"] == 1
+    assert body["cost"]["priced_runs"] == 0
+    assert body["cost"]["unpriced_runs"] == 1
+
+
+def test_ops_native_failed_round_without_usage_is_partial(client, approver):
+    details = llm_details(
+        status="deterministic_fallback", reason="llm_timeout",
+        usage=USAGE_A, attempts=2,
+        rounds=[
+            llm_round(1, USAGE_A),
+            llm_round(2, None, finish_reason=None, tool_call_count=0),
+        ],
+    )
+    add_analysis(
+        client, "job-native-failed-round",
+        result={"engine": "deterministic-rules-v1", "llm": details},
+    )
+    add_llm_audit(
+        client, "job-native-failed-round", action="analysis.llm_fallback",
+        outcome="degraded", details=details,
+    )
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["by_status"]["deterministic_fallback"] == 1
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 2
+    assert body["cost"]["status"] == "partial"
+    assert body["cost"]["amount_usd"] is None
+    expected = estimate_cost_usd("deepseek-flash", USAGE_A)["amount_usd"]
+    assert abs(body["cost"]["known_subtotal_usd"] - expected) < 1e-9
+    assert body["cost"]["priced_calls"] == 1
+    assert body["cost"]["unpriced_calls"] == 1
+    assert body["cost"]["priced_runs"] == 0
+    assert body["cost"]["unpriced_runs"] == 1
+
+
+def test_ops_native_internal_retries_are_provider_requests(client, approver):
+    details = llm_details(
+        usage=USAGE_A, attempts=3,
+        rounds=[
+            llm_round(1, USAGE_A),
+            llm_round(2, USAGE_A, finish_reason="stop", tool_call_count=0),
+        ],
+    )
+    add_analysis(
+        client, "job-native-retry",
+        result={"engine": "deterministic-rules-v1", "llm": details},
+    )
+    add_llm_audit(client, "job-native-retry", details=details)
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["model_calls"] == 2
+    assert body["llm"]["provider_requests"] == 3
+    assert body["llm"]["provider_retries"] == 1
+    assert body["cost"]["status"] == "complete"
+    assert body["cost"]["priced_calls"] == 2
+
+
+def test_ops_non_native_internal_retries_are_provider_requests(client, approver):
+    details = llm_details(usage=USAGE_A, native_tools=False, attempts=3)
+    add_analysis(
+        client, "job-non-native-retry",
+        result={"engine": "deepseek-llm-v1", "llm": details},
+    )
+    add_llm_audit(client, "job-non-native-retry", details=details)
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["model_calls"] == 1
+    assert body["llm"]["provider_requests"] == 3
+    assert body["llm"]["provider_retries"] == 2
+    assert body["cost"]["status"] == "complete"
+    assert body["cost"]["priced_calls"] == 1
+    assert body["cost"]["unpriced_calls"] == 0
+
+
+def test_ops_failed_before_provider_request_is_not_a_model_call(client, approver):
+    details = llm_details(
+        status="deterministic_fallback", reason="llm_invalid_scope",
+        usage=None, native_tools=False, attempts=0,
+    )
+    add_analysis(
+        client, "job-before-request",
+        result={"engine": "deterministic-rules-v1", "llm": details},
+    )
+    add_llm_audit(
+        client, "job-before-request", action="analysis.llm_fallback",
+        outcome="degraded", details=details,
+    )
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    assert body["llm"]["runs"] == 1
+    assert body["llm"]["model_calls"] == 0
+    assert body["llm"]["provider_requests"] == 0
+    assert body["llm"]["provider_retries"] == 0
+    assert body["llm"]["no_model_call_runs"] == 1
+    assert body["cost"]["status"] == "no_data"
+    assert body["cost"]["amount_usd"] is None

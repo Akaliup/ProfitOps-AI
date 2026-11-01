@@ -43,7 +43,8 @@ def _is_model_call(run: dict[str, Any]) -> bool:
 
     ``not_requested`` jobs never reach the LLM node. A fallback created with
     ``configured=false`` (or ``reason=not_configured``) is also not a call, so
-    it must not enter token/cost denominators.
+    it must not enter token/cost denominators. A failed run with no attempts,
+    no usage and no native rounds failed before any provider request.
     """
     status = run.get("status")
     if status == "not_requested":
@@ -52,7 +53,45 @@ def _is_model_call(run: dict[str, Any]) -> bool:
         return False
     if status == "deterministic_fallback" and run.get("reason") == "not_configured":
         return False
+    if status == "llm_success":
+        return True
+    attempts = _number(run.get("attempts")) or 0
+    rounds = run.get("rounds")
+    has_rounds = isinstance(rounds, list) and bool(rounds)
+    if attempts == 0 and run.get("usage") is None and not has_rounds:
+        return False
     return True
+
+
+def _call_usages(run: dict[str, Any]) -> list[Any]:
+    """Return one usage value per logical provider call.
+
+    Native function calling issues one provider request per tool round; each
+    round carries its own usage. Non-native runs issue one request. A native
+    run without persisted rounds is treated as one call for legacy records.
+    """
+    if run.get("native_tools") is True:
+        rounds = run.get("rounds")
+        if isinstance(rounds, list) and rounds:
+            return [
+                item.get("usage") if isinstance(item, dict) else None
+                for item in rounds
+            ]
+    return [run.get("usage")]
+
+
+def _provider_request_count(run: dict[str, Any], logical_calls: int) -> int:
+    """Actual HTTP requests, including retries inside the provider client.
+
+    ``attempts`` is persisted as the sum of each provider request's HTTP
+    attempts. It can exceed the number of logical calls when the provider
+    retries a transport or retryable HTTP error. Older records may have no
+    attempts, so the logical call count is the floor.
+    """
+    attempts = _number(run.get("attempts")) or 0
+    if run.get("native_tools") is True:
+        return max(attempts, logical_calls)
+    return max(attempts, 1)
 
 
 def _same_model_call(first: dict[str, Any], second: dict[str, Any]) -> bool:
@@ -148,6 +187,8 @@ def build_ops_summary(
     llm_stats = {
         "runs": 0,
         "model_calls": 0,
+        "provider_requests": 0,
+        "provider_retries": 0,
         "no_model_call_runs": 0,
         "native_runs": 0,
         "tool_calls": 0,
@@ -157,6 +198,8 @@ def build_ops_summary(
         "runs_without_usage": 0,
         "priced_runs": 0,
         "unpriced_runs": 0,
+        "priced_calls": 0,
+        "unpriced_calls": 0,
         "cost_total": 0.0,
     }
 
@@ -170,7 +213,13 @@ def build_ops_summary(
             llm_stats["no_model_call_runs"] += 1
             return
 
-        llm_stats["model_calls"] += 1
+        call_usages = _call_usages(run)
+        logical_calls = len(call_usages)
+        llm_stats["model_calls"] += logical_calls
+        provider_requests = _provider_request_count(run, logical_calls)
+        llm_stats["provider_requests"] += provider_requests
+        llm_stats["provider_retries"] += max(0, provider_requests - logical_calls)
+
         if run.get("native_tools") is True:
             llm_stats["native_runs"] += 1
         reason = run.get("termination_reason")
@@ -192,31 +241,43 @@ def build_ops_summary(
         if isinstance(rounds, list):
             llm_stats["tool_rounds"] += len(rounds)
 
+        # Token totals use the aggregate persisted usage. Cost is computed per
+        # logical call below, so a missing round can never be hidden by the
+        # known tokens of another round.
         usage = run.get("usage")
-        if not isinstance(usage, dict):
-            llm_stats["runs_without_usage"] += 1
-            llm_stats["unpriced_runs"] += 1
-            return
-        prompt = _number(usage.get("prompt_tokens"))
-        completion = _number(usage.get("completion_tokens"))
-        total = _number(usage.get("total_tokens"))
-        cached = _number(usage.get("cached_tokens")) or 0
+        prompt = completion = total = None
+        cached = 0
+        if isinstance(usage, dict):
+            prompt = _number(usage.get("prompt_tokens"))
+            completion = _number(usage.get("completion_tokens"))
+            total = _number(usage.get("total_tokens"))
+            cached = _number(usage.get("cached_tokens")) or 0
         if prompt is None and completion is None and total is None:
             llm_stats["runs_without_usage"] += 1
-            llm_stats["unpriced_runs"] += 1
-            return
-        llm_stats["runs_with_usage"] += 1
-        token_totals["prompt"] += prompt or 0
-        token_totals["completion"] += completion or 0
-        token_totals["total"] += total if total is not None else (prompt or 0) + (completion or 0)
-        token_totals["cached"] += cached
-        estimate = estimate_cost_usd(run.get("model"), usage)
-        if estimate is None:
+        else:
+            llm_stats["runs_with_usage"] += 1
+            token_totals["prompt"] += prompt or 0
+            token_totals["completion"] += completion or 0
+            token_totals["total"] += total if total is not None else (prompt or 0) + (completion or 0)
+            token_totals["cached"] += cached
+
+        run_unpriced = 0
+        for call_usage in call_usages:
+            estimate = (
+                estimate_cost_usd(run.get("model"), call_usage)
+                if isinstance(call_usage, dict) else None
+            )
+            if estimate is None:
+                run_unpriced += 1
+                llm_stats["unpriced_calls"] += 1
+                continue
+            llm_stats["priced_calls"] += 1
+            llm_stats["cost_total"] += float(estimate["amount_usd"])
+            pricing_versions.add(str(estimate["pricing_version"]))
+        if run_unpriced:
             llm_stats["unpriced_runs"] += 1
         else:
             llm_stats["priced_runs"] += 1
-            llm_stats["cost_total"] += float(estimate["amount_usd"])
-            pricing_versions.add(str(estimate["pricing_version"]))
 
     # LLM history comes from durable audit events. A success event followed by
     # a terminal event for the same call (invalid evidence references) is
@@ -293,11 +354,13 @@ def build_ops_summary(
     model_calls = llm_stats["model_calls"]
     priced_runs = llm_stats["priced_runs"]
     unpriced_runs = llm_stats["unpriced_runs"]
+    priced_calls = llm_stats["priced_calls"]
+    unpriced_calls = llm_stats["unpriced_calls"]
     cost_total = round(llm_stats["cost_total"], 6)
     if model_calls == 0:
         cost_status = "no_data"
         amount_usd = None
-    elif unpriced_runs:
+    elif unpriced_calls:
         cost_status = "partial"
         amount_usd = None
     else:
@@ -309,13 +372,17 @@ def build_ops_summary(
         "amount_usd": amount_usd,
         # A known subtotal is useful for diagnostics, but it is never presented
         # as the total when any actual call is unpriced.
-        "known_subtotal_usd": cost_total if priced_runs else None,
+        "known_subtotal_usd": cost_total if priced_calls else None,
         "priced_runs": priced_runs,
         "unpriced_runs": unpriced_runs,
+        "priced_calls": priced_calls,
+        "unpriced_calls": unpriced_calls,
         "pricing_version": next(iter(pricing_versions)) if len(pricing_versions) == 1 else None,
         "source": PRICING_SOURCE,
         "note": (
             "Public list-price estimate from persisted LLM audit events, not an invoice. "
+            "Native tool rounds and non-native calls are priced separately; a run is complete "
+            "only when every actual provider response has usage and a versioned price. "
             "Runs with no model call are excluded from token and cost denominators. "
             "Any missing usage or price makes the total unknown; known_subtotal_usd is separate."
         ),
@@ -382,6 +449,8 @@ def build_ops_summary(
         "llm": {
             "runs": llm_stats["runs"],
             "model_calls": model_calls,
+            "provider_requests": llm_stats["provider_requests"],
+            "provider_retries": llm_stats["provider_retries"],
             "no_model_call_runs": llm_stats["no_model_call_runs"],
             "by_status": {status: llm_counts.get(status, 0) for status in LLM_STATUSES},
             "native_tool_runs": llm_stats["native_runs"],
@@ -425,7 +494,9 @@ def build_ops_summary(
         "notes": [
             "Window filters analysis jobs and LLM audit events by created_at; approvals and executions show current state.",
             "LLM history comes from audit events; result.llm is used only when an analysis has no LLM audit event in the window.",
+            "model_calls counts logical provider calls (native tool rounds or one non-native call); provider_requests includes internal retries.",
             "Runs with no model call are counted separately and excluded from usage/cost denominators.",
+            "Native runs are complete only when every round has usage and a versioned price; one unpriced round makes amount_usd null.",
             "Tool arguments and raw prompts are not returned; only names and counts.",
         ],
     }
