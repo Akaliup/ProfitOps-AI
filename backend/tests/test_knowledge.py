@@ -8,16 +8,22 @@ from __future__ import annotations
 import json
 import math
 import os
-from datetime import date
+import threading
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
+from app import knowledge
 from app.config import Settings
-from app.db import build_engine, initialize_database, make_session_factory
+from app.db import (
+    begin_write, build_engine, initialize_database, make_session_factory,
+)
 from app.errors import DomainError
 from app.knowledge import (
     KNOWLEDGE_SEED_VERSION, HashingEmbeddingProvider, OpenAIEmbeddingProvider,
@@ -27,7 +33,9 @@ from app.knowledge import (
 from app.llm_analysis import build_llm_payload, validate_knowledge_references
 from app.main import create_app
 from app.metrics import analyze_drivers, build_report, fetch_metrics, resolve_scope
-from app.models import KnowledgeChunk, KnowledgeDocument, SeedVersion
+from app.models import (
+    KNOWLEDGE_ACTIVE_SHA_INDEX, KnowledgeChunk, KnowledgeDocument, SeedVersion,
+)
 from app.schemas import (
     AnalysisRequest, KnowledgeDocumentInput, KnowledgeHit, KnowledgeSearchInput,
     KnowledgeSearchOutput, LLMAnalysisOutput,
@@ -87,6 +95,14 @@ class FailingEmbeddingProvider:
         raise DomainError(
             "knowledge_embedding_failed", "fake embedding failure", 502,
         )
+
+
+class FailingDimensionEmbeddingProvider(FailingEmbeddingProvider):
+    """Reports the new dimension, then fails while embedding the chunks."""
+
+    def __init__(self, model: str = "fake-same-model", dimensions: int = 512):
+        super().__init__(model)
+        self.dimensions = dimensions
 
 
 def _reindex_payload(marker: str) -> KnowledgeDocumentInput:
@@ -368,6 +384,7 @@ def test_openai_embedding_provider_normalizes_and_orders_by_index():
     assert captured["body"] == {"model": "bge-m3", "input": ["第一条", "第二条"]}
     assert vectors[0] == pytest.approx([0.6, 0.8])
     assert vectors[1] == pytest.approx([0.0, 1.0])
+    assert provider.dimensions == 2
 
 
 def test_openai_embedding_provider_fails_closed():
@@ -633,6 +650,120 @@ def test_reindex_endpoint_requires_approver_and_is_repeatable(client, analyst, a
     assert any(hit["document_id"] == created.id for hit in found["hits"])
 
 
+def test_same_model_dimension_change_reindexes_and_repeats_are_noops(client):
+    factory = client.app.state.factory
+    payload = _reindex_payload("dimension-change")
+    small = FakeEmbeddingProvider("fake-same-model", dimensions=256)
+    large = FakeEmbeddingProvider("fake-same-model", dimensions=512)
+
+    with factory.begin() as session:
+        created = create_document(session, payload, small)
+    with factory() as session:
+        document = session.get(KnowledgeDocument, created.id)
+        before_metadata = (
+            document.source, document.version, document.effective_date, document.active,
+        )
+        before = [
+            (chunk.id, chunk.content, chunk.embedding_model, len(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+        assert before and all(length == 256 for _, _, _, length in before)
+
+    # Same model name, different vector size: old vectors are stale even though
+    # the model filter alone would consider them current.
+    with factory.begin() as session:
+        reindexed = reindex_document(session, created.id, large)
+    assert reindexed.id == created.id
+    assert reindexed.created is False
+    assert reindexed.reindexed is True
+    calls_after_reindex = large.calls
+
+    with factory.begin() as session:
+        repeated = reindex_document(session, created.id, large)
+    assert repeated.reindexed is False
+    assert large.calls == calls_after_reindex
+
+    with factory.begin() as session:
+        duplicate = create_document(session, payload, large)
+    assert duplicate.id == created.id
+    assert duplicate.created is False
+    assert duplicate.reindexed is False
+    assert large.calls == calls_after_reindex
+
+    with factory() as session:
+        document = session.get(KnowledgeDocument, created.id)
+        assert (
+            document.source, document.version, document.effective_date, document.active,
+        ) == before_metadata
+        after = [
+            (chunk.id, chunk.content, chunk.embedding_model, len(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+        assert [(chunk_id, content) for chunk_id, content, _, _ in after] == [
+            (chunk_id, content) for chunk_id, content, _, _ in before
+        ]
+        assert all(model == "fake-same-model" for _, _, model, _ in after)
+        assert all(length == 512 for _, _, _, length in after)
+
+        old_space = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), small,
+        )
+        assert all(hit.document_id != created.id for hit in old_space.hits)
+        new_space = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), large,
+        )
+        assert any(hit.document_id == created.id for hit in new_space.hits)
+
+
+def test_dimension_change_failure_rolls_back_to_old_vectors(client):
+    factory = client.app.state.factory
+    payload = _reindex_payload("dimension-failure")
+    small = FakeEmbeddingProvider("fake-same-model", dimensions=256)
+
+    with factory.begin() as session:
+        created = create_document(session, payload, small)
+    with factory() as session:
+        before = [
+            (chunk.id, chunk.embedding_model, list(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+
+    with pytest.raises(DomainError) as caught:
+        with factory.begin() as session:
+            reindex_document(
+                session, created.id, FailingDimensionEmbeddingProvider(),
+            )
+    assert caught.value.code == "knowledge_embedding_failed"
+
+    with factory() as session:
+        after = [
+            (chunk.id, chunk.embedding_model, list(chunk.embedding))
+            for chunk in session.scalars(
+                select(KnowledgeChunk)
+                .where(KnowledgeChunk.document_id == created.id)
+                .order_by(KnowledgeChunk.chunk_index)
+            ).all()
+        ]
+        assert after == before
+        assert all(len(vector) == 256 for _, _, vector in after)
+        result = search_knowledge(
+            session, KnowledgeSearchInput(query="广告预算下调审批 ROAS", top_k=5), small,
+        )
+        assert any(hit.document_id == created.id for hit in result.hits)
+
+
 @pytest.mark.parametrize("length", [200, 201, 500])
 def test_markdown_heading_is_bounded_without_losing_body(length):
     heading = "标" * length
@@ -669,6 +800,260 @@ def test_long_heading_is_stored_within_column_limit(client):
     assert all("正文内容必须保留。" in chunk.content for chunk in chunks)
 
 
+def _legacy_document(
+    document_id: str, sha: str, content: str, *, active: bool, created_at: datetime,
+) -> KnowledgeDocument:
+    return KnowledgeDocument(
+        id=document_id, title=document_id, source=f"synthetic://test/{document_id}",
+        version="v1", content=content, content_sha256=sha, active=active,
+        created_at=created_at, updated_at=created_at,
+    )
+
+
+def test_initialize_database_dedupes_legacy_active_documents(tmp_path):
+    engine = build_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    initialize_database(engine)
+    factory = make_session_factory(engine)
+    duplicate_content = "# 重复规则\n\n同一正文只保留一个 active 文档。"
+    other_content = "# 其他规则\n\n不同正文。"
+    sha = content_sha256(duplicate_content)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    # Simulate a database created before the partial unique index existed.
+    with engine.begin() as connection:
+        connection.execute(text(f"DROP INDEX {KNOWLEDGE_ACTIVE_SHA_INDEX}"))
+    with factory.begin() as session:
+        session.add_all([
+            _legacy_document(
+                "legacy-oldest", sha, duplicate_content,
+                active=True, created_at=base,
+            ),
+            _legacy_document(
+                "legacy-newer", sha, duplicate_content,
+                active=True, created_at=base + timedelta(hours=1),
+            ),
+            _legacy_document(
+                "legacy-deleted", sha, duplicate_content,
+                active=False, created_at=base - timedelta(hours=1),
+            ),
+            _legacy_document(
+                "legacy-other", content_sha256(other_content), other_content,
+                active=True, created_at=base,
+            ),
+        ])
+    with factory.begin() as session:
+        session.add(KnowledgeChunk(
+            id="legacy-chunk", document_id="legacy-deleted", chunk_index=0,
+            heading=None, content="历史片段", char_count=4,
+            embedding=[0.1], embedding_model="hashing-v1",
+        ))
+    with factory() as session:
+        documents_before = int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0)
+        chunks_before = int(session.scalar(
+            select(func.count()).select_from(KnowledgeChunk)
+        ) or 0)
+
+    initialize_database(engine)
+    # Re-running must be a no-op once the index exists.
+    initialize_database(engine)
+
+    with factory() as session:
+        assert int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0) == documents_before
+        assert int(session.scalar(
+            select(func.count()).select_from(KnowledgeChunk)
+        ) or 0) == chunks_before
+        assert session.get(KnowledgeDocument, "legacy-oldest").active is True
+        assert session.get(KnowledgeDocument, "legacy-newer").active is False
+        assert session.get(KnowledgeDocument, "legacy-deleted").active is False
+        assert session.get(KnowledgeDocument, "legacy-other").active is True
+        assert session.get(KnowledgeChunk, "legacy-chunk") is not None
+
+    indexes = {
+        item["name"] for item in inspect(engine).get_indexes("knowledge_documents")
+    }
+    assert KNOWLEDGE_ACTIVE_SHA_INDEX in indexes
+
+    with pytest.raises(IntegrityError):
+        with factory.begin() as session:
+            session.add(_legacy_document(
+                "legacy-duplicate", sha, duplicate_content,
+                active=True, created_at=base + timedelta(hours=2),
+            ))
+
+
+def test_concurrent_duplicate_uploads_are_idempotent_on_sqlite(client):
+    factory = client.app.state.factory
+    engine = client.app.state.engine
+    payload = _reindex_payload(f"concurrent-{uuid4()}")
+    sha = content_sha256(payload.content)
+    barrier = threading.Barrier(2, timeout=10)
+    results: list = []
+    errors: list[BaseException] = []
+
+    def upload() -> None:
+        provider = FakeEmbeddingProvider("fake-concurrent", dimensions=32)
+        try:
+            barrier.wait()
+            with factory.begin() as session:
+                # Same write-lock acquisition as the HTTP endpoint.
+                begin_write(session, engine)
+                results.append(create_document(session, payload, provider))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    with factory() as session:
+        documents_before = int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0)
+
+    threads = [threading.Thread(target=upload) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert not errors
+    assert len(results) == 2
+    assert sorted(item.created for item in results) == [False, True]
+    assert results[0].id == results[1].id
+    with factory() as session:
+        active = session.scalars(select(KnowledgeDocument).where(
+            KnowledgeDocument.content_sha256 == sha,
+            KnowledgeDocument.active.is_(True),
+        )).all()
+        assert len(active) == 1
+        assert int(session.scalar(
+            select(func.count()).select_from(KnowledgeDocument)
+        ) or 0) == documents_before + 1
+
+
+@contextmanager
+def _postgres_schema_engine():
+    """Isolate PostgreSQL tests in a disposable schema of the test database."""
+    url = os.environ["PROFITOPS_TEST_POSTGRES_URL"]
+    schema = f"profitops_test_{uuid4().hex[:12]}"
+    admin = create_engine(url, pool_pre_ping=True)
+    with admin.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    engine = create_engine(
+        url, pool_pre_ping=True,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("PROFITOPS_TEST_POSTGRES_URL"),
+    reason="PROFITOPS_TEST_POSTGRES_URL is not set",
+)
+def test_postgres_migration_dedupes_legacy_active_documents():
+    with _postgres_schema_engine() as engine:
+        initialize_database(engine)
+        factory = make_session_factory(engine)
+        duplicate_content = "# 重复规则\n\n同一正文只保留一个 active 文档。"
+        sha = content_sha256(duplicate_content)
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with engine.begin() as connection:
+            connection.execute(text(f"DROP INDEX {KNOWLEDGE_ACTIVE_SHA_INDEX}"))
+        with factory.begin() as session:
+            session.add_all([
+                _legacy_document(
+                    "pg-legacy-oldest", sha, duplicate_content,
+                    active=True, created_at=base,
+                ),
+                _legacy_document(
+                    "pg-legacy-newer", sha, duplicate_content,
+                    active=True, created_at=base + timedelta(hours=1),
+                ),
+                _legacy_document(
+                    "pg-legacy-deleted", sha, duplicate_content,
+                    active=False, created_at=base - timedelta(hours=1),
+                ),
+            ])
+
+        initialize_database(engine)
+
+        with factory() as session:
+            assert session.get(KnowledgeDocument, "pg-legacy-oldest").active is True
+            assert session.get(KnowledgeDocument, "pg-legacy-newer").active is False
+            assert session.get(KnowledgeDocument, "pg-legacy-deleted").active is False
+        with pytest.raises(IntegrityError):
+            with factory.begin() as session:
+                session.add(_legacy_document(
+                    "pg-legacy-duplicate", sha, duplicate_content,
+                    active=True, created_at=base + timedelta(hours=2),
+                ))
+
+
+@pytest.mark.skipif(
+    not os.getenv("PROFITOPS_TEST_POSTGRES_URL"),
+    reason="PROFITOPS_TEST_POSTGRES_URL is not set",
+)
+def test_postgres_concurrent_duplicate_uploads_are_idempotent(monkeypatch):
+    with _postgres_schema_engine() as engine:
+        initialize_database(engine)
+        factory = make_session_factory(engine)
+        payload = _reindex_payload(f"pg-concurrent-{uuid4()}")
+        sha = content_sha256(payload.content)
+        barrier = threading.Barrier(2, timeout=10)
+        original_insert = knowledge._insert_document
+
+        def synchronized_insert(session, **kwargs):
+            # Both requests must pass the duplicate SELECT before either insert.
+            barrier.wait()
+            return original_insert(session, **kwargs)
+
+        monkeypatch.setattr(knowledge, "_insert_document", synchronized_insert)
+        reindexed_ids: list[str] = []
+        original_reindex = knowledge.reindex_document
+
+        def counting_reindex(session, document_id, embeddings, **kwargs):
+            reindexed_ids.append(document_id)
+            return original_reindex(session, document_id, embeddings, **kwargs)
+
+        monkeypatch.setattr(knowledge, "reindex_document", counting_reindex)
+        results: list = []
+        errors: list[BaseException] = []
+
+        def upload() -> None:
+            provider = FakeEmbeddingProvider("fake-pg", dimensions=32)
+            try:
+                with factory.begin() as session:
+                    results.append(create_document(session, payload, provider))
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=upload) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors
+        assert len(results) == 2
+        assert sorted(item.created for item in results) == [False, True]
+        assert results[0].id == results[1].id
+        # Both requests passed the duplicate SELECT before inserting, so the
+        # loser can only have reached reindex_document via IntegrityError.
+        assert reindexed_ids == [results[0].id]
+        with factory() as session:
+            active = session.scalars(select(KnowledgeDocument).where(
+                KnowledgeDocument.content_sha256 == sha,
+                KnowledgeDocument.active.is_(True),
+            )).all()
+            assert len(active) == 1
+
+
 @pytest.mark.skipif(
     not os.getenv("PROFITOPS_TEST_POSTGRES_URL"),
     reason="PROFITOPS_TEST_POSTGRES_URL is not set",
@@ -683,7 +1068,7 @@ def test_postgres_accepts_bounded_long_heading():
             "title": "PostgreSQL 标题边界",
             "source": f"synthetic://test/postgres-heading-{uuid4()}",
             "version": "v1",
-            "content": f"# {'长' * 500}\n\n正文内容必须保留。",
+            "content": f"# {'长' * 500}\n\n正文内容必须保留。唯一标记 {uuid4()}。",
         }
         response = client.post(
             "/api/knowledge/documents",

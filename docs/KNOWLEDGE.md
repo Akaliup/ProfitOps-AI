@@ -14,7 +14,7 @@ ProfitOps 的 RAG 不是“把文档丢给模型自由发挥”，而是把运�
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `knowledge_documents` | `id`、`title`、`source`、`version`、`effective_date`、`content`、`content_sha256`、`metadata_json`、`active` | 文档主表；相同正文 SHA-256 幂等；删除为软删除 |
+| `knowledge_documents` | `id`、`title`、`source`、`version`、`effective_date`、`content`、`content_sha256`、`metadata_json`、`active` | 文档主表；相同正文 SHA-256 幂等；删除为软删除；部分唯一索引保证最多一个 active 行 |
 | `knowledge_chunks` | `id`、`document_id`、`chunk_index`、`heading`、`content`、`char_count`、`embedding`、`embedding_model` | Markdown 分段与向量；`heading` 截断到 200 字符；`(document_id, chunk_index)` 唯一 |
 
 `knowledge-v1` Seed 包含 6 篇合成 SOP：
@@ -36,6 +36,7 @@ Seed 通过 `seed_versions` 幂等执行，重复调用不重复插入，也不�
 4. 默认 `KNOWLEDGE_CHUNK_CHARS=600`、`KNOWLEDGE_CHUNK_OVERLAP=100`；配置校验要求 overlap 小于 chunk chars。
 5. 每个 chunk 生成 embedding 并记录 `embedding_model`。
 6. 创建文档与写入审计在同一事务中完成；重复正文直接返回已有文档（`created=false`），不重复入库。
+7. 数据库层保证并发幂等：`content_sha256` 上存在仅覆盖 `active=true` 的部分唯一索引，历史软删除行不受限制。SQLite 在去重查询前执行 `BEGIN IMMEDIATE` 串行化写事务；PostgreSQL 依靠唯一索引，插入冲突在 savepoint 中回滚后重新查询赢家并复用。旧库启动时先保留最早 active 行、将其余同 SHA active 行软删除，再创建索引；不删除任何文档、片段或历史记录。
 
 ## 4. Embedding
 
@@ -56,18 +57,22 @@ KNOWLEDGE_EMBEDDING_API_KEY=
 
 启动时如果远程 embedding 不可用，核心 API 仍会启动；知识库 Seed 事务回滚（不删除已有文档、不记录成功的 SeedVersion），失败原因写入 `/health` 与 `/api/demo` 的 `knowledge.seed_error`，同时记录 `knowledge_seed_failed` 日志。数据库初始化或演示数据 Seed 失败仍会中止启动，不会被吞掉。
 
-### 模型切换与 reindex
+### 模型/维度切换与 reindex
 
-检索只使用 `embedding_model` 与当前 provider 相同的 chunk。切换模型后，旧向量不会混入新向量空间，已有文档也不会被自动删除。两种方式可以恢复检索：
+检索只使用 `embedding_model` 与当前 provider 相同、且向量维度与当前 query 向量一致的 chunk。切换模型后，旧向量不会混入新向量空间，已有文档也不会被自动删除。
 
-- 重新上传相同正文：创建接口检测到相同 SHA-256 的 active 文档后，若当前模型不同，会在原文档上重嵌入现有 chunk，返回 `created=false, reindexed=true`。
+同一模型名称也可能改变输出维度（provider 升级、网关更换配置、`KNOWLEDGE_EMBEDDING_DIMENSIONS` 调整）。仅比较模型名会把这种旧向量误判为最新，因此 reindex 先取得当前 provider 的维度：hashing/测试 provider 直接暴露 `dimensions`，远程 provider 在首次成功响应后缓存维度，未知时用单条文本探测。任一 chunk 的模型名、向量为空或向量长度与当前维度不同，都视为过期。两种方式可以恢复检索：
+
+- 重新上传相同正文：创建接口检测到相同 SHA-256 的 active 文档后，若当前模型或维度不同，会在原文档上重嵌入现有 chunk，返回 `created=false, reindexed=true`。
 - 显式调用 `POST /api/knowledge/documents/{id}/reindex`（仅 approver）：对指定文档重嵌入现有 chunk。
 
-两种方式都保留文档 ID、source、version、effective_date、active，以及 chunk ID、正文和 heading；重复 reindex 已是最新模型时为 no-op。嵌入或写入失败会回滚事务，旧向量与旧 `embedding_model` 保留，不会把真实 embedding 静默降级为 hashing。审计记录 `knowledge.document.reindexed`。
+两种方式都保留文档 ID、source、version、effective_date、active，以及 chunk ID、正文和 heading；重复 reindex 已是最新模型与维度时为 no-op，不产生额外 embedding 调用。嵌入或写入失败会回滚事务，旧向量与旧 `embedding_model` 保留，不会把真实 embedding 静默降级为 hashing。审计记录 `knowledge.document.reindexed`。
+
+并发重复上传不会产生重复 active 文档：SQLite 用 `BEGIN IMMEDIATE` 让第二个请求等待并读取赢家；PostgreSQL 让第二个插入在唯一索引上阻塞，冲突后在 savepoint 中恢复并复用赢家。旧库迁移只软删除重复的 active 行，保留最早行与所有历史行。
 
 ## 5. 检索与打分
 
-查询先归一化，再生成 query embedding。对每个 active 文档、且 `embedding_model` 匹配的 chunk 计算：
+查询先归一化，再生成 query embedding。对每个 active 文档、`embedding_model` 匹配且向量长度等于 query 向量的 chunk 计算：
 
 ```
 score = 0.65 * max(0, cosine)
@@ -200,7 +205,9 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
 - 文档写入/停用/reindex 需要 approver；审计记录 `knowledge.document.created` / `knowledge.document.reindexed` / `knowledge.document.deleted`。
 - 当前没有文档级 ACL、租户隔离、OCR、PDF 解析、reranker 或向量数据库；规模上限是 SQLite/PostgreSQL 上的全量候选打分，适合演示与中小知识库。
 - 远程 embedding 启动失败会保留核心 API 可用，但知识库在配置修复并重新启动前为空；这不是成功状态，调用方必须检查 `knowledge.seed_error`。
-- 切换 embedding 模型后，旧文档必须重新上传相同正文或调用 reindex 才会进入新模型检索；未 reindex 的文档不会出现在结果中。reindex 只重嵌入现有 chunk，不重新切分；修改 chunk 参数后需要重新入库。
+- 切换 embedding 模型或同一模型的输出维度后，旧文档必须重新上传相同正文或调用 reindex 才会进入新向量空间检索；未 reindex 的文档不会出现在结果中。reindex 只重嵌入现有 chunk，不重新切分；修改 chunk 参数后需要重新入库。首次使用远程 provider 时，reindex 可能多一次单条文本的维度探测调用。
+- 数据库迁移在启动时执行：旧库若存在重复 active 正文，会按 `(created_at, id)` 保留最早一条，其余改为软删除；不会删除文档、片段、审计或已软删除的历史行。索引创建后，任何绕过 API 的重复 active 插入都会被数据库拒绝。
+- 并发测试覆盖 SQLite 双请求（`BEGIN IMMEDIATE` 串行化）与 PostgreSQL 双请求（唯一索引冲突后 savepoint 恢复）；PostgreSQL 测试使用独立 schema，需设置 `PROFITOPS_TEST_POSTGRES_URL`。
 - 超过 200 字符的 Markdown 标题只保留前 200 字符作为 heading 元数据；正文不受影响，但完整标题不会单独保存。
 - hashing embedding 不是语义模型；同义改写召回有限，生产应换真实 embedding 并重新跑评测。
 - `no_answer` 阈值是工程默认值，需要按业务语料校准；当前评测集只有 8 个查询，不能据此声明泛化准确率。

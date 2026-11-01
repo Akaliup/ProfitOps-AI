@@ -3,11 +3,15 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey,
-    Index, Integer, String, Text, UniqueConstraint,
+    Index, Integer, String, Text, UniqueConstraint, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
+
+# Partial unique index: one active document per content hash, while allowing
+# any number of soft-deleted historical rows with the same content.
+KNOWLEDGE_ACTIVE_SHA_INDEX = "uq_knowledge_documents_active_sha"
 
 
 def new_id() -> str:
@@ -89,6 +93,13 @@ class KnowledgeDocument(Base):
     __table_args__ = (
         Index("ix_knowledge_documents_active", "active"),
         Index("ix_knowledge_documents_sha", "content_sha256"),
+        Index(
+            KNOWLEDGE_ACTIVE_SHA_INDEX,
+            "content_sha256",
+            unique=True,
+            sqlite_where=text("active = 1"),
+            postgresql_where=text("active = true"),
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(200))

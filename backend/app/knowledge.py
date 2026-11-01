@@ -151,6 +151,9 @@ class OpenAIEmbeddingProvider:
         self.model = model
         self.timeout = timeout
         self.transport = transport
+        # Learned from the first successful response; lets reindex detect a
+        # same-model dimension change without probing on every call.
+        self.dimensions: int | None = None
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         headers = {"Content-Type": "application/json"}
@@ -181,8 +184,10 @@ class OpenAIEmbeddingProvider:
             raise DomainError(
                 "knowledge_embedding_failed", "Embedding 响应不是合法 JSON", 502,
             ) from exc
-        vectors = self._parse_vectors(payload, len(texts))
-        return [self._normalize(vector) for vector in vectors]
+        vectors = [self._normalize(vector) for vector in self._parse_vectors(payload, len(texts))]
+        if vectors:
+            self.dimensions = len(vectors[0])
+        return vectors
 
     @staticmethod
     def _parse_vectors(payload: Any, expected: int) -> list[list[float]]:
@@ -246,6 +251,21 @@ def _bounded_heading(heading: str | None) -> str | None:
     if not heading:
         return None
     return heading[:KNOWLEDGE_HEADING_MAX_CHARS]
+
+
+def _embedding_dimensions(embeddings: EmbeddingProvider, sample: str) -> int:
+    """Return the provider's current vector size without re-embedding every chunk.
+
+    Hashing and test providers expose ``dimensions``. For a remote provider the
+    first probe learns it; later calls use the cached value.
+    """
+    dimensions = getattr(embeddings, "dimensions", None)
+    if isinstance(dimensions, int) and dimensions > 0:
+        return dimensions
+    probe = embeddings.embed([sample])
+    if not probe or not probe[0]:
+        raise DomainError("knowledge_embedding_failed", "Embedding 维度无效", 502)
+    return len(probe[0])
 
 
 def chunk_text(content: str, max_chars: int = 600, overlap: int = 100) -> list[dict[str, str | None]]:
@@ -481,13 +501,31 @@ def create_document(
             session, existing.id, embeddings, actor=actor, request_id=request_id,
         )
 
-    document, count = _insert_document(
-        session,
-        title=payload.title, source=payload.source, version=payload.version,
-        effective_date=payload.effective_date, content=payload.content,
-        metadata=payload.metadata, embeddings=embeddings,
-        chunk_chars=chunk_chars, overlap=overlap,
-    )
+    try:
+        # A savepoint keeps the outer transaction usable if the partial unique
+        # index (one active document per SHA-256) rejects a concurrent insert.
+        with session.begin_nested():
+            document, count = _insert_document(
+                session,
+                title=payload.title, source=payload.source, version=payload.version,
+                effective_date=payload.effective_date, content=payload.content,
+                metadata=payload.metadata, embeddings=embeddings,
+                chunk_chars=chunk_chars, overlap=overlap,
+            )
+    except IntegrityError:
+        # Another request won the race between our SELECT and INSERT. Reuse its
+        # document instead of creating a duplicate active row.
+        existing = session.scalar(
+            select(KnowledgeDocument).where(
+                KnowledgeDocument.content_sha256 == sha,
+                KnowledgeDocument.active.is_(True),
+            )
+        )
+        if existing is None:
+            raise
+        return reindex_document(
+            session, existing.id, embeddings, actor=actor, request_id=request_id,
+        )
     if actor is not None:
         record(
             session, actor, "knowledge.document.created", "knowledge", document.id,
@@ -531,6 +569,15 @@ def reindex_document(
         if chunk.embedding_model != embeddings.model or not chunk.embedding
     ]
     if not stale:
+        # The model name can stay the same while its output dimension changes
+        # (provider upgrade, reconfiguration). Stored vectors of another size
+        # cannot be compared with new query vectors, so treat them as stale too.
+        dimensions = _embedding_dimensions(embeddings, chunks[0].content)
+        stale = [
+            chunk for chunk in chunks
+            if not isinstance(chunk.embedding, list) or len(chunk.embedding) != dimensions
+        ]
+    if not stale:
         return knowledge_document_output(
             document, len(chunks), created=False, reindexed=False,
         )
@@ -540,6 +587,12 @@ def reindex_document(
     if len(vectors) != len(chunks):
         raise DomainError(
             "knowledge_embedding_failed", "Embedding 数量与知识片段不一致", 502,
+        )
+    if any(not isinstance(vector, list) or not vector for vector in vectors):
+        raise DomainError("knowledge_embedding_failed", "Embedding 向量为空", 502)
+    if len({len(vector) for vector in vectors}) != 1:
+        raise DomainError(
+            "knowledge_embedding_failed", "Embedding 维度不一致", 502,
         )
     previous_models = sorted({chunk.embedding_model for chunk in chunks})
     for chunk, vector in zip(chunks, vectors):
@@ -600,7 +653,12 @@ def search_knowledge(
     ).all()
     scored: list[tuple[float, KnowledgeChunk, KnowledgeDocument]] = []
     for chunk, document in rows:
-        cosine = _cosine(query_vector, list(chunk.embedding or []))
+        embedding = list(chunk.embedding or [])
+        # A same-model dimension change leaves old vectors in another space.
+        # Do not let them contribute lexical-only hits before reindex.
+        if len(embedding) != len(query_vector):
+            continue
+        cosine = _cosine(query_vector, embedding)
         lexical = _lexical_score(query, f"{chunk.heading or ''} {chunk.content}")
         heading_boost = _heading_match(query, chunk.heading)
         if lexical <= 0 and cosine <= 0.05:

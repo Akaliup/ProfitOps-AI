@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .audit import record, record_separately
 from .config import Settings, get_settings
-from .db import build_engine, initialize_database, make_session_factory
+from .db import begin_write, build_engine, initialize_database, make_session_factory
 from .errors import DomainError
 from .knowledge import (
     build_embedding_provider, create_document, delete_document, list_documents,
@@ -217,6 +217,10 @@ def create_app(settings: Settings | None = None):
     def add_knowledge_document(body: KnowledgeDocumentInput, request: Request, actor: Actor = Depends(identity)):
         require_role(actor, "approver")
         with factory.begin() as session:
+            # Acquire SQLite's write lock before the dedupe SELECT. Otherwise two
+            # concurrent uploads can both read "no document" and the second
+            # write fails with SQLITE_BUSY_SNAPSHOT instead of deduping.
+            begin_write(session, engine)
             item = create_document(
                 session, body, embeddings,
                 chunk_chars=settings.knowledge_chunk_chars,
