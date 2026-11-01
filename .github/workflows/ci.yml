@@ -59,6 +59,52 @@ jobs:
           python -m alembic -c backend/alembic.ini upgrade head
           python -m alembic -c backend/alembic.ini downgrade base
 
+  backend-python-311:
+    # The project supports Python 3.11+. This job keeps the declared floor
+    # honest; it runs the same locked dependencies and checks as the 3.12 job.
+    name: Backend pytest (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Tests use FakeProvider/MockTransport. An empty key guarantees that no
+      # automatic CI run can call a real LLM provider.
+      LLM_API_KEY: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.lock.txt
+
+      - name: Verify real LLM is disabled
+        env:
+          PYTHONPATH: backend
+        run: python -c "from app.config import Settings; assert not Settings(_env_file=None).llm_configured, 'CI must not have a real LLM key'"
+
+      - name: Run backend tests
+        run: python -m pytest backend/tests -q
+
+      - name: Run offline LLM replay evaluation
+        env:
+          LLM_API_KEY: ""
+        run: python backend/evals/replay.py
+
+      - name: Verify Alembic baseline
+        env:
+          PROFITOPS_DATABASE_URL: sqlite:///./alembic-ci-311.db
+        run: |
+          python -m alembic -c backend/alembic.ini upgrade head
+          python -m alembic -c backend/alembic.ini downgrade base
+
   frontend:
     name: Frontend tests and production build
     runs-on: ubuntu-latest

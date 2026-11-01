@@ -2,6 +2,50 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-02 最终验收收口（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `dd104c2`，PR #8。本轮只补齐验收证据：浏览器 E2E、Python 3.11、历史库重复文档、真实 LLM 状态；不新增业务功能，不调用真实 LLM，不修改 `data/profitops.db`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（121.10s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 独立 3.11 venv + `backend/requirements.lock.txt` + `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（193.75s，1 个第三方 DeprecationWarning） |
+| 迁移测试（Python 3.11） | 同一 3.11 venv：`pytest backend/tests/test_migrations.py backend/tests/test_postgres_migrations.py -q` | 6 passed（SQLite 4 + PostgreSQL 2，3.53s） |
+| 前端单元测试 | `npm --prefix frontend test` | 15 passed（1 file，8.27s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，4.55s |
+| 浏览器 E2E（隔离临时库） | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e -- --workers=1` | 6 passed（30.0s）；后端 `LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| 历史库重复文档 | `python scripts/legacy_duplicate_review.py` | 12/12 检查 PASS；详见 `docs/LEGACY_DUPLICATE_REVIEW.md` |
+| Python 3.11 CI | `.github/workflows/ci.yml` 新增 `Backend pytest (Python 3.11)` | 与现有 3.12 job 相同的锁定依赖、pytest、回放评测和 Alembic 检查；推送后由 GitHub Actions 执行 |
+| 真实 LLM | 只读取 `Settings().llm_configured` | `configured=true`（provider=`deepseek`）；未输出密钥；本轮无新增授权，未发起真实调用 |
+| 空白字符 | `git diff --check` | 通过 |
+| 敏感文件 | 暂存区与未跟踪文件检查 | 未包含 `.env`、API Key、数据库、缓存或构建产物 |
+
+E2E 覆盖（6/6）：
+
+1. `JWT 登录、401、角色权限与跨租户隔离（真实 API）`：登录与 `/api/auth/me`、匿名 401、篡改 JWT 401、错误密码 401、analyst 创建知识文档 403、租户 B 登录、跨租户读取 404、本租户读取 200、列表与推荐隔离。
+2. `失败状态展示与手动重试（真实 Worker）`：页面显示 `llm_tool_execution_failed`、`尝试 3/3` 和重试按钮；点击后重新排队并最终进入 `waiting_approval`，生成 `recommendation_id`，无页面异常。
+3. `知识库页面：新增、检索与停用（真实 API）`：approver 新增文档、检索片段、停用后列表移除。
+4. `真实 API：分析、越权拦截、审批、模拟执行、幂等与审计`。
+5. `Agent Trace：原生轮次、失败调用与移动端布局可见`。
+6. `拒绝分支和手机视图保持可用`。
+
+**NOT TESTED（未测试）**：
+
+- 前端登录页：本分支未实现登录表单，前端通过 `/api/demo` 选择演示身份；浏览器内的用户名/密码登录流程未测试。
+- 登出：后端没有 logout 端点，前端没有登出入口，未测试。
+- 独立运营/ops 页面：本分支不存在该页面，未测试。
+- 浏览器内 401 全局跳转/拦截：无登录页可跳转，未测试；401 与角色校验仅在 E2E 用例 1 的真实 API 层验证。
+- 非 Chromium 浏览器、生产容器内的 E2E：未测试；本轮 E2E 使用 Vite dev server + Chromium。
+
+E2E 的 Playwright 配置在设置 `PROFITOPS_E2E_DATABASE_URL` 时启动独立后端，并将后端 `reuseExistingServer` 固定为 `false`，避免误复用绑定到 `data/profitops.db` 的已运行进程。E2E 会重写 `docs/screenshots/*.png`；这些副作用文件未纳入本次提交。
+
+Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.8，本机原先没有 3.11。本轮用 `uv python install 3.11` 获取 CPython 3.11.16，在操作系统临时目录创建独立 venv，安装 `backend/requirements.lock.txt` 后执行全量测试；未覆盖、未修改现有 `.venv`。CI 采用新增独立 job 而非矩阵，以保留现有必需检查名 `Backend pytest`，同时用官方 `actions/setup-python` 固定 3.11。
+
+真实 LLM：`LLM_API_KEY` 已配置（`configured=true`），但 `docs/EVALUATION.md` D5 要求显式授权字符串与正整数 `--max-calls`；本轮没有新的真实调用授权，因此 `REAL_LLM_EVAL=NOT RUN`，未执行 `native --real`，也没有用 FakeProvider 冒充真实 DeepSeek。历史 Phase 2B 的 22 次真实调用不在本轮范围。
+
+历史库重复文档：使用 `backend/tests/legacy_schema.py` 构造隔离临时 SQLite（6 条文档，5 条共享同一 SHA-256，其中 4 条迁移前 active），执行 `stamp 0001_baseline → upgrade head`。全部文档 ID 与分片保留、外键有效、每组内容仅 1 条 active、最早创建的 `legacy-document` 保留、3 条重复活跃文档软删除、原有 inactive 与不同内容文档不变、业务表行数不变、重复 upgrade no-op；12/12 PASS。未读取或修改 `data/profitops.db`。
+
 ## 2026-11-01 PR #8 最终合并门禁（Claude Code）
 
 分支 `feat/platform-reliability`，基线 `fb02522`。本轮只处理三项明确问题：真实历史库迁移（P1）、指标标签基数（P2）、租约到期严格保护（P3）；不扩展功能，不调用付费模型，不修改 `data/profitops.db`。
