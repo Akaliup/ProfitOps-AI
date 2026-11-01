@@ -39,7 +39,7 @@
 - 统一 Tool Registry：9 个工具，Pydantic 输入/输出 Schema，角色与副作用分类。
 - RAG 知识库：6 篇合成 SOP、Markdown 切分、hashing/OpenAI 兼容 embedding、混合检索、`no_answer`、chunk 引用校验；`retrieve_knowledge` 节点与 `search_knowledge` 工具。
 - 审批状态机：`proposed → pending_approval → approved → executing → executed`，以及 `rejected`、`execution_failed`；条件 UPDATE 抢占状态。
-- 幂等：分析请求键、执行请求键全局唯一；同一执行键重复调用返回同一 execution 且 `replayed=true`；不同建议复用执行键返回 409。
+- 幂等：分析请求键、执行请求键按租户唯一（`(tenant_id, idempotency_key)`）；同一执行键重复调用返回同一 execution 且 `replayed=true`；不同建议复用执行键返回 409。
 - 审计：分析请求/完成/失败、建议提出/待审批/批准/拒绝、执行开始/成功/失败/回放、被拒绝的请求；带请求 ID。
 - 演示身份：服务端 Bearer token 映射 analyst / approver，不信任 `X-Role` / `X-Actor`。
 - 统一错误格式 `{error:{code,message,details},request_id}` 与 `X-Request-ID`。

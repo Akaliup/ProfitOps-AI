@@ -2,7 +2,10 @@ from datetime import date
 
 from sqlalchemy import select
 
-from app.models import AuditLog, DailyOperation, Order, Product, Store, Tenant, User
+from app.models import (
+    Analysis, AuditLog, DailyOperation, Execution, Order, Product,
+    Recommendation, Store, Tenant, User,
+)
 from app.security import hash_password
 
 ACME_TENANT = "acme"
@@ -39,6 +42,30 @@ def add_acme_tenant(client):
                 product_id="acme-product", date=day, ad_spend=100,
                 inventory=10, inbound_inventory=0, complete=True,
             ))
+
+
+def add_acme_approved_recommendation(client):
+    """Insert a deterministic approved recommendation without running rules."""
+    action = {
+        "type": "create_review_task", "simulation": True,
+        "product_id": "acme-product", "sku": "ACME-SKU-01",
+        "baseline_daily_budget": 0, "proposed_daily_budget": 0,
+        "source_period": {"start_date": str(PERIOD_START), "end_date": str(PERIOD_END)},
+    }
+    with client.app.state.factory.begin() as session:
+        session.add(Analysis(
+            id="acme-execution-analysis", tenant_id=ACME_TENANT,
+            idempotency_key="acme-execution-analysis", request={},
+            actor="acme-analyst", request_id="acme-execution-test",
+            status="waiting_approval", max_attempts=1,
+        ))
+        session.add(Recommendation(
+            id="acme-execution-recommendation", tenant_id=ACME_TENANT,
+            analysis_id="acme-execution-analysis", status="approved",
+            title="Acme 模拟执行", body={}, action=action,
+            approved_by="acme-approver",
+        ))
+    return "acme-execution-recommendation"
 
 
 def login(client, email, password, tenant_id=None):
@@ -104,6 +131,116 @@ def test_tenant_metrics_and_store_isolation(client):
     )
     assert hidden_store.status_code == 404
     assert hidden_store.json()["error"]["code"] == "store_not_found"
+
+
+def test_cross_tenant_analysis_idempotency_keys_do_not_collide(client):
+    add_acme_tenant(client)
+    acme_token = login(client, ACME_EMAIL, ACME_PASSWORD, ACME_TENANT)
+    demo_token = login(client, "analyst@demo.local", "demo-analyst")
+    body = {"start_date": str(PERIOD_START), "end_date": str(PERIOD_END)}
+
+    # demo stores the raw key; acme stores the same string with its prefix.
+    demo = client.post(
+        "/api/analyses", json=body,
+        headers={**bearer(demo_token), "Idempotency-Key": "acme:shared"},
+    )
+    acme = client.post(
+        "/api/analyses", json=body,
+        headers={**bearer(acme_token), "Idempotency-Key": "shared"},
+    )
+    assert demo.status_code == 202, demo.text
+    assert acme.status_code == 202, acme.text
+    assert demo.json()["id"] != acme.json()["id"]
+
+    with client.app.state.factory() as session:
+        rows = session.scalars(select(Analysis).where(
+            Analysis.id.in_([demo.json()["id"], acme.json()["id"]]),
+        )).all()
+    assert {row.idempotency_key for row in rows} == {"acme:shared"}
+    assert {(row.tenant_id, row.id) for row in rows} == {
+        ("demo", demo.json()["id"]), (ACME_TENANT, acme.json()["id"]),
+    }
+
+    demo_replay = client.post(
+        "/api/analyses", json=body,
+        headers={**bearer(demo_token), "Idempotency-Key": "acme:shared"},
+    )
+    acme_replay = client.post(
+        "/api/analyses", json=body,
+        headers={**bearer(acme_token), "Idempotency-Key": "shared"},
+    )
+    assert demo_replay.json()["id"] == demo.json()["id"] and demo_replay.json()["replayed"]
+    assert acme_replay.json()["id"] == acme.json()["id"] and acme_replay.json()["replayed"]
+
+
+def test_long_scoped_analysis_key_fits_storage(client):
+    add_acme_tenant(client)
+    acme_token = login(client, ACME_EMAIL, ACME_PASSWORD, ACME_TENANT)
+    key = "k" * 100
+    created = client.post(
+        "/api/analyses", json={},
+        headers={**bearer(acme_token), "Idempotency-Key": key},
+    )
+    assert created.status_code == 202, created.text
+    with client.app.state.factory() as session:
+        row = session.get(Analysis, created.json()["id"])
+        assert row.idempotency_key == f"{ACME_TENANT}:{key}"
+        assert len(row.idempotency_key) == 105
+    replay = client.post(
+        "/api/analyses", json={},
+        headers={**bearer(acme_token), "Idempotency-Key": key},
+    )
+    assert replay.json()["id"] == created.json()["id"] and replay.json()["replayed"]
+
+
+def test_cross_tenant_execution_idempotency_keys_do_not_collide(client, recommendation):
+    add_acme_tenant(client)
+    acme_approver = login(client, ACME_APPROVER_EMAIL, ACME_APPROVER_PASSWORD, ACME_TENANT)
+    demo_approver = login(client, "approver@demo.local", "demo-approver")
+
+    acme_recommendation = add_acme_approved_recommendation(client)
+    approved = client.post(
+        f"/api/recommendations/{recommendation}/approve",
+        json={"reason": "跨租户幂等键隔离验证"}, headers=bearer(demo_approver),
+    )
+    assert approved.status_code == 200, approved.text
+
+    demo_execution = client.post(
+        f"/api/recommendations/{recommendation}/execute",
+        headers={**bearer(demo_approver), "Idempotency-Key": "acme:exec"},
+    )
+    acme_execution = client.post(
+        f"/api/recommendations/{acme_recommendation}/execute",
+        headers={**bearer(acme_approver), "Idempotency-Key": "exec"},
+    )
+    assert demo_execution.status_code == 200, demo_execution.text
+    assert acme_execution.status_code == 200, acme_execution.text
+    assert demo_execution.json()["execution_id"] != acme_execution.json()["execution_id"]
+
+    with client.app.state.factory() as session:
+        rows = session.scalars(select(Execution).where(
+            Execution.id.in_([
+                demo_execution.json()["execution_id"], acme_execution.json()["execution_id"],
+            ]),
+        )).all()
+    assert {row.idempotency_key for row in rows} == {"acme:exec"}
+    assert {row.tenant_id for row in rows} == {"demo", ACME_TENANT}
+
+
+def test_long_scoped_execution_key_fits_storage(client):
+    add_acme_tenant(client)
+    acme_approver = login(client, ACME_APPROVER_EMAIL, ACME_APPROVER_PASSWORD, ACME_TENANT)
+    target = add_acme_approved_recommendation(client)
+    key = "e" * 100
+    executed = client.post(
+        f"/api/recommendations/{target}/execute",
+        headers={**bearer(acme_approver), "Idempotency-Key": key},
+    )
+    assert executed.status_code == 200, executed.text
+    with client.app.state.factory() as session:
+        row = session.get(Execution, executed.json()["execution_id"])
+        assert row.idempotency_key == f"{ACME_TENANT}:{key}"
+        assert len(row.idempotency_key) == 105
 
 
 def test_cross_tenant_analysis_and_retry_are_hidden(client):

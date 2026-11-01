@@ -105,8 +105,8 @@ LLM 擅长解释和归纳，不擅长保证算术一致。这个项目的核心�
 
 ### 幂等和并发怎么保证 exactly once？
 
-- 分析请求键全局唯一，重复请求返回原分析；键绑定请求内容和创建者，不一致返回 409。
-- 执行键全局唯一，`executions.recommendation_id` 也唯一。
+- 分析请求键按租户唯一（`(tenant_id, idempotency_key)`），重复请求返回原分析；键绑定请求内容和创建者，不一致返回 409。
+- 执行键按租户唯一，`executions.recommendation_id` 唯一。
 - 执行先抢占建议状态（`approved → executing`），再插入唯一执行记录，最后在同一事务里写模拟结果、更新状态和审计。
 - SQLite 下执行入口先 `BEGIN IMMEDIATE` 获取写锁；PostgreSQL 下条件 UPDATE 自带行锁。竞争事务等待后重新求值，看到状态已变，返回已有 execution 并标记 `replayed=true`。
 - 测试用 6 个线程同时执行同一建议，断言 6 个响应同一 execution ID、只有 1 个非回放、数据库只有 1 条执行记录和 1 条成功审计。

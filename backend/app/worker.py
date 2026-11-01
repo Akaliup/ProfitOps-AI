@@ -110,15 +110,134 @@ def claim_next_job(factory, engine, settings: Settings, worker_id: str, now: dat
         return candidate
 
 
-def requeue_expired(factory, engine, now: datetime | None = None) -> int:
+def _failed_transition(
+    row: Analysis, settings: Settings, now: datetime, *,
+    recovered_before_finalize=False, error_override: dict | None = None,
+) -> dict:
+    """Apply the same retry/dead-letter rules as ``finalize_job``.
+
+    ``run_analysis`` writes ``failed`` before ``finalize_job`` clears the
+    lease. If the process exits in that window, recovery must make the same
+    decision finalize would have made, otherwise a retryable failure stays
+    failed forever and a non-retryable one never becomes an explicit dead
+    letter.
+    """
+    error = dict(error_override if error_override is not None else (row.error or {}))
+    code = error.get("code")
+    retryable = code in RETRYABLE_CODES
+    extra = {"recovered_before_finalize": True} if recovered_before_finalize else {}
+    if retryable and row.attempts < row.max_attempts:
+        delay = settings.analysis_retry_backoff_seconds * (2 ** max(0, row.attempts - 1))
+        error = {
+            **error, **extra,
+            "retry_scheduled": True,
+            "attempt": row.attempts,
+            "max_attempts": row.max_attempts,
+            "retry_in_seconds": delay,
+        }
+        return {
+            "values": {
+                "status": "queued",
+                "next_run_at": now + timedelta(seconds=delay),
+                "error": error,
+            },
+            "audit_action": "analysis.retry_scheduled",
+            "audit_outcome": "degraded",
+            "metric_event": "retry_scheduled",
+            "metric_code": code or "unknown",
+            "retryable": retryable,
+        }
+    error = {
+        **error, **extra,
+        "dead_letter": True,
+        "attempt": row.attempts,
+        "max_attempts": row.max_attempts,
+    }
+    return {
+        "values": {
+            "status": "failed",
+            "next_run_at": None,
+            "error": error,
+        },
+        "audit_action": "analysis.dead_letter",
+        "audit_outcome": "failure",
+        "metric_event": "dead_letter",
+        "metric_code": code or "unknown",
+        "retryable": retryable,
+    }
+
+
+def _recover_failed_jobs(session, now: datetime, settings: Settings) -> tuple[int, int]:
+    """Recover failed rows whose worker died before finalize cleared the lease."""
+    rows = session.scalars(
+        select(Analysis).where(
+            Analysis.status == "failed",
+            Analysis.worker_id.is_not(None),
+            or_(Analysis.lease_until.is_(None), Analysis.lease_until <= now),
+        )
+    ).all()
+    requeued = 0
+    dead_lettered = 0
+    for row in rows:
+        transition = _failed_transition(
+            row, settings, now, recovered_before_finalize=True,
+        )
+        values = {
+            **transition["values"],
+            "lease_until": None,
+            "worker_id": None,
+            "updated_at": now,
+        }
+        changed = session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == row.id,
+                Analysis.status == "failed",
+                Analysis.worker_id == row.worker_id,
+                Analysis.attempts == row.attempts,
+                or_(Analysis.lease_until.is_(None), Analysis.lease_until <= now),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if changed.rowcount != 1:
+            continue
+        details = {
+            "reason": "failed_before_finalize",
+            "attempt": row.attempts,
+            "max_attempts": row.max_attempts,
+            "code": transition["metric_code"],
+            "retryable": transition["retryable"],
+        }
+        if transition["values"]["status"] == "queued":
+            details["retry_in_seconds"] = values["error"]["retry_in_seconds"]
+            requeued += 1
+        else:
+            dead_lettered += 1
+        record(
+            session, "system", transition["audit_action"], "analysis", row.id,
+            row.request_id, transition["audit_outcome"], details,
+            tenant_id=row.tenant_id,
+        )
+        METRICS.inc(
+            "analysis_jobs_total", event=transition["metric_event"],
+            code=transition["metric_code"],
+        )
+    return requeued, dead_lettered
+
+
+def requeue_expired(factory, engine, now: datetime | None = None, settings: Settings | None = None) -> int:
     """Return expired jobs to the queue, or dead-letter exhausted attempts.
 
     A job that has already used every allowed attempt must not be requeued
     forever after repeated worker crashes. Each transition is a conditional
     UPDATE so a heartbeat that extended the lease after the scan is not
-    overwritten by a stale recovery decision.
+    overwritten by a stale recovery decision. Failed rows that still carry a
+    worker lease are included: they are the crash window between
+    ``run_analysis`` writing ``failed`` and ``finalize_job`` clearing it.
     """
     now = now or utcnow()
+    settings = settings or Settings()
     requeued = 0
     dead_lettered = 0
     with factory.begin() as session:
@@ -208,11 +327,12 @@ def requeue_expired(factory, engine, now: datetime | None = None) -> int:
                     tenant_id=tenant_id,
                 )
                 requeued += 1
+        failed_requeued, failed_dead_lettered = _recover_failed_jobs(session, now, settings)
         if requeued:
             METRICS.inc("analysis_jobs_total", event="recovered", value=requeued)
         if dead_lettered:
             METRICS.inc("analysis_jobs_total", event="dead_letter", code="lease_expired", value=dead_lettered)
-    return requeued + dead_lettered
+    return requeued + dead_lettered + failed_requeued + failed_dead_lettered
 
 
 class LeaseHeartbeat:
@@ -286,54 +406,38 @@ def finalize_job(
 
         old_status = row.status
         status = old_status
-        error = dict(row.error or {})
-        if status == "running":
-            # The workflow returned without persisting a terminal state. Do not
-            # leave a phantom running row that no worker can ever finish.
-            status = "failed"
-            error = {
-                "code": "worker_crashed",
-                "message": "分析任务在未写入终态的情况下结束",
-            }
-
         values: dict = {"lease_until": None, "worker_id": None, "updated_at": now}
         audit_action: str | None = None
         audit_outcome = "success"
         metric_event: str | None = None
         metric_code: str | None = None
+        retryable = False
 
-        if status != "failed":
+        if status == "running":
+            # The workflow returned without persisting a terminal state. Do not
+            # leave a phantom running row that no worker can ever finish.
+            transition = _failed_transition(
+                row, settings, now,
+                error_override={
+                    "code": "worker_crashed",
+                    "message": "分析任务在未写入终态的情况下结束",
+                },
+            )
+        elif status == "failed":
+            transition = _failed_transition(row, settings, now)
+        else:
+            transition = None
+
+        if transition is None:
             values["next_run_at"] = None
         else:
-            code = error.get("code")
-            retryable = code in RETRYABLE_CODES
-            if retryable and row.attempts < row.max_attempts:
-                delay = settings.analysis_retry_backoff_seconds * (2 ** max(0, row.attempts - 1))
-                status = "queued"
-                error = {
-                    **error,
-                    "retry_scheduled": True,
-                    "attempt": row.attempts,
-                    "max_attempts": row.max_attempts,
-                    "retry_in_seconds": delay,
-                }
-                values.update(status=status, next_run_at=now + timedelta(seconds=delay), error=error)
-                audit_action = "analysis.retry_scheduled"
-                audit_outcome = "degraded"
-                metric_event = "retry_scheduled"
-                metric_code = code or "unknown"
-            else:
-                error = {
-                    **error,
-                    "dead_letter": True,
-                    "attempt": row.attempts,
-                    "max_attempts": row.max_attempts,
-                }
-                values.update(status="failed", error=error)
-                audit_action = "analysis.dead_letter"
-                audit_outcome = "failure"
-                metric_event = "dead_letter"
-                metric_code = code or "unknown"
+            values.update(transition["values"])
+            status = transition["values"]["status"]
+            audit_action = transition["audit_action"]
+            audit_outcome = transition["audit_outcome"]
+            metric_event = transition["metric_event"]
+            metric_code = transition["metric_code"]
+            retryable = transition["retryable"]
 
         stmt = update(Analysis).where(
             Analysis.id == analysis_id, Analysis.status == old_status,
@@ -354,7 +458,7 @@ def finalize_job(
             record(
                 session, "system", audit_action, "analysis", analysis_id,
                 row.request_id, audit_outcome,
-                {"attempt": row.attempts, "max_attempts": row.max_attempts, "retry_in_seconds": error["retry_in_seconds"], "code": metric_code},
+                {"attempt": row.attempts, "max_attempts": row.max_attempts, "retry_in_seconds": values["error"]["retry_in_seconds"], "code": metric_code},
                 tenant_id=row.tenant_id,
             )
         else:
@@ -464,7 +568,7 @@ def refresh_queue_depth(factory, settings: Settings) -> None:
 def run_due_jobs(factory, engine, registry, settings: Settings, llm, worker_id: str | None = None, limit: int = 1) -> int:
     """Requeue expired leases, then process up to ``limit`` due jobs."""
     worker_id = worker_id or worker_identity()
-    requeue_expired(factory, engine)
+    requeue_expired(factory, engine, settings=settings)
     processed = 0
     for _ in range(limit):
         analysis_id = claim_next_job(factory, engine, settings, worker_id)

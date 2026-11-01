@@ -532,14 +532,17 @@ def run_execution_graph(factory, registry, session, recommendation, key, actor, 
     return result["execution"]
 
 
-def recover_interrupted(factory, engine=None):
+def recover_interrupted(factory, engine=None, settings=None):
     """Requeue running analyses whose worker lease is gone.
 
     A running row with a live lease belongs to another worker (or to this
     process before a graceful restart), so it is left alone. Rows with no lease
     or an expired lease are safe to retry: the workflow only writes simulation
-    data and approval/execution remain separate idempotent operations.
+    data and approval/execution remain separate idempotent operations. Failed
+    rows that still carry a lease are the crash window between ``run_analysis``
+    writing ``failed`` and ``finalize_job``; they are recovered with the same
+    retry/dead-letter rules.
     """
     from .worker import requeue_expired
 
-    return requeue_expired(factory, engine)
+    return requeue_expired(factory, engine, settings=settings)

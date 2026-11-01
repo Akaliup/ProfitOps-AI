@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import select, text
+from sqlalchemy import case, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from .audit import record, record_separately
@@ -24,7 +24,7 @@ from .llm import build_llm_provider
 from .metrics import build_report, fetch_metrics, resolve_scope
 from .models import (
     Analysis, AuditLog, DailyOperation, Execution, KnowledgeDocument,
-    Recommendation, Store, User, new_id,
+    Recommendation, Store, User, new_id, utcnow,
 )
 from .observability import (
     METRICS, RATE_LIMIT_EXEMPT_PATHS, TokenBucketLimiter, normalize_path,
@@ -102,7 +102,7 @@ def create_app(settings: Settings | None = None):
                         "knowledge_seed_failed: %s: %s", exc.code, exc.message,
                         extra={"error_code": exc.code},
                     )
-        recover_interrupted(factory, engine)
+        recover_interrupted(factory, engine, settings)
         worker = None
         if settings.analysis_worker_enabled:
             worker = AnalysisWorker(factory, engine, registry, settings, llm)
@@ -443,25 +443,47 @@ def create_app(settings: Settings | None = None):
         actor: Actor = Depends(identity),
     ):
         with factory.begin() as session:
-            row = session.scalar(select(Analysis).where(
-                Analysis.id == analysis_id, Analysis.tenant_id == actor.tenant_id,
-            ))
-            if row is None:
-                raise DomainError("analysis_not_found", "分析不存在", 404)
-            if row.status != "failed":
-                raise DomainError("analysis_not_retryable", "只有失败的分析可以手动重试", 409, {"status": row.status})
-            previous_attempts = row.attempts
-            row.status = "queued"
-            row.next_run_at = None
-            row.lease_until = None
-            row.worker_id = None
-            row.error = None
-            row.max_attempts = max(row.max_attempts, row.attempts + 1)
+            begin_write(session, engine)
+            # Only a still-failed row may move back to queued. A read followed
+            # by an ORM assignment would let two retries (or a retry racing a
+            # worker) overwrite a running/completed state.
+            changed = session.execute(
+                update(Analysis)
+                .where(
+                    Analysis.id == analysis_id,
+                    Analysis.tenant_id == actor.tenant_id,
+                    Analysis.status == "failed",
+                )
+                .values(
+                    status="queued",
+                    next_run_at=None,
+                    lease_until=None,
+                    worker_id=None,
+                    error=None,
+                    max_attempts=case(
+                        (Analysis.max_attempts >= Analysis.attempts + 1, Analysis.max_attempts),
+                        else_=Analysis.attempts + 1,
+                    ),
+                    updated_at=utcnow(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1:
+                row = session.scalar(select(Analysis).where(
+                    Analysis.id == analysis_id, Analysis.tenant_id == actor.tenant_id,
+                ))
+                if row is None:
+                    raise DomainError("analysis_not_found", "分析不存在", 404)
+                raise DomainError(
+                    "analysis_not_retryable", "只有失败的分析可以手动重试", 409,
+                    {"status": row.status},
+                )
+            row = session.get(Analysis, analysis_id)
             response = analysis_view(row)
             record(
                 session, actor, "analysis.requeued", "analysis", row.id,
                 request.state.request_id, "success",
-                {"previous_attempts": previous_attempts, "max_attempts": row.max_attempts},
+                {"previous_attempts": row.attempts, "max_attempts": row.max_attempts},
             )
         background_tasks.add_task(process_analysis_job, factory, engine, registry, analysis_id, settings, app.state.llm)
         return response

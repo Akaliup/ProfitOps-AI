@@ -166,10 +166,14 @@ class KnowledgeChunk(Base):
 
 class Analysis(Base):
     __tablename__ = "analyses"
-    __table_args__ = (Index("ix_analyses_status_next_run", "status", "next_run_at"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_analyses_tenant_idempotency"),
+        Index("ix_analyses_status_next_run", "status", "next_run_at"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(String(40), default="demo", server_default="demo", index=True)
-    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)
+    # 100 client characters plus a tenant prefix (40 + ":") still fits.
+    idempotency_key: Mapped[str] = mapped_column(String(200))
     request: Mapped[dict] = mapped_column(JSON)
     actor: Mapped[str] = mapped_column(String(80))
     request_id: Mapped[str] = mapped_column(String(64))
@@ -210,10 +214,14 @@ class Recommendation(Base):
 
 class Execution(Base):
     __tablename__ = "executions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_executions_tenant_idempotency"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(String(40), default="demo", server_default="demo", index=True)
     recommendation_id: Mapped[str] = mapped_column(ForeignKey("recommendations.id"), unique=True)
-    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)
+    # 100 client characters plus a tenant prefix (40 + ":") still fits.
+    idempotency_key: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(30))
     simulation: Mapped[bool] = mapped_column(Boolean, default=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)

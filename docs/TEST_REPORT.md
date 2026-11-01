@@ -2,6 +2,31 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-01 PR #8 P2 收口复验（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `40a629c`。本轮只修复四项 P2：跨租户幂等键冲突、租户前缀后的列宽、并发手工重试状态回退、`run_analysis` 写入 failed 后 `finalize_job` 前退出的恢复；不新增功能，不修改 RAG、前端页面或执行语义。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 227 passed, 0 failed, 0 skipped（120.12s，6 个第三方/适配器 warning） |
+| 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 2 passed；旧 SQLite schema 升级后数据保留、列宽 200、复合唯一约束存在、旧全局唯一约束消失、`ix_analyses_tenant_id` / `ix_analyses_status_next_run` / `ix_executions_tenant_id` 保留 |
+| PostgreSQL 幂等专项 | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests/test_postgres_idempotency.py -q` | 1 passed；跨租户同存储键、105 字符键、同租户重复键拒绝 |
+| PostgreSQL 旧库迁移 | 一次性 schema + 手工旧约束 + `stamp 0001_baseline` + `upgrade head` | 升级成功；旧行保留；`analyses`/`executions` 均为 `VARCHAR(200)` 且带 `(tenant_id, idempotency_key)` 复合唯一；schema 已删除 |
+| Alembic 新库 | 临时 SQLite：`python scripts/migrate.py upgrade head` / `current` / `alembic check` | `0002_tenant_scoped_idempotency (head)`；`No new upgrade operations detected`；重建后三个索引均存在 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件，8.75s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，5.41s |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| 真实进程 kill/restart | 独立临时 SQLite + 端口 8013/8014；测试专用 `sitecustomize.py` 在 failed 写入后停住，`taskkill /F` 杀掉进程，再启动无补丁进程 | 通过；见下方时间线 |
+
+真实 kill/restart 时间线（临时库，已删除；未修改 `data/profitops.db`）：
+
+1. 14:55:34 创建分析，旧进程 PID 31228 的 worker 抢占 attempt 1。
+2. 14:55:39 attempt 1 的 failed 行租约过期，运行中的 worker 通过 `_recover_failed_jobs` 重排为 attempt 2（审计 `analysis.retry_scheduled`，`reason=failed_before_finalize`）。
+3. attempt 2 再次写入 failed 后，进程在 `finalize_job` 前被 `taskkill /F /PID 31228` 强制终止；库中保留 `status=failed`、`worker_id` 和过期租约。
+4. 14:56:13 新进程 PID 16960 启动，启动恢复把该行重排为 attempt 3（同一审计原因），worker 随后完成分析，最终 `waiting_approval`、`attempts=3/3`、`worker_id=null`、`lease_until=null`、`error=null`。
+
+测试专用补丁只存在于操作系统临时目录，通过 `PYTHONPATH` 加载，未提交、未修改生产代码；它用于把进程稳定停在“failed 已写入、finalize 未执行”的窗口，kill 本身是真实操作系统强制终止。真实 LLM、浏览器 E2E、PostgreSQL 0002 downgrade 本轮未执行；CI 结果在推送后另行确认。Python 3.11 未验证（本机 `.venv` 为 3.12.8）。
+
 ## 2026-11-01 可靠性 P1 修复复验（Claude Code）
 
 分支 `feat/platform-reliability`，只修复两个 P1：过期租约遵守 `max_attempts` 并进入死信；推荐建议写入与租约所有权校验处于同一数据库事务。

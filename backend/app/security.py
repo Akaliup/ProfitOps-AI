@@ -33,8 +33,9 @@ def require_role(actor: Actor, *allowed: str):
 def scoped_idempotency_key(tenant_id: str, key: str) -> str:
     """Namespace idempotency keys so one tenant cannot occupy another's key.
 
-    The demo tenant keeps the raw key for backward compatibility with rows and
-    clients created before multi-tenancy.
+    The database unique constraint also includes ``tenant_id``; the prefix is
+    kept so rows created before multi-tenancy still replay with their original
+    client key. The demo tenant keeps the raw key for the same reason.
     """
     return key if tenant_id == "demo" else f"{tenant_id}:{key}"
 

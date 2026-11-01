@@ -1,8 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 
-from sqlalchemy import delete, select
+import pytest
+from sqlalchemy import delete, func, select
 
 from app.models import Analysis, AuditLog, Recommendation, utcnow
+from app import main as main_module
 from app import worker, workflow
 
 
@@ -371,3 +375,163 @@ def test_manual_retry_rejects_non_failed_job(client, analyst):
     response = client.post(f"/api/analyses/{created['id']}/retry", headers=analyst)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "analysis_not_retryable"
+
+
+def test_manual_retry_does_not_overwrite_running_or_completed(client, analyst):
+    created = client.post("/api/analyses", json={}, headers=analyst).json()
+    factory = client.app.state.factory
+    with factory.begin() as session:
+        row = session.get(Analysis, created["id"])
+        row.status = "running"
+        row.attempts = 1
+        row.worker_id = "worker-a"
+        row.lease_until = utcnow() + timedelta(seconds=60)
+    running = client.post(f"/api/analyses/{created['id']}/retry", headers=analyst)
+    assert running.status_code == 409
+    with factory() as session:
+        row = session.get(Analysis, created["id"])
+        assert row.status == "running"
+        assert row.worker_id == "worker-a" and row.lease_until is not None
+
+    with factory.begin() as session:
+        row = session.get(Analysis, created["id"])
+        row.status = "completed"
+        row.worker_id = None
+        row.lease_until = None
+    completed = client.post(f"/api/analyses/{created['id']}/retry", headers=analyst)
+    assert completed.status_code == 409
+    with factory() as session:
+        assert session.get(Analysis, created["id"]).status == "completed"
+
+
+def test_concurrent_manual_retry_only_one_transition(client, analyst, monkeypatch):
+    created = client.post("/api/analyses", json={}, headers=analyst).json()
+    factory = client.app.state.factory
+    with factory.begin() as session:
+        row = session.get(Analysis, created["id"])
+        row.status = "failed"
+        row.error = {"code": "source_failed", "message": "forced"}
+        row.attempts = 1
+        row.max_attempts = 1
+    # Keep the row queued after the accepted request so the race is observable.
+    monkeypatch.setattr(main_module, "process_analysis_job", lambda *args, **kwargs: None)
+
+    barrier = Barrier(2)
+
+    def retry(_):
+        barrier.wait(timeout=10)
+        return client.post(f"/api/analyses/{created['id']}/retry", headers=analyst)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(retry, range(2)))
+
+    assert sorted(response.status_code for response in responses) == [202, 409]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["error"]["code"] == "analysis_not_retryable"
+    with factory() as session:
+        row = session.get(Analysis, created["id"])
+        assert row.status == "queued"
+        assert row.worker_id is None and row.lease_until is None
+        assert row.attempts == 1 and row.max_attempts == 2
+        assert session.scalar(select(func.count()).select_from(AuditLog).where(
+            AuditLog.action == "analysis.requeued",
+            AuditLog.object_id == created["id"],
+        )) == 1
+
+
+def test_failed_job_left_by_crash_before_finalize_is_recovered(client, monkeypatch):
+    now = utcnow()
+    add_analysis(
+        client, status="running", attempts=1, max_attempts=2,
+        worker_id="worker-a", lease_until=now + timedelta(seconds=60),
+    )
+    factory, engine, registry, settings = (
+        client.app.state.factory, client.app.state.engine,
+        client.app.state.registry, client.app.state.settings,
+    )
+    settings.analysis_retry_backoff_seconds = 0
+
+    def fake_run(factory, registry, analysis_id, settings, llm, claimed=False, **kwargs):
+        # Mirrors run_analysis persisting failed, then returning.
+        with factory.begin() as session:
+            row = session.get(Analysis, analysis_id)
+            row.status = "failed"
+            row.error = {"code": "workflow_failed", "message": "transient"}
+
+    def crash_before_finalize(*args, **kwargs):
+        raise SystemExit("process exited before finalize_job")
+
+    monkeypatch.setattr(worker, "run_analysis", fake_run)
+    monkeypatch.setattr(worker, "finalize_job", crash_before_finalize)
+    with pytest.raises(SystemExit):
+        worker.process_claimed_job(
+            factory, engine, registry, "job-1", settings, None, "worker-a",
+        )
+
+    with factory() as session:
+        row = session.get(Analysis, "job-1")
+        assert row.status == "failed"
+        assert row.worker_id == "worker-a" and row.lease_until is not None
+
+    with factory.begin() as session:
+        session.get(Analysis, "job-1").lease_until = now - timedelta(seconds=1)
+    assert worker.requeue_expired(factory, engine, now=now, settings=settings) == 1
+    with factory() as session:
+        row = session.get(Analysis, "job-1")
+        assert row.status == "queued"
+        assert row.error["retry_scheduled"] is True
+        assert row.error["recovered_before_finalize"] is True
+        assert row.worker_id is None and row.lease_until is None
+        assert row.next_run_at is not None
+        assert session.scalar(select(AuditLog).where(
+            AuditLog.action == "analysis.retry_scheduled",
+            AuditLog.object_id == "job-1",
+        )) is not None
+
+
+def test_recovery_applies_retry_and_dead_letter_rules_to_failed_rows(client):
+    now = utcnow()
+    expired = now - timedelta(seconds=1)
+    add_analysis(
+        client, id="retryable", idempotency_key="retryable", status="failed",
+        attempts=1, max_attempts=2, worker_id="dead", lease_until=expired,
+        error={"code": "workflow_failed", "message": "transient"},
+    )
+    add_analysis(
+        client, id="exhausted", idempotency_key="exhausted", status="failed",
+        attempts=2, max_attempts=2, worker_id="dead", lease_until=expired,
+        error={"code": "workflow_failed", "message": "still failing"},
+    )
+    add_analysis(
+        client, id="deterministic", idempotency_key="deterministic", status="failed",
+        attempts=1, max_attempts=2, worker_id="dead", lease_until=expired,
+        error={"code": "llm_failed", "message": "deterministic"},
+    )
+    factory, engine, settings = (
+        client.app.state.factory, client.app.state.engine, client.app.state.settings,
+    )
+    settings.analysis_retry_backoff_seconds = 0
+
+    assert worker.requeue_expired(factory, engine, now=now, settings=settings) == 3
+    with factory() as session:
+        retryable = session.get(Analysis, "retryable")
+        exhausted = session.get(Analysis, "exhausted")
+        deterministic = session.get(Analysis, "deterministic")
+        assert retryable.status == "queued"
+        assert retryable.error["retry_scheduled"] is True
+        assert retryable.error["recovered_before_finalize"] is True
+        assert retryable.worker_id is None and retryable.lease_until is None
+        for row in (exhausted, deterministic):
+            assert row.status == "failed"
+            assert row.error["dead_letter"] is True
+            assert row.error["recovered_before_finalize"] is True
+            assert row.worker_id is None and row.lease_until is None
+        assert session.scalar(select(AuditLog).where(
+            AuditLog.action == "analysis.retry_scheduled",
+            AuditLog.object_id == "retryable",
+        )) is not None
+        dead_letters = session.scalars(select(AuditLog).where(
+            AuditLog.action == "analysis.dead_letter",
+            AuditLog.object_id.in_(["exhausted", "deterministic"]),
+        )).all()
+        assert len(dead_letters) == 2

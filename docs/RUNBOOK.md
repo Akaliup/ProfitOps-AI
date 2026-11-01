@@ -29,14 +29,15 @@ Alembic 配置在 `backend/alembic.ini`，环境变量 `PROFITOPS_DATABASE_URL` 
 python scripts/migrate.py upgrade head
 ```
 
-已由旧版 `initialize_database` 建表、但还没有 `alembic_version` 的库，先备份，再标记基线（不要直接 upgrade，基线只负责新建表）：
+已由旧版 `initialize_database` 建表、但还没有 `alembic_version` 的库，先备份，再标记基线，然后升级到 head：
 
 ```bash
 python scripts/migrate.py stamp 0001_baseline
+python scripts/migrate.py upgrade head
 python scripts/migrate.py current
 ```
 
-应用启动仍会执行 `initialize_database` 的兼容迁移（补充 `tenant_id`、任务字段、知识库索引等），因此旧库升级到当前版本不需要手工改表；Alembic 是后续增量变更和部署审计的入口。`downgrade` 只用于本地验证，会删除表，不要对含审批/审计数据的库执行。
+`upgrade head` 会应用 `0002_tenant_scoped_idempotency`：把 analyses/executions 的 idempotency_key 从全局唯一、`VARCHAR(100)` 改为 `(tenant_id, idempotency_key)` 复合唯一、`VARCHAR(200)`，保留既有行。该约束变更**必须由 Alembic 执行**；应用启动的 `initialize_database` 兼容迁移只补充 `tenant_id`、任务字段和知识库索引，不会修改这两个唯一约束。未执行 0002 的旧库仍会遇到跨租户键冲突和 105 字符键超限。`downgrade` 只用于本地验证，会删除表，不要对含审批/审计数据的库执行。
 
 SQLite 备份：
 
@@ -83,6 +84,7 @@ sqlite3 data/profitops.db "select id, attempts, max_attempts, error from analyse
 ```
 
 - 进程崩溃后，启动或下一轮 poll 会把未耗尽 `max_attempts` 的过期租约改回 `queued`，审计动作 `analysis.recovered`，错误码 `lease_expired`；已耗尽的租约行标记 `dead_letter`，审计动作 `analysis.dead_letter`。
+- `run_analysis` 已写入 `failed` 但进程在 `finalize_job` 之前退出时，行上仍有 `worker_id` 和过期租约；恢复扫描会按同样的重试/死信规则处理，审计动作 `analysis.retry_scheduled` 或 `analysis.dead_letter`，错误详情带 `recovered_before_finalize=true`，不会永久停在 failed。
 - 可重试错误：`workflow_failed`、`step_timeout`、`database_locked`、`worker_crashed`，按指数退避；达到 `max_attempts` 后标记 `dead_letter`。
 - 确定性失败（如 `llm_failed`）不自动重试。人工确认后调用：
 
@@ -91,7 +93,7 @@ curl -X POST http://127.0.0.1:8010/api/analyses/<id>/retry \
   -H "Authorization: Bearer demo-analyst"
 ```
 
-只有 `failed` 行可以重试；非 failed 返回 409 `analysis_not_retryable`。worker 线程默认随 API 进程启动；设置 `PROFITOPS_ANALYSIS_WORKER_ENABLED=false` 可关闭，但此时必须另行运行 worker，否则任务会停在 queued。
+只有 `failed` 行可以重试；重试用单条 `status='failed'` 条件 UPDATE 完成，并发重试只有一个成功，running/completed 不会被改回 queued，其余请求返回 409 `analysis_not_retryable`。worker 线程默认随 API 进程启动；设置 `PROFITOPS_ANALYSIS_WORKER_ENABLED=false` 可关闭，但此时必须另行运行 worker，否则任务会停在 queued。
 
 ## 5. LLM 与熔断
 
@@ -121,6 +123,7 @@ docker build -f frontend/Dockerfile -t profitops-frontend:local .
 
 ```bash
 python -m pytest backend/tests -q
+PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests/test_postgres_idempotency.py -q
 npm --prefix frontend test
 npm --prefix frontend run build
 python backend/evals/rag.py
