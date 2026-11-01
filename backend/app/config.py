@@ -13,7 +13,32 @@ class Settings(BaseSettings):
     auto_seed: bool = True
     analyst_token: str = "demo-analyst"
     approver_token: str = "demo-approver"
+    demo_analyst_password: SecretStr = SecretStr("demo-analyst")
+    demo_approver_password: SecretStr = SecretStr("demo-approver")
+    auth_secret: SecretStr = SecretStr("dev-only-change-me")
+    auth_issuer: str = "profitops"
+    auth_token_ttl_seconds: int = Field(default=3600, ge=60, le=604800)
     step_timeout_seconds: float = Field(default=15, gt=0, le=120)
+
+    # Durable analysis jobs. The worker runs inside the API process by default;
+    # a deployment can disable it and run backend/app/worker.py separately.
+    analysis_worker_enabled: bool = True
+    analysis_worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    analysis_max_attempts: int = Field(default=3, ge=1, le=10)
+    analysis_retry_backoff_seconds: float = Field(default=2.0, ge=0, le=300)
+    analysis_lease_seconds: float = Field(default=60.0, ge=5, le=3600)
+
+    # Process-local observability and protection. Buckets are not shared across
+    # replicas; a multi-process deployment must use a shared limiter.
+    metrics_enabled: bool = True
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=120, ge=1, le=100000)
+    rate_limit_window_seconds: float = Field(default=60.0, gt=0, le=3600)
+    rate_limit_login_requests: int = Field(default=10, ge=1, le=1000)
+    rate_limit_analysis_requests: int = Field(default=30, ge=1, le=1000)
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_failures: int = Field(default=3, ge=1, le=100)
+    circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0, le=3600)
 
     # LLM settings intentionally use the plain names the deployment platform exposes.
     # PROFITOPS_-prefixed variants remain accepted for backward compatibility.
@@ -125,6 +150,10 @@ class Settings(BaseSettings):
     def distinct_tokens(self):
         if not self.analyst_token or not self.approver_token or self.analyst_token == self.approver_token:
             raise ValueError("演示角色必须使用不同且非空的 token")
+        if not self.demo_mode and self.auth_secret.get_secret_value() == "dev-only-change-me":
+            raise ValueError("非演示模式必须设置 AUTH_SECRET，不能使用默认开发密钥")
+        if len(self.auth_secret.get_secret_value()) < 16:
+            raise ValueError("AUTH_SECRET 至少需要 16 个字符")
         if self.llm_base_url and not self.llm_base_url.startswith(("http://", "https://")):
             raise ValueError("LLM_BASE_URL 必须以 http:// 或 https:// 开头")
         if self.knowledge_embedding_provider == "openai":

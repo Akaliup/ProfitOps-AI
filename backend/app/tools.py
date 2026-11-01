@@ -1,13 +1,16 @@
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Callable, Literal
 
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .errors import DomainError
 from .knowledge import HashingEmbeddingProvider, search_knowledge
 from .metrics import analyze_drivers, build_report, fetch_metrics
 from .models import Recommendation
+from .observability import METRICS
 from .schemas import (
     ApprovalInput, ApprovalOutput, CalculateInput, DriverReport, DriversInput,
     ExecuteInput, ExecuteOutput, KnowledgeSearchInput, KnowledgeSearchOutput,
@@ -62,6 +65,15 @@ class ToolRegistry:
         self.tools[spec.name] = spec
 
     def invoke(self, name: str, arguments: dict, context: ToolContext) -> ToolResult:
+        started = perf_counter()
+        result = self._invoke(name, arguments, context)
+        outcome = "ok" if result.ok else "error"
+        code = "ok" if result.ok else (result.error.code if result.error else "unknown")
+        METRICS.inc("tool_calls_total", tool=name, outcome=outcome, code=code)
+        METRICS.observe("tool_call_duration_seconds", perf_counter() - started, tool=name, outcome=outcome)
+        return result
+
+    def _invoke(self, name: str, arguments: dict, context: ToolContext) -> ToolResult:
         spec = self.tools.get(name)
         if spec is None:
             return ToolResult(ok=False, error=ToolFailure(code="unknown_tool", message="工具不存在"))
@@ -92,7 +104,7 @@ class ToolRegistry:
 
 def get_metrics(payload, context):
     with context.factory() as session:
-        return fetch_metrics(session, payload)
+        return fetch_metrics(session, payload, context.actor.tenant_id)
 
 
 def profit_analysis(payload, context):
@@ -102,7 +114,7 @@ def profit_analysis(payload, context):
     comes from ``fetch_metrics``/``build_report``/``analyze_drivers``.
     """
     with context.factory() as session:
-        report = build_report(fetch_metrics(session, payload))
+        report = build_report(fetch_metrics(session, payload, context.actor.tenant_id))
     snapshot = ProfitSnapshot(
         period=report.period, previous_period=report.previous_period,
         store_id=report.store_id, currency=report.currency,
@@ -115,7 +127,7 @@ def profit_analysis(payload, context):
 
 def sku_breakdown(payload, context):
     with context.factory() as session:
-        report = build_report(fetch_metrics(session, payload))
+        report = build_report(fetch_metrics(session, payload, context.actor.tenant_id))
     rows = [
         SkuBreakdownRow(
             product_id=row["product_id"], sku=row["sku"], name=row["name"],
@@ -136,7 +148,10 @@ def create(payload, context):
 
 def approval(payload, context):
     def read(session):
-        row = session.get(Recommendation, payload.recommendation_id)
+        row = session.scalar(select(Recommendation).where(
+            Recommendation.id == payload.recommendation_id,
+            Recommendation.tenant_id == context.actor.tenant_id,
+        ))
         if row is None:
             raise DomainError("recommendation_not_found", "建议不存在", 404)
         return ApprovalOutput(recommendation_id=row.id, status=row.status, approved_by=row.approved_by)
@@ -162,6 +177,7 @@ def build_registry(embeddings=None, settings=None):
             result = search_knowledge(
                 session, payload, embeddings,
                 candidate_k=candidate_k, min_score=min_score,
+                tenant_id=context.actor.tenant_id,
             )
         context.knowledge_hits.extend(hit.model_dump(mode="json") for hit in result.hits)
         return result

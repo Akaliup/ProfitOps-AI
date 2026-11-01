@@ -31,6 +31,7 @@ export const api = {
   summary: (token: string, demo: Demo, scope: Scope) => request<Metrics>(`/api/dashboard/summary?${new URLSearchParams(scopeBody(demo, scope))}`, token),
   analyses: (token: string) => request<{ items: Analysis[] }>('/api/analyses', token),
   analysis: (token: string, id: string) => request<Analysis>(`/api/analyses/${id}`, token),
+  retryAnalysis: (token: string, id: string) => request<Analysis>(`/api/analyses/${id}/retry`, token, { method: 'POST' }),
   recommendations: (token: string) => request<{ items: Recommendation[] }>('/api/recommendations', token),
   audits: (token: string, requestId = '') => request<{ items: Audit[] }>(`/api/audit-logs?limit=100${requestId ? `&request_id=${encodeURIComponent(requestId)}` : ''}`, token),
   start: (token: string, demo: Demo, scope: Scope) => request<Analysis>('/api/analyses', token, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(scopeBody(demo, scope)) }),

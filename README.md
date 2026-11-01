@@ -98,6 +98,16 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 
 口径和本次结果见 [docs/EVALUATION.md](docs/EVALUATION.md) 的 Phase 2D 章节。
 
+### 离线 LLM 回放评测（默认离线）
+
+```bash
+.venv/Scripts/python.exe backend/evals/replay.py
+```
+
+- 固定 JSON 录制响应经过生产工具循环、Pydantic Schema 和证据校验；4 个合成案例，网络调用 0 次。
+- 录制文件是合成的，不是真实模型 transcript；该评测只验证回放/解析/证据链路，不代表真实模型准确率。
+- 详细口径见 [docs/EVALUATION.md](docs/EVALUATION.md) 的“离线 LLM 回放评测”。
+
 ### RAG 检索评测（默认离线）
 
 ```bash
@@ -116,7 +126,7 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 docker compose up --build
 ```
 
-工作台 <http://127.0.0.1:8080>，API <http://127.0.0.1:8010>。Compose 使用 PostgreSQL 16 和持久卷；只绑定回环地址。已在本机 Docker Desktop 29.5.3 实际启动并通过后端与 nginx 代理各 11/11 HTTP 冒烟，详见 `docs/TEST_REPORT.md`。验收时使用 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不会调用真实模型。
+工作台 <http://127.0.0.1:8080>，API <http://127.0.0.1:8010>。Compose 使用 PostgreSQL 16 和持久卷；只绑定回环地址。已在本机 Docker Desktop 29.5.3 实际启动并通过后端与 nginx 代理各 11/11 HTTP 冒烟，详见 `docs/TEST_REPORT.md`。验收时使用 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不会调用真实模型。镜像内包含 `alembic.ini` 与 `migrations/`，可在容器中执行 `python -m alembic -c alembic.ini upgrade head`；启动仍保留兼容建表逻辑。
 
 如需重新验收，可执行：
 
@@ -127,6 +137,13 @@ curl -I http://127.0.0.1:8080
 docker compose logs --tail=50 backend
 docker compose down
 ```
+
+### 可观测性与运行保护
+
+- `GET /metrics` 输出 Prometheus 文本：HTTP 请求计数/耗时、分析任务事件与队列深度、工具调用、LLM 调用与熔断状态、限流命中。
+- 登录/创建分析/其他 API 分别按 IP + Bearer token 哈希限流，超限返回 429 + `Retry-After`；`PROFITOPS_METRICS_ENABLED=false` 可关闭指标。
+- LLM 连续可重试错误达到阈值后熔断，冷却后半开探测；熔断错误码 `llm_circuit_open` 仍按 `LLM_FALLBACK_POLICY` 降级或失败。
+- 数据库迁移、队列排查、备份恢复、镜像构建和发布检查见 [docs/RUNBOOK.md](docs/RUNBOOK.md)。
 
 ## 演示流程（约 3 分钟）
 
@@ -214,22 +231,25 @@ curl -X POST http://127.0.0.1:8010/api/knowledge/documents/<id>/reindex \
 npm --prefix frontend test
 npm --prefix frontend run build
 .venv/Scripts/python.exe backend/evals/rag.py      # RAG 检索评测，离线
+.venv/Scripts/python.exe backend/evals/replay.py   # LLM 录制响应回放，离线
+.venv/Scripts/python.exe scripts/migrate.py upgrade head
 .venv/Scripts/python.exe scripts/smoke.py          # 需服务已启动
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 142 通过（含 Phase 2B 评测 Runner、负向对照、Phase 2C 原生工具测试、Phase 2D 原生评测测试与 RAG 知识库测试）、前端 15 通过、生产构建通过；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。本次 RAG 变更独立数据库 HTTP 冒烟 15/15 通过（新增知识库 Seed、检索、无答案、analyst 写入 403 四项）；本次未重新运行 Playwright 浏览器 E2E。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果（2026-11-01）：后端 204 通过、4 跳过（跳过项为本地未安装 Alembic 1 项、未配置 PostgreSQL 测试库 3 项）、前端 15 通过、生产构建通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；本次变更使用独立临时数据库完成 HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Alembic upgrade/downgrade 本地未验证（依赖未安装），由 CI 执行；本次未重新运行 Playwright 浏览器 E2E。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
 ```
 backend/app/         FastAPI、模型、利润计算、知识库、工具、LangGraph、LLM Provider、审批执行、审计
 backend/tests/       单元、集成、工作流、并发、知识库、评测
-backend/evals/       LLM Agent 评测样本、RAG 检索评测、Runner 与报告
+backend/evals/       LLM Agent 评测样本、RAG/回放评测、Runner 与报告
+backend/migrations/  Alembic 基线与增量迁移
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
-scripts/             一键启动、HTTP 冒烟、浏览器测试、真实 LLM 验证
-docs/                契约、架构、知识库、验证记录、截图
+scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、真实 LLM 验证
+docs/                契约、架构、运行手册、知识库、验证记录、截图
 compose.yaml         PostgreSQL + 后端 + 前端
 AGENTS.md            开发约定
 TASKS.md             交付与后续任务
@@ -237,7 +257,7 @@ TASKS.md             交付与后续任务
 
 ## 已知限制
 
-- 本地演示认证不是生产安全方案；没有租户、OIDC、权限后台、限流和密钥轮换。
+- 认证是可运行的自建账号 + JWT + 租户隔离，但不是完整生产 IAM：没有 OIDC/SSO、密码重置、MFA、密钥轮换和租户管理后台；限流桶和指标是进程内状态，多副本部署需要共享存储。React 演示工作台仍使用 `/api/demo` 返回的固定 demo token 切换身份；JWT 登录 API 已实现并有后端测试，但演示前端未接入登录页，非 demo 模式需要登录客户端。
 - LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
 - 原生 Function Calling 已用 3 次真实脚本运行验收；第 3 次完整成功，但样本很小，不能据此声明真实调用成功率或多轮稳定性。
 - RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、8 个查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；知识库规模增大后需要换成真实 embedding + 向量索引。
@@ -245,7 +265,7 @@ TASKS.md             交付与后续任务
 - 预期影响是明确标注的条件性情景，不构成收益承诺。
 - 模拟执行只写数据库预览，不改变任何真实平台。
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
-- 无 Alembic 增量迁移；MVP 使用版本化建表和种子。
+- 已加入 Alembic 基线和迁移入口；旧库仍依赖启动时的兼容迁移补充租户/任务字段，后续 schema 变更必须新增显式 revision。Alembic 未安装时相关测试会跳过，CI 会安装并执行 upgrade/downgrade。
 - Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；其他机器仍需按 `docs/TEST_REPORT.md` 复验。
 - 实际 MCP Server 未实现，因此不声称支持 MCP。
 

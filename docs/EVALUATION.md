@@ -1,9 +1,9 @@
 # ProfitOps AI Agent 评测报告（Phase 2B / Phase 2D / RAG）
 
-- 日期：2026-10-31（首部与第 1–11 节为 Phase 2B 记录）；RAG 与 Phase 2D 记录为 2026-11-01
-- 分支：`feat/deepseek-llm-agent`（Phase 2B）；Phase 2D 分支为 `feat/agent-evaluation-trace`
+- 日期：2026-10-31（首部与第 1–11 节为 Phase 2B 记录）；RAG、回放与 Phase 2D 记录为 2026-11-01
+- 分支：`feat/deepseek-llm-agent`（Phase 2B）；Phase 2D 与回放评测分支为 `feat/agent-evaluation-trace`
 - 模型：`deepseek-flash`（DeepSeek-V4.1-Flash-1017）
-- 数据集：`profitops-llm-eval-v1`，`source_type=synthetic`；Phase 2D 另使用 `profitops-native-tool-eval-v1` 场景版本
+- 数据集：`profitops-llm-eval-v1`，`source_type=synthetic`；Phase 2D 另使用 `profitops-native-tool-eval-v1` 场景版本；回放使用 `synthetic-native-replay-v1` 固定录制
 - 结论先行：离线评测 4/4 正常案例通过、21/21 负向对照被识别；真实 DeepSeek 共执行 22 次调用：首轮 3 次、退款重跑 1 次、`max_tokens=3000` 三次重复 9 次、提高到 `max_tokens=4000` 后三次重复 9 次。3000 的三次重复为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length` 的截断或空内容；4000 复测 9/9 为 `llm_success` 且 `finish_reason=stop`；原始评分 6/9，三个 false 均为评分器误判，当前评分器重评后广告、履约、退款均 3/3，13 项硬门禁全部 1.0，9/9 无副作用。报告了 4000 三次重复的稳定性指标，但这不是模型准确率。
 
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
@@ -77,6 +77,27 @@
 .venv/Scripts/python.exe backend/evals/rag.py
 # 报告：backend/evals/reports/rag-latest.json
 ```
+
+## 离线 LLM 回放评测（2026-11-01）
+
+### P1. 目标与边界
+
+这一节验证的是**录制响应回放链路**：固定 JSON 响应经过生产 `run_tool_loop`、`LLMAnalysisOutput` Schema 和证据校验，能够稳定复现成功/不触发状态。它不调用模型、不联网、不读写运行库，也不衡量模型质量或真实语义准确率。录制文件 `backend/evals/recordings/synthetic_native_v1.json` 由 `build_fake_output` 从确定性评测样本生成，`source_type=synthetic`，**不是真实模型 transcript**。
+
+### P2. 执行方式与门禁
+
+```bash
+.venv/Scripts/python.exe backend/evals/replay.py
+```
+
+- 4 个合成案例：3 个异常案例回放最终 JSON，1 个数据不完整案例断言 `not_requested` 且不调用 Provider。
+- 每个成功案例检查：`llm_success`、`final_answer`、输出存在、证据 ID 有效、主驱动证据命中、根因/建议均带证据、无工具调用、无审批/执行/数据库副作用。
+- 任一案例失败或录制缺失时退出码非 0；CI 使用空 `LLM_API_KEY` 运行，`network_calls=0`。
+- 该门禁只证明回放/解析/证据链路没有回归；录制内容本身是合成的，不能据此声称真实模型成功率。
+
+### P3. 本次结果
+
+2026-11-01 本地运行：4/4 案例通过，`recording_id=synthetic-native-replay-v1`，网络调用 0 次。报告可用 `--report backend/evals/reports/replay-latest.json` 输出。
 
 ## Phase 2D：原生 Function Calling 评测（2026-11-01）
 

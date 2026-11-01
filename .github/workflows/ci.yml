@@ -47,6 +47,18 @@ jobs:
       - name: Run backend tests
         run: python -m pytest backend/tests -q
 
+      - name: Run offline LLM replay evaluation
+        env:
+          LLM_API_KEY: ""
+        run: python backend/evals/replay.py
+
+      - name: Verify Alembic baseline
+        env:
+          PROFITOPS_DATABASE_URL: sqlite:///./alembic-ci.db
+        run: |
+          python -m alembic -c backend/alembic.ini upgrade head
+          python -m alembic -c backend/alembic.ini downgrade base
+
   frontend:
     name: Frontend tests and production build
     runs-on: ubuntu-latest
@@ -73,3 +85,17 @@ jobs:
 
       - name: Build production frontend
         run: npm run build
+
+  containers:
+    name: Container image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t profitops-backend:ci .
+
+      - name: Build frontend image
+        run: docker build -f frontend/Dockerfile -t profitops-frontend:ci .

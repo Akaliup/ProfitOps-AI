@@ -1,0 +1,61 @@
+{
+  "recording_id": "synthetic-native-replay-v1",
+  "source_type": "synthetic",
+  "note": "Not a real model transcript. Generated from deterministic eval fixtures to exercise the replay boundary offline.",
+  "cases": [
+    {
+      "case_id": "ad_spend_pressure",
+      "expected_status": "llm_success",
+      "expected_reason": null,
+      "turns": [
+        {
+          "content": "{\"summary\": \"广告支出是本次利润下降的最大负向会计贡献项；这是利润桥归因，不代表已证明业务因果。\", \"root_causes\": [{\"cause\": \"广告支出增加，利润被压缩\", \"reasoning\": \"广告支出由 10000 美分增至 45000 美分，负向贡献 35000 美分，是最大负向会计贡献项。\", \"evidence_ids\": [\"ev-ad_spend\"]}], \"evidence_references\": [\"ev-ad_spend\", \"ev-sales\"], \"recommendations\": [{\"action\": \"对 TRAVEL-BAG-01 的日广告预算做 15% 的受控模拟下调\", \"rationale\": \"先以模拟验证节省空间，再根据后续转化数据决定是否扩大；不调用真实广告系统。\", \"evidence_ids\": [\"ev-ad_spend\"], \"priority\": \"high\"}], \"expected_impact\": {\"direction\": \"improve\", \"horizon_days\": 30, \"explanation\": \"若流量与转化不变，预算下调可能改善利润；这是条件情景，不是收益承诺。\"}, \"risks\": [\"预算下调可能减少流量和转化。\"], \"missing_information\": [\"广告活动级 ROAS 与边际获客成本\"], \"confidence\": 0.72}",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 1400,
+            "completion_tokens": 260,
+            "total_tokens": 1660
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "fulfillment_pressure",
+      "expected_status": "llm_success",
+      "expected_reason": null,
+      "turns": [
+        {
+          "content": "{\"summary\": \"物流履约是本次利润下降的最大负向会计贡献项；这是利润桥归因，不代表已证明业务因果。\", \"root_causes\": [{\"cause\": \"物流履约增加，利润被压缩\", \"reasoning\": \"物流履约由 10000 美分增至 30000 美分，负向贡献 20000 美分，是最大负向会计贡献项。\", \"evidence_ids\": [\"ev-fulfillment\"]}], \"evidence_references\": [\"ev-fulfillment\", \"ev-sales\"], \"recommendations\": [{\"action\": \"为 TRAVEL-BAG-01 创建成本核查任务，核对物流履约原始账单\", \"rationale\": \"核查任务不直接承诺利润改善，需补充原始账单与业务记录。\", \"evidence_ids\": [\"ev-fulfillment\"], \"priority\": \"high\"}], \"expected_impact\": {\"direction\": \"neutral\", \"horizon_days\": 30, \"explanation\": \"核查任务不直接承诺利润改善，需先确认原始账单与业务记录。\"}, \"risks\": [\"核查前无法确认费用异常的具体原因。\"], \"missing_information\": [\"原始费用账单与业务记录\"], \"confidence\": 0.72}",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 1400,
+            "completion_tokens": 260,
+            "total_tokens": 1660
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "insufficient_data",
+      "expected_status": "not_requested",
+      "expected_reason": "insufficient_data",
+      "turns": []
+    },
+    {
+      "case_id": "refund_pressure",
+      "expected_status": "llm_success",
+      "expected_reason": null,
+      "turns": [
+        {
+          "content": "{\"summary\": \"退款是本次利润下降的最大负向会计贡献项；这是利润桥归因，不代表已证明业务因果。\", \"root_causes\": [{\"cause\": \"退款增加，利润被压缩\", \"reasoning\": \"退款由 1000 美分增至 25000 美分，负向贡献 24000 美分，是最大负向会计贡献项。\", \"evidence_ids\": [\"ev-refunds\"]}], \"evidence_references\": [\"ev-refunds\", \"ev-sales\"], \"recommendations\": [{\"action\": \"为 TRAVEL-BAG-01 创建成本核查任务，核对退款原始账单\", \"rationale\": \"核查任务不直接承诺利润改善，需补充原始账单与业务记录。\", \"evidence_ids\": [\"ev-refunds\"], \"priority\": \"high\"}], \"expected_impact\": {\"direction\": \"neutral\", \"horizon_days\": 30, \"explanation\": \"核查任务不直接承诺利润改善，需先确认原始账单与业务记录。\"}, \"risks\": [\"核查前无法确认费用异常的具体原因。\"], \"missing_information\": [\"原始费用账单与业务记录\"], \"confidence\": 0.72}",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 1400,
+            "completion_tokens": 260,
+            "total_tokens": 1660
+          }
+        }
+      ]
+    }
+  ]
+}

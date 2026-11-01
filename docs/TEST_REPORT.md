@@ -2,6 +2,26 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-01 阶段十一验证（Claude Code）
+
+分支 `feat/agent-evaluation-trace`，工作区包含持久化任务队列、认证与租户隔离、可观测性/限流/熔断、Alembic 基线、离线回放评测和运行手册。以下为本次实际输出：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 215 passed, 0 failed, 0 skipped（110.94s，1 个第三方 DeprecationWarning） |
+| Alembic 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 1 passed |
+| 迁移脚本（临时 SQLite） | `python scripts/migrate.py upgrade head` / `current` / `alembic check` / `downgrade base` | 全部通过；`alembic check` 无 drift；降级后仅保留 `alembic_version` |
+| PostgreSQL 知识库测试 | 一次性 `postgres:16-alpine` + `PROFITOPS_TEST_POSTGRES_URL=... pytest backend/tests/test_knowledge.py -q` | 44 passed（含 3 项 PostgreSQL 并发/索引测试） |
+| 前端测试 | `npm --prefix frontend test` | 15 passed（1 个测试文件） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules |
+| RAG 离线评测 | `python backend/evals/rag.py` | hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，network_calls=0 |
+| LLM 回放评测 | `python backend/evals/replay.py` | 4/4 案例通过，network_calls=0 |
+| HTTP 冒烟 | 独立临时 SQLite + `python scripts/smoke.py --base-url http://127.0.0.1:8011` | 15/15 通过 |
+| Prometheus 指标 | `curl http://127.0.0.1:8010/metrics` | 早先运行已确认；本轮未重复 |
+| Python 语法检查 | `python -m py_compile`（迁移与评测脚本） | 通过 |
+
+早先一次运行在未安装 `alembic` 时为 204 passed、4 skipped；安装 `backend/requirements.lock.txt` 后复验为 215 passed、0 skipped。PostgreSQL 使用一次性 `postgres:16-alpine` 容器与独立 schema，结束后删除，未连接或修改本机 Supabase 实例。Python 3.11 未验证（本机 `.venv` 为 3.12.8）；真实 LLM 未调用（`LLM_API_KEY` 为空）；CI 结果尚未观察，不标记为通过。迁移脚本使用临时 SQLite，未修改 `data/profitops.db`。
+
 ## 2026-10-31 Docker Compose 实际运行验收（Claude Code）
 
 本机 Docker Desktop 29.5.3 / Compose v5.1.4（WSL2）。Docker Hub 直连受限，构建时通过本机代理拉取基础镜像并传入 BuildKit 代理参数；未修改 `compose.yaml`、Dockerfile 或业务代码。`node:22-alpine` 使用 AWS ECR Public 的官方镜像 `public.ecr.aws/docker/library/node:22-alpine` 后本地打标签。后端启动参数为 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不调用真实 LLM。
