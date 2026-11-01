@@ -117,6 +117,50 @@ class DriverReport(StrictModel):
     bridge_total: int
 
 
+class ProfitSnapshot(StrictModel):
+    """Compact, server-computed profit report returned to an LLM tool caller.
+
+    It intentionally omits the 60-day trend and the full SKU rows so a tool
+    result stays small; the numbers are still produced by the deterministic
+    metrics functions, never by the model.
+    """
+
+    period: Period
+    previous_period: Period
+    store_id: str | None
+    currency: Literal["USD"] = "USD"
+    current: Totals
+    previous: Totals
+    changes: dict[str, Change]
+    drivers: list[Driver]
+    anomaly: bool
+    bridge_verified: bool
+    data_quality: DataQuality
+
+
+class ProfitAnalysisOutput(StrictModel):
+    report: ProfitSnapshot
+    findings: DriverReport
+
+
+class SkuBreakdownRow(StrictModel):
+    product_id: str
+    sku: str
+    name: str
+    net_profit_current: int
+    net_profit_previous: int
+    profit_delta: int
+    ad_spend_delta: int
+    inventory: int
+    inbound_inventory: int
+
+
+class SkuBreakdownOutput(StrictModel):
+    period: Period
+    store_id: str | None
+    rows: list[SkuBreakdownRow]
+
+
 ShortText = Annotated[str, Field(min_length=2, max_length=300)]
 LongText = Annotated[str, Field(min_length=2, max_length=800)]
 
@@ -164,17 +208,42 @@ class LLMErrorInfo(StrictModel):
     retryable: bool = False
 
 
+class LLMToolCallTrace(StrictModel):
+    """One model-requested tool call, including rejected calls."""
+
+    round: int = Field(ge=1, le=20)
+    tool_call_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    ok: bool
+    result_summary: str = Field(min_length=1, max_length=500)
+    error_code: str | None = Field(default=None, max_length=80)
+    latency_ms: float = Field(ge=0)
+
+
+class LLMToolRound(StrictModel):
+    round: int = Field(ge=1, le=20)
+    finish_reason: str | None = Field(default=None, max_length=80)
+    tool_call_count: int = Field(ge=0, le=20)
+    latency_ms: float = Field(ge=0)
+    usage: LLMUsage | None = None
+
+
 class LLMRun(StrictModel):
     status: Literal["llm_success", "deterministic_fallback", "llm_failed", "not_requested"]
     configured: bool = False
     provider: str = "deepseek"
     model: str = "deepseek-flash"
     reason: str | None = None
-    attempts: int = Field(default=0, ge=0, le=10)
+    attempts: int = Field(default=0, ge=0, le=64)
     latency_ms: float | None = Field(default=None, ge=0)
     usage: LLMUsage | None = None
     output: LLMAnalysisOutput | None = None
     error: LLMErrorInfo | None = None
+    native_tools: bool = False
+    termination_reason: str | None = Field(default=None, max_length=80)
+    rounds: list[LLMToolRound] = Field(default_factory=list, max_length=20)
+    tool_calls: list[LLMToolCallTrace] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
     def validate_status(self):

@@ -8,6 +8,8 @@
 
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
 
+> Phase 2C 原生 Function Calling 未纳入本报告，也未对真实 DeepSeek 运行。本报告中的真实调用全部是单次 `generate_json` 路径；原生工具循环目前只有 Mock/FakeProvider 测试，不能据此声称工具调用准确率或真实多轮稳定性。
+
 ## 1. 交付内容
 
 | 文件 | 作用 |

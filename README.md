@@ -46,8 +46,14 @@ python scripts/dev.py
 | `LLM_MAX_TOKENS` | `4000` | 单次响应最大 token 数（256–8192） |
 | `LLM_MAX_RETRIES` | `1` | 可重试错误的有界重试次数（0–3） |
 | `LLM_FALLBACK_POLICY` | `rules` | `rules`：失败降级为规则；`fail`：分析失败并记录 `llm_failed` |
+| `LLM_NATIVE_TOOLS` | `true` | 启用原生 Function Calling 只读工具循环 |
+| `LLM_TOOL_MAX_ROUNDS` | `4` | 模型↔工具最大轮数（2–8） |
+| `LLM_TOOL_MAX_CALLS` | `6` | 单次分析最大工具调用次数（1–12） |
+| `LLM_TOOL_MAX_REPEATS` | `2` | 相同工具+参数允许重复次数（1–5） |
+| `LLM_TOOL_BUDGET_SECONDS` | `90` | 工具循环总时间预算 |
+| `LLM_TOOL_RESULT_MAX_BYTES` | `16384` | 单个工具结果回传上限（512–65536） |
 
-DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须让后端进程自己读到上述变量；Docker Compose 会从项目根 `.env` 插值并注入这些变量。启用后，LangGraph 在确定性利润计算与证据校验之后调用一次 DeepSeek，输出经 Pydantic 校验、且所有 `evidence_id` 必须存在于本次确定性证据中，才允许进入待审批建议；模型只负责解释与策略，不计算利润。
+DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须让后端进程自己读到上述变量；Docker Compose 会从项目根 `.env` 插值并注入这些变量。启用后，LangGraph 在确定性利润计算与证据校验之后调用 DeepSeek：模型可通过原生 Function Calling 请求 `get_profit_analysis` 与 `get_sku_breakdown` 两个只读工具，服务端校验名称允许列表、`policy`、`effect`、角色、输入 Schema 和本次分析范围后，用可信账本执行并把结果回传模型；写建议、审批和执行工具永远不会暴露给模型。最终输出经 Pydantic 校验、且所有 `evidence_id` 必须存在于本次确定性证据中，才允许进入待审批建议；模型只负责解释与策略，不计算利润。轮次、调用次数、重复、总预算和结果大小均有上限，失败按 `LLM_FALLBACK_POLICY` 降级。
 
 降级状态在 API 与前端明确区分：`llm_success`、`deterministic_fallback`、`llm_failed`、`not_requested`。真实调用一次并查看模型、耗时、Token 与证据引用：
 
@@ -137,7 +143,7 @@ curl -X POST http://127.0.0.1:8010/api/recommendations/<id>/execute \
 curl -H "Authorization: Bearer demo-analyst" "http://127.0.0.1:8010/api/audit-logs?object_id=<id>"
 ```
 
-错误格式统一为 `{"error":{"code","message","details"},"request_id":"..."}`；响应头也包含 `X-Request-ID`。`/docs` 提供 OpenAPI 文档。六个工具及其 JSON Schema 可通过 `GET /api/tools` 查询。
+错误格式统一为 `{"error":{"code","message","details"},"request_id":"..."}`；响应头也包含 `X-Request-ID`。`/docs` 提供 OpenAPI 文档。八个工具及其 JSON Schema 可通过 `GET /api/tools` 查询。
 
 ## 测试
 
@@ -149,7 +155,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果：后端 74 通过（含 Phase 2B 评测 Runner、负向对照与 LLM 测试）、前端 8 通过、生产构建通过、实际 HTTP 11 项闭环检查通过（Docker Compose 下后端直连与 nginx 代理各一次）、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 共调用 22 次；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果：后端 102 通过（含 Phase 2B 评测 Runner、负向对照与 Phase 2C 原生工具测试 28 项）、前端 8 通过、生产构建通过；Phase 2C 独立数据库 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。DeepSeek 真实 API 历史累计调用 22 次，均为 Phase 2A/2B 的单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2C 的原生 Function Calling 尚未发起真实调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
@@ -170,6 +176,7 @@ TASKS.md             交付与后续任务
 
 - 本地演示认证不是生产安全方案；没有租户、OIDC、权限后台、限流和密钥轮换。
 - LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
+- 原生 Function Calling 的完整链路目前只用 Mock/FakeProvider 验证；尚未对真实 DeepSeek 发起工具调用，因此不声称真实 Function Calling 已验证。
 - 预期影响是明确标注的条件性情景，不构成收益承诺。
 - 模拟执行只写数据库预览，不改变任何真实平台。
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。

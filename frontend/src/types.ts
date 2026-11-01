@@ -46,11 +46,21 @@ export interface LLMOutput {
   recommendations: LLMRecommendation[]; expected_impact: LLMExpectedImpact;
   risks: string[]; missing_information: string[]; confidence: number;
 }
+export interface LLMToolCallTrace {
+  round: number; tool_call_id: string; name: string; arguments: Record<string, unknown>;
+  ok: boolean; result_summary: string; error_code: string | null; latency_ms: number;
+}
+export interface LLMToolRound {
+  round: number; finish_reason: string | null; tool_call_count: number;
+  latency_ms: number; usage: LLMUsage | null;
+}
 export interface LLMRun {
   status: 'llm_success' | 'deterministic_fallback' | 'llm_failed' | 'not_requested';
   configured: boolean; provider: string; model: string; reason: string | null;
   attempts: number; latency_ms: number | null; usage: LLMUsage | null;
   output: LLMOutput | null; error: { code: string; message: string; retryable: boolean } | null;
+  native_tools?: boolean; termination_reason?: string | null;
+  rounds?: LLMToolRound[]; tool_calls?: LLMToolCallTrace[];
 }
 export interface Analysis {
   id: string; status: string; request: { period: Period; store_id: string | null };

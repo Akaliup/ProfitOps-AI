@@ -145,3 +145,7 @@ ev-other_costs, ev-platform_fees, ev-refunds, ev-sales
 ```
 
 脚本只有在 `llm_success` 时才以 0 退出；未配置 Key 时安全跳过（退出码 2）；调用失败或降级时退出码 1（可用 `--allow-fallback` 放宽）。脚本不会打印 API Key，也不会触碰运行库。
+
+## Phase 2C 原生 Function Calling：尚未真实调用
+
+本文上面的记录全部是 Phase 2A/2B 的单次 `generate_json` 路径，**不是**原生 Function Calling 的真实调用证据。Phase 2C 已实现 `tools`/`tool_choice`/`tool_calls`/`role=tool` 协议、有界工具循环和轨迹持久化，但验证只使用 `httpx.MockTransport` 与 `FakeChatProvider`。真实 DeepSeek 是否按预期返回 `tool_calls`、多轮工具结果是否正确、真实 Token/耗时/终止原因，均未验证，需单独批准后执行并记录。`scripts/llm_check.py` 已扩展为输出 `native_tools`、`termination_reason`、`rounds` 和 `tool_calls`，但本次未运行。

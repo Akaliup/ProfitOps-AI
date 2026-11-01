@@ -46,6 +46,29 @@ class Settings(BaseSettings):
     llm_fallback_policy: Literal["rules", "fail"] = Field(
         default="rules", validation_alias=AliasChoices("LLM_FALLBACK_POLICY", "PROFITOPS_LLM_FALLBACK_POLICY", "llm_fallback_policy")
     )
+    llm_native_tools: bool = Field(
+        default=True, validation_alias=AliasChoices("LLM_NATIVE_TOOLS", "PROFITOPS_LLM_NATIVE_TOOLS", "llm_native_tools")
+    )
+    llm_tool_max_rounds: int = Field(
+        default=4, ge=2, le=8,
+        validation_alias=AliasChoices("LLM_TOOL_MAX_ROUNDS", "PROFITOPS_LLM_TOOL_MAX_ROUNDS", "llm_tool_max_rounds"),
+    )
+    llm_tool_max_calls: int = Field(
+        default=6, ge=1, le=12,
+        validation_alias=AliasChoices("LLM_TOOL_MAX_CALLS", "PROFITOPS_LLM_TOOL_MAX_CALLS", "llm_tool_max_calls"),
+    )
+    llm_tool_max_repeats: int = Field(
+        default=2, ge=1, le=5,
+        validation_alias=AliasChoices("LLM_TOOL_MAX_REPEATS", "PROFITOPS_LLM_TOOL_MAX_REPEATS", "llm_tool_max_repeats"),
+    )
+    llm_tool_budget_seconds: float = Field(
+        default=90.0, gt=0, le=300,
+        validation_alias=AliasChoices("LLM_TOOL_BUDGET_SECONDS", "PROFITOPS_LLM_TOOL_BUDGET_SECONDS", "llm_tool_budget_seconds"),
+    )
+    llm_tool_result_max_bytes: int = Field(
+        default=16384, ge=512, le=65536,
+        validation_alias=AliasChoices("LLM_TOOL_RESULT_MAX_BYTES", "PROFITOPS_LLM_TOOL_RESULT_MAX_BYTES", "llm_tool_result_max_bytes"),
+    )
 
     @property
     def llm_configured(self) -> bool:

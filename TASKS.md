@@ -62,6 +62,17 @@
 - [x] 后端 74、前端 8、构建通过；临时数据库 HTTP 冒烟 11/11
 - [x] 报告 `docs/EVALUATION.md`；实际报告在 `backend/evals/reports/`
 
+## 阶段八：Phase 2C 原生 Function Calling（2026-11-01）
+- [x] Provider 扩展：`chat()` 携带 `tools`/`tool_choice`，解析 assistant `tool_calls`，支持 `role=tool` + `tool_call_id`
+- [x] 有界模型↔工具循环：最大轮次、最大调用次数、相同调用重复上限、总预算、单次结果字节上限
+- [x] 显式名称允许列表 + Registry 存在性 + `policy=safe` + `effect=read|pure` + 服务端角色 + Pydantic Schema + 本次 period/store 范围校验
+- [x] 只读可信工具 `get_profit_analysis`、`get_sku_breakdown`，由服务端账本与既有指标函数计算；模型不能提交 `RawMetrics`
+- [x] 写建议、审批、模拟执行工具对模型不可见；拒绝/异常立即终止循环，不落到写操作
+- [x] `result.llm` 持久化 `native_tools`、`termination_reason`、逐轮 `rounds`、逐次 `tool_calls`，失败保留部分轨迹
+- [x] 降级策略复用 `rules`/`fail`，工具循环错误码与 Provider 错误码分别可见
+- [x] 后端 102 通过（新增原生工具测试 28 项）、前端 8 通过、生产构建通过、独立数据库 HTTP 冒烟 11/11
+- [ ] 真实 DeepSeek Function Calling 调用（待批准；Mock/FakeProvider 通过不代表真实调用已验证）
+
 ## 后续（核心通过后再评估）
 - 实际 MCP Server（未实现前不能宣称已接入 MCP）
 - LLM 解释质量评测集（固定案例比较结论、证据引用与越权承诺）
