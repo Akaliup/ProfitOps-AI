@@ -25,6 +25,35 @@ export const llmSuccess: LLMRun = {
   },
   error: null,
 }
+export const llmNativeSuccess: LLMRun = {
+  ...llmSuccess, latency_ms: 1234.5,
+  usage: { prompt_tokens: 3400, completion_tokens: 500, total_tokens: 3900 },
+  native_tools: true, termination_reason: 'final_answer',
+  rounds: [
+    { round: 1, finish_reason: 'tool_calls', tool_call_count: 1, latency_ms: 400.2, usage: { prompt_tokens: 1000, completion_tokens: 80, total_tokens: 1080 } },
+    { round: 2, finish_reason: 'tool_calls', tool_call_count: 1, latency_ms: 401.3, usage: { prompt_tokens: 1200, completion_tokens: 120, total_tokens: 1320 } },
+    { round: 3, finish_reason: 'stop', tool_call_count: 0, latency_ms: 433, usage: { prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500 } },
+  ],
+  tool_calls: [
+    { round: 1, tool_call_id: 'call-profit', name: 'get_profit_analysis', arguments: { period: { start_date: '2026-10-01', end_date: '2026-10-30' }, store_id: null }, ok: true, result_summary: 'ok; net_profit=-26000; anomaly=True; evidence=8', error_code: null, latency_ms: 42.1 },
+    { round: 2, tool_call_id: 'call-sku', name: 'get_sku_breakdown', arguments: { period: { start_date: '2026-10-01', end_date: '2026-10-30' }, store_id: null }, ok: true, result_summary: 'ok; rows=3', error_code: null, latency_ms: 38.4 },
+  ],
+}
+export const llmNativeFailure: LLMRun = {
+  status: 'deterministic_fallback', configured: true, provider: 'deepseek', model: 'deepseek-flash',
+  reason: 'llm_tool_execution_failed', attempts: 2, latency_ms: 800.5,
+  usage: { prompt_tokens: 2200, completion_tokens: 300, total_tokens: 2500 },
+  output: null, error: { code: 'llm_tool_execution_failed', message: '工具执行失败：模拟账本不可用', retryable: false },
+  native_tools: true, termination_reason: 'llm_tool_execution_failed',
+  rounds: [
+    { round: 1, finish_reason: 'tool_calls', tool_call_count: 1, latency_ms: 390.5, usage: { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100 } },
+    { round: 2, finish_reason: 'tool_calls', tool_call_count: 1, latency_ms: 410, usage: { prompt_tokens: 1200, completion_tokens: 200, total_tokens: 1400 } },
+  ],
+  tool_calls: [
+    { round: 1, tool_call_id: 'call-profit', name: 'get_profit_analysis', arguments: { period: { start_date: '2026-10-01', end_date: '2026-10-30' }, store_id: null }, ok: true, result_summary: 'ok; net_profit=-26000; anomaly=True; evidence=8', error_code: null, latency_ms: 41.2 },
+    { round: 2, tool_call_id: 'call-sku', name: 'get_sku_breakdown', arguments: { period: { start_date: '2026-10-01', end_date: '2026-10-30' }, store_id: null }, ok: false, result_summary: '工具调用失败', error_code: 'llm_tool_execution_failed', latency_ms: 37.9 },
+  ],
+}
 const totals = { sales: 120000, discounts: 0, refunds: 0, cogs: 36000, ad_spend: 45000, fulfillment: 14000, platform_fees: 6000, other_costs: 0, orders: 12, units: 12, net_sales: 120000, net_profit: 19000, margin_pct: 15.83 }
 const prior = { ...totals, sales: 100000, cogs: 30000, ad_spend: 10000, fulfillment: 10000, platform_fees: 5000, net_sales: 100000, net_profit: 45000, margin_pct: 45 }
 export const metrics: Metrics = {

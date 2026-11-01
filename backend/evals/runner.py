@@ -671,6 +671,12 @@ def main(argv: list[str] | None = None) -> int:
     real.add_argument("--timeout", type=float, default=None)
     real.add_argument("--max-retries", type=int, default=0)
     real.add_argument("--report", type=Path, default=None)
+    native = sub.add_parser("native", help="native Function Calling suite through the production tool loop")
+    native.add_argument("--cases", nargs="*", default=None)
+    native.add_argument("--report", type=Path, default=None)
+    native.add_argument("--real", action="store_true", help="explicit paid DeepSeek run; never used by CI")
+    native.add_argument("--authorize-real-calls", default="")
+    native.add_argument("--max-calls", type=int, default=0)
     regrade = sub.add_parser("regrade", help="re-evaluate saved outputs without new LLM calls")
     regrade.add_argument("report", type=Path)
     regrade.add_argument("--output", type=Path, default=None)
@@ -685,6 +691,27 @@ def main(argv: list[str] | None = None) -> int:
             fallback_policy=args.fallback_policy, timeout=args.timeout,
             max_retries=args.max_retries, report_path=report_path,
         )
+    elif args.mode == "native":
+        from evals import native as native_module
+
+        report_path = args.report or args.report_dir / f"native-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        if args.real:
+            report = native_module.run_native_real(
+                args.case_dir, args.cases,
+                authorize=args.authorize_real_calls, max_calls=args.max_calls,
+                report_path=report_path,
+            )
+        else:
+            report = native_module.run_native_offline(args.case_dir, args.cases, report_path)
+        if report.get("error") in {"authorization_required", "budget_required", "not_configured"}:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 2
+        native_module.print_native_summary(report)
+        summary = report.get("summary") or {}
+        return 0 if (
+            summary.get("normal_runs") == summary.get("normal_passed")
+            and summary.get("negative_controls") == summary.get("negative_controls_detected")
+        ) else 1
     else:
         report = regrade_report(args.report, args.output)
     if report.get("error") == "not_configured":

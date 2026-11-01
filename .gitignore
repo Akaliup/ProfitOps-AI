@@ -8,6 +8,7 @@ htmlcov/
 .env.*
 !.env.example
 data/
+backend/evals/reports/native-*.json
 node_modules/
 dist/
 .vite/

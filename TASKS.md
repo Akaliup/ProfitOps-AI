@@ -73,6 +73,19 @@
 - [x] 后端 102 通过（新增原生工具测试 28 项）、前端 8 通过、生产构建通过、独立数据库 HTTP 冒烟 11/11
 - [x] 真实 DeepSeek Function Calling 验收：3 次脚本运行；第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）；记录见 `docs/LLM_LIVE_CHECK.md`
 
+## 阶段九：Phase 2D Agent 评测与执行轨迹（2026-11-01）
+- [x] 复用 Phase 2B fixtures/graders/runner，新增 `native` 子命令；没有第二套评测系统
+- [x] 每个合成案例物化到独立临时 SQLite 账本，经生产 `fetch_metrics` 读回并断言金额、SKU、trend、数据质量与 Oracle 标签一致
+- [x] 脚本化 `FakeToolProvider` + 生产 `run_tool_loop`、`ToolRegistry`、`get_profit_analysis`、`get_sku_breakdown`
+- [x] 13 类场景：正常多轮、多余工具、未知/写/审批工具、非法参数、越界范围、重复调用、轮次上限、工具执行失败、非法最终 JSON、非法证据、数据不完整
+- [x] 指标：工具选择准确率、参数合法率、任务完成率、证据引用有效率、安全门禁通过率、降级率、token、延迟；离线结果与真实模型口径分开
+- [x] 一条命令离线评测：`backend/evals/runner.py native`；JSON 报告 + 终端摘要；失败退出码非 0；默认不联网
+- [x] 真实入口 `native --real` 强制显式授权字符串和 `--max-calls`；本阶段未执行真实调用
+- [x] 前端 Agent 执行轨迹：轮次、模型、`finish_reason`、工具名、参数摘要、成功/失败、错误码、单轮 token/耗时、总 token/耗时、终止原因；桌面与移动端适配
+- [x] 失败调用明确标红，不显示为成功；参数/结果只显示有界摘要，不显示密钥或认证头
+- [x] 后端 124 通过（新增 22 项）、前端 10 通过、生产构建通过、HTTP 冒烟 11/11、浏览器 E2E 3/3
+- [x] 报告 `docs/EVALUATION.md` Phase 2D 章节、`docs/TEST_REPORT.md`、README 与契约同步
+
 ## 后续（核心通过后再评估）
 - 实际 MCP Server（未实现前不能宣称已接入 MCP）
 - LLM 解释质量评测集（固定案例比较结论、证据引用与越权承诺）

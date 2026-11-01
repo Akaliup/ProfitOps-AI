@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, Check, CheckCircle2, ChevronDown, CircleDollarSign, Clock3, Database, FileCheck2, Fingerprint, LayoutDashboard, LoaderCircle, Moon, Play, RefreshCw, ShieldCheck, Sparkles, Sun, Terminal, TriangleAlert, X } from 'lucide-react'
 import { api, ApiError } from './api'
 import type { Analysis, Audit, Demo, Execution, Identity, LLMConfig, LLMRun, Metrics, Recommendation, Scope } from './types'
-import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels } from './format'
+import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels, terminationLabels } from './format'
 import './styles.css'
 
 const TrendChart = lazy(() => import('./components/TrendChart').then(module => ({ default: module.TrendChart })))
@@ -185,7 +185,7 @@ export default function App() {
 
         {page === 'agent' && <div className="agent-layout"><section className="panel workflow-panel"><div className="panel-heading"><div><h2><Sparkles size={18} />Profit Agent</h2><p>LangGraph · {analysis?.result?.llm?.status === 'llm_success' ? `DeepSeek ${analysis.result?.llm?.model}` : demo?.llm?.configured ? `DeepSeek ${demo.llm.model} · 待调用` : '确定性规则引擎'}</p></div>{analysis && <Status value={analysis.status} />}</div>{!analysis ? <Empty title="开始一次利润诊断" text="Agent 会读取数据、计算利润、核对证据，并将建议交给你审批。">{renderButton('启动分析')}</Empty> : <><div className="run-meta"><span>RUN {analysis.id.slice(0, 8)}</span><span>{dateTime(analysis.created_at)}</span></div><div className="workflow-steps">{analysis.steps.map((step, index) => <div className={`workflow-step step-${step.status}`} key={`${step.name}-${index}`}><div className="step-node">{step.status === 'completed' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : <LoaderCircle className="spin" size={14} />}</div><div className="step-body"><div><strong>{step.label}</strong><span>{step.duration_ms == null ? '运行中' : `${step.duration_ms.toFixed(1)} ms`}</span></div><p>{step.summary ?? '正在执行工具…'}</p><code>{step.name}</code></div></div>)}</div>{busyStatuses.includes(analysis.status) && <div className="running-hint"><LoaderCircle className="spin" size={15} />正在通过后端工作流处理…</div>}{analysis.error && <div className="alert error">{analysis.error.code}：{analysis.error.message}</div>}<div className="run-footer"><Fingerprint size={14} /><span>请求 ID：{analysis.request_id}</span></div></>}
           {analyses.length > 1 && <label className="history-picker">查看历史分析<select aria-label="历史分析" value={analysis?.id ?? ''} onChange={event => { const value = analyses.find(item => item.id === event.target.value); if (value) setAnalysis(value) }}>{analyses.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 8)} · {statusLabels[item.status]} · {dateTime(item.created_at)}</option>)}</select></label>}
-        </section><div className="agent-result"><section className="panel"><div className="panel-heading"><div><h2>分析结论与依据</h2><p>计算结果绑定统计周期与数据来源</p></div><Terminal size={18} /></div>{analysis?.result ? <><div className="conclusion"><span className="small-label">AGENT FINDING</span><h3>{analysis.result.findings?.conclusion}</h3><p>当前：{analysis.result.metrics.period.start_date} — {analysis.result.metrics.period.end_date}<br />上一周期：{analysis.result.metrics.previous_period.start_date} — {analysis.result.metrics.previous_period.end_date}</p></div><div className="evidence-stats"><div><span>净利润变化</span><strong>{signedMoney(analysis.result.metrics.changes.net_profit.absolute)}</strong></div><div><span>数据覆盖</span><strong>{analysis.result.metrics.data_quality.observed_records} / {analysis.result.metrics.data_quality.expected_records}</strong></div></div><div className="evidence-list">{analysis.result.findings?.evidence.slice(0, 4).map(item => <div key={item.id}><span>{item.label}<small>{item.source}</small></span><strong>{signedMoney(item.contribution)}</strong></div>)}</div>{analysis.recommendation_id && <button className="button primary full" onClick={() => { setSelectedId(analysis.recommendation_id!); setPage('approvals') }}>查看经营建议<ArrowRight size={16} /></button>}</> : <Empty title="等待分析结果" text="完成计算与证据核验后，将在这里展示结论。" />}</section><LLMPanel llm={analysis?.result?.llm} config={demo?.llm} /><section className="explain-card"><ShieldCheck size={19} /><div><h3>让数据决定结论，让人决定行动</h3><p>不完整的数据会暂停建议生成。建议必须经人工审批；模拟只产生数据库预览记录，真实广告和资金均不变。</p><span>当前引擎：规则与本地工具 · 无模型调用</span></div></section></div></div>}
+        </section><div className="agent-result"><section className="panel"><div className="panel-heading"><div><h2>分析结论与依据</h2><p>计算结果绑定统计周期与数据来源</p></div><Terminal size={18} /></div>{analysis?.result ? <><div className="conclusion"><span className="small-label">AGENT FINDING</span><h3>{analysis.result.findings?.conclusion}</h3><p>当前：{analysis.result.metrics.period.start_date} — {analysis.result.metrics.period.end_date}<br />上一周期：{analysis.result.metrics.previous_period.start_date} — {analysis.result.metrics.previous_period.end_date}</p></div><div className="evidence-stats"><div><span>净利润变化</span><strong>{signedMoney(analysis.result.metrics.changes.net_profit.absolute)}</strong></div><div><span>数据覆盖</span><strong>{analysis.result.metrics.data_quality.observed_records} / {analysis.result.metrics.data_quality.expected_records}</strong></div></div><div className="evidence-list">{analysis.result.findings?.evidence.slice(0, 4).map(item => <div key={item.id}><span>{item.label}<small>{item.source}</small></span><strong>{signedMoney(item.contribution)}</strong></div>)}</div>{analysis.recommendation_id && <button className="button primary full" onClick={() => { setSelectedId(analysis.recommendation_id!); setPage('approvals') }}>查看经营建议<ArrowRight size={16} /></button>}</> : <Empty title="等待分析结果" text="完成计算与证据核验后，将在这里展示结论。" />}</section><LLMPanel llm={analysis?.result?.llm} config={demo?.llm} /><AgentTrace llm={analysis?.result?.llm} /><section className="explain-card"><ShieldCheck size={19} /><div><h3>让数据决定结论，让人决定行动</h3><p>不完整的数据会暂停建议生成。建议必须经人工审批；模拟只产生数据库预览记录，真实广告和资金均不变。</p><span>当前引擎：规则与本地工具 · 无模型调用</span></div></section></div></div>}
 
         {page === 'approvals' && <div className="approval-layout"><section className="panel recommendation-list"><div className="panel-heading"><div><h2>经营建议</h2><p>{pending} 项等待人工复核</p></div><span className="count-circle">{recommendations.length}</span></div>{!recommendations.length ? <Empty title="还没有待处理建议" text="先启动 Profit Agent，异常分析通过证据核验后会生成建议。" /> : recommendations.map(item => <button key={item.id} className={`recommendation-item ${selected?.id === item.id ? 'selected' : ''}`} onClick={() => { setSelectedId(item.id); setExecution(null); setNotice('') }}><Status value={item.status} /><strong>{item.title}</strong><p>{item.body.recommendation}</p><small>{dateTime(item.created_at)}</small></button>)}</section>{selected ? <section className="panel recommendation-detail"><div className="panel-heading"><div><span className="small-label">RECOMMENDATION / {selected.id.slice(0, 8)}</span><h2>{selected.title}</h2></div><Status value={selected.status} /></div><div className="detail-section"><h3>问题与建议</h3><p>{selected.body.problem}</p><div className="recommendation-callout"><Sparkles size={19} /><strong>{selected.body.recommendation}</strong></div></div><div className="detail-section"><h3>数据证据 <span className="tiny-tag">可核对</span></h3><p className="muted">{selected.body.period.start_date} — {selected.body.period.end_date} 对比 {selected.body.previous_period.start_date} — {selected.body.previous_period.end_date} · {selected.body.store_id ?? '全部店铺'} · USD</p><div className="table-wrap"><table><thead><tr><th>指标 / 数据来源</th><th>上一周期</th><th>当前周期</th><th>利润贡献</th></tr></thead><tbody>{selected.body.evidence.map(item => <tr key={item.id}><td>{item.label}<small>{item.source}</small></td><td>{money(item.previous)}</td><td>{money(item.current)}</td><td>{signedMoney(item.contribution)}</td></tr>)}</tbody></table></div></div>{selected.body.llm && <div className="detail-section"><h3>LLM 根因分析 <span className="tiny-tag">{llmStatusLabels[selected.body.llm.status] ?? selected.body.llm.status}</span></h3>{selected.body.llm.output ? <><p>{selected.body.llm.output.summary}</p><div className="llm-refs">{selected.body.llm.output.evidence_references.map(id => <code key={id}>{id}</code>)}</div><ul className="llm-cause-list">{selected.body.llm.output.root_causes.map(cause => <li key={cause.cause}><strong>{cause.cause}</strong><span>{cause.reasoning}</span></li>)}</ul></> : <p className="muted">本次建议由确定性规则生成，LLM 未参与（{llmReasonLabels[selected.body.llm.reason ?? ''] ?? selected.body.llm.reason ?? '未调用'}）。</p>}</div>}<div className="impact-box"><div><span>条件性利润改善情景</span><strong>{money(selected.body.expected_impact.profit_improvement_min)} — {money(selected.body.expected_impact.profit_improvement_max)}</strong><small>未来 {selected.body.expected_impact.horizon_days} 天 · 非实际收益或保证值</small></div><p>{selected.body.expected_impact.explanation}</p></div><div className="detail-section"><h3>待执行的模拟动作 <span className="tiny-tag">SIMULATION ONLY</span></h3>{selected.action.type === 'adjust_ad_budget' ? <div className="budget-preview"><div><span>参考日预算</span><strong>{money(selected.action.baseline_daily_budget)}</strong></div><ArrowRight size={18} /><div><span>模拟新预算</span><strong>{money(selected.action.proposed_daily_budget)}</strong></div></div> : <p>为 {selected.action.sku} 创建成本核查任务预览。</p>}<p className="muted">目标 SKU：{selected.action.sku}。该动作只写入模拟记录，不会调用广告、采购或支付系统。</p></div><div className="detail-columns"><div><h3><TriangleAlert size={16} />风险与假设</h3><ul>{[...selected.body.risks, ...selected.body.assumptions].map(value => <li key={value}>{value}</li>)}</ul></div><div><h3><Database size={16} />待补充信息</h3><ul>{selected.body.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div></div><div className="approval-actions"><div className="approval-title"><ShieldCheck size={18} /><strong>人工审批与模拟执行</strong><span className="tiny-tag">SIMULATION ONLY</span></div>{!isApprover && <p className="muted">当前为经营分析师。请在右上角切换“审批负责人”进行审批与模拟执行。</p>}{selected.status === 'pending_approval' && isApprover && <><label className="reason-label">审批意见<textarea aria-label="审批意见" value={reason} onChange={event => setReason(event.target.value)} rows={2} /></label><div className="action-row"><button className="button danger" onClick={() => decide('reject')} disabled={!!busy || reason.trim().length < 2}><X size={15} />拒绝建议</button><button className="button primary" onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2}><Check size={15} />批准建议</button></div></>}{selected.approval_reason && <p className="decision-note">审批意见：{selected.approval_reason}</p>}{isApprover && ['approved', 'executed', 'execution_failed'].includes(selected.status) && <button className="button primary" onClick={execute} disabled={!!busy}>{busy === 'execute' ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{selected.status === 'approved' ? '模拟执行已批准动作' : '再次请求 · 验证幂等'}</button>}<div className="state-flow">{['pending_approval', 'approved', 'executing', 'executed'].map((value, index) => <span key={value} className={selected.status === value ? 'current' : ''}>{index > 0 && <ArrowRight size={12} />}{statusLabels[value]}</span>)}</div></div>{(selected.execution || execution?.recommendation_id === selected.id) && <ExecutionResult result={execution?.recommendation_id === selected.id ? execution : selected.execution!} />}</section> : <section className="panel"><Empty title="选择一条建议" text="建议会展示统计范围、证据、影响情景与审批状态。" /></section>}</div>}
 
@@ -216,6 +216,65 @@ function LLMPanel({ llm, config }: { llm?: LLMRun | null; config?: LLMConfig }) 
         {(output.risks.length > 0 || output.missing_information.length > 0) && <div className="llm-section"><h3>风险与待补充</h3><ul className="llm-notes">{output.risks.map(value => <li key={value}>{value}</li>)}{output.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div>}
         <div className="llm-section"><h3>证据引用</h3><div className="llm-refs">{output.evidence_references.map(id => <code key={id}>{id}</code>)}</div></div>
       </> : <div className="llm-fallback"><p><strong>{status ? llmStatusLabels[status] ?? status : 'LLM 未参与'}</strong>{llm.reason ? `：${llmReasonLabels[llm.reason] ?? llm.reason}` : ''}</p>{llm.error && <p className="muted">错误码 {llm.error.code} · {llm.error.message}</p>}<p className="muted">{status === 'not_requested' ? '本次分析未调用 LLM；展示的是确定性计算结果。' : '本次结论、证据与建议由确定性规则引擎生成，不是 LLM 输出。'}</p></div>}
+    </>}
+  </section>
+}
+
+function bounded(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, Math.max(0, limit - 1))}…` : value
+}
+
+function toolArgumentSummary(arguments_: Record<string, unknown>): string {
+  const period = arguments_.period as { start_date?: unknown; end_date?: unknown } | undefined
+  const parts: string[] = []
+  if (period && typeof period.start_date === 'string' && typeof period.end_date === 'string') {
+    parts.push(`${period.start_date} → ${period.end_date}`)
+  }
+  if (typeof arguments_.store_id === 'string') parts.push(`店铺 ${arguments_.store_id}`)
+  else if (arguments_.store_id === null) parts.push('全部店铺')
+  const extra = Object.keys(arguments_).filter(key => key !== 'period' && key !== 'store_id')
+  if (extra.length) parts.push(`${extra.length} 个其他字段`)
+  if (!parts.length) parts.push(JSON.stringify(arguments_))
+  return bounded(parts.join(' · '), 140)
+}
+
+function AgentTrace({ llm }: { llm?: LLMRun | null }) {
+  if (!llm) return null
+  const rounds = llm.rounds ?? []
+  const calls = llm.tool_calls ?? []
+  const native = llm.native_tools === true
+  return <section className="panel trace-panel" aria-label="Agent 执行轨迹">
+    <div className="panel-heading"><div><h2><Activity size={17} />Agent 执行轨迹</h2><p>{native ? '原生 Function Calling · 只读工具循环' : '本次未使用原生工具循环'}</p></div><span className={`llm-badge trace-status ${llm.status}`}>{llmStatusLabels[llm.status] ?? llm.status}</span></div>
+    {!native ? <p className="trace-empty">{llm.status === 'not_requested' ? '本次分析未触发 LLM，因此没有模型轮次或工具调用。' : '本次分析走单次 JSON 路径，未产生原生工具轮次。'}</p> : <>
+      <div className="trace-meta">
+        <span>模型<strong>{llm.model}</strong></span>
+        <span>轮次<strong>{rounds.length}</strong></span>
+        <span>工具调用<strong>{calls.length}</strong></span>
+        <span>总 Token<strong>{llm.usage?.total_tokens ?? '—'}</strong></span>
+        <span>总耗时<strong>{llm.latency_ms == null ? '—' : `${llm.latency_ms.toFixed(1)} ms`}</strong></span>
+        <span>终止原因<strong>{terminationLabels[llm.termination_reason ?? ''] ?? llm.termination_reason ?? '—'}</strong></span>
+      </div>
+      {!rounds.length ? <p className="trace-empty">没有可展示的模型轮次。</p> : <ol className="trace-rounds">
+        {rounds.map(round => {
+          const roundCalls = calls.filter(call => call.round === round.round)
+          return <li className="trace-round" key={round.round}>
+            <div className="trace-round-head">
+              <span className="trace-round-no">ROUND {round.round}</span>
+              <span className="trace-finish">{round.finish_reason ?? '—'}</span>
+              <span>{round.tool_call_count} 次工具</span>
+              <span>{round.latency_ms.toFixed(1)} ms</span>
+              <span>{round.usage?.total_tokens == null ? 'Token —' : `${round.usage.total_tokens} tokens`}</span>
+            </div>
+            {roundCalls.length ? <div className="trace-calls">{roundCalls.map(call => <div className={`trace-call ${call.ok ? 'ok' : 'failed'}`} key={call.tool_call_id}>
+              <div className="trace-call-head"><code>{call.name}</code><span className={`trace-outcome ${call.ok ? 'ok' : 'failed'}`}>{call.ok ? '✓ 成功' : '× 失败'}</span><span>{call.latency_ms.toFixed(1)} ms</span></div>
+              <p className="trace-args"><span>参数</span>{toolArgumentSummary(call.arguments)}</p>
+              <p className="trace-result"><span>结果</span>{bounded(call.result_summary, 160)}</p>
+              {!call.ok && <p className="trace-error">错误码：{call.error_code ?? '未记录'}</p>}
+            </div>)}</div> : <p className="trace-no-call">本轮无工具调用</p>}
+          </li>
+        })}
+      </ol>}
+      {llm.error && <p className="trace-error">本次运行错误：{llm.error.code} · {bounded(llm.error.message, 180)}</p>}
     </>}
   </section>
 }

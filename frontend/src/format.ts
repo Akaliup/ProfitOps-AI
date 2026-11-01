@@ -17,5 +17,23 @@ export const llmReasonLabels: Record<string, string> = {
   llm_rate_limited: '触发限流', llm_server_error: '服务端错误', llm_http_error: 'HTTP 错误',
   llm_network_error: '网络错误', llm_invalid_response: '响应不可解析', llm_invalid_json: '输出不是合法 JSON',
   llm_empty_response: '返回空内容', llm_schema_invalid: '输出不符合 Schema',
+  llm_tool_round_limit_exceeded: '达到工具循环最大轮数', llm_tool_call_limit_exceeded: '达到最大工具调用次数',
+  llm_tool_duplicate_call_id: '重复的 tool_call_id', llm_tool_repeated_call: '重复的工具调用',
+  llm_tool_budget_exceeded: '超出工具循环时间预算', llm_tool_scope_mismatch: '工具参数超出分析范围',
+  llm_tool_forbidden: '调用了禁止的工具', llm_tool_unknown: '调用了未注册的工具',
+  llm_tool_invalid_arguments: '工具参数不合法', llm_tool_execution_failed: '工具执行失败',
+  llm_tool_output_truncated: '模型输出被截断', llm_invalid_tool_call: '工具调用格式非法',
+  llm_unknown_error: '未知错误',
   no_anomaly: '未检测到异常', insufficient_data: '数据不完整',
+}
+export const terminationLabels: Record<string, string> = {
+  final_answer: '模型给出最终答案', llm_tool_round_limit_exceeded: '达到最大轮数',
+  llm_tool_call_limit_exceeded: '达到最大工具调用次数', llm_tool_duplicate_call_id: '重复 tool_call_id',
+  llm_tool_repeated_call: '重复工具调用', llm_tool_budget_exceeded: '超出时间预算',
+  llm_tool_scope_mismatch: '参数超出分析范围', llm_tool_forbidden: '调用禁止工具',
+  llm_tool_unknown: '调用未注册工具', llm_tool_invalid_arguments: '工具参数不合法',
+  llm_tool_execution_failed: '工具执行失败', llm_tool_output_truncated: '输出被截断',
+  llm_invalid_json: '输出不是合法 JSON', llm_schema_invalid: '输出不符合 Schema',
+  llm_timeout: '调用超时', llm_network_error: '网络错误', llm_empty_response: '返回空内容',
+  invalid_evidence_reference: '证据引用无效', not_configured: '未配置 API Key',
 }
