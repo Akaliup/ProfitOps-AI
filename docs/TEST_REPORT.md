@@ -50,9 +50,9 @@
 | 前端单元/交互 | `npm --prefix frontend test` | 8 passed（Vitest + RTL，26.62s） |
 | TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，13.63s |
 | HTTP 冒烟 | 独立数据库 `data/smoke-phase2c.db`、端口 8011、`LLM_PROVIDER=disabled`：`.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8011` | 11/11 通过 |
-| 真实 DeepSeek Function Calling | — | **未执行**；本阶段全部使用 `httpx.MockTransport` / `FakeChatProvider`，未消耗真实 Token |
+| 真实 DeepSeek Function Calling | `.venv/Scripts/python.exe scripts/llm_check.py`（3 次脚本运行，真实 `deepseek-flash`） | 第 1 次第 1 轮返回 2 个工具调用并执行成功，第 2 轮 `llm_network_error` 降级；第 2 次成功但未保存完整元数据；第 3 次 `llm_success`：`native_tools=true`、`termination_reason=final_answer`、`20482.961 ms`、`10706 tokens`、2 个工具调用均成功、`all_references_valid=true` |
 
-原生链路验证了模型返回的 `tool_calls` 会被服务端校验并执行，工具结果以 `role=tool` 回传后模型继续下一轮；也验证了 `create_recommendation`、`simulate_execute_approved_action` 等非允许工具无法执行，越界 period/store 被拒绝，循环上限和失败降级可见。**这些是 Mock/FakeProvider 结果，不能表述为真实 DeepSeek Function Calling 已成功。** 真实调用需单独批准并记录调用次数、模型、耗时、Token、`tool_calls` 与最终输出。
+原生链路验证了模型返回的 `tool_calls` 会被服务端校验并执行，工具结果以 `role=tool` 回传后模型继续下一轮；也验证了 `create_recommendation`、`simulate_execute_approved_action` 等非允许工具无法执行，越界 period/store 被拒绝，循环上限和失败降级可见。第 3 次真实调用进一步确认：模型实际返回了两个允许列表内的只读工具调用，服务端执行后模型输出合法最终 JSON，全部证据 ID 有效，分析进入 `waiting_approval`，未自动批准或执行。第 1 次真实网络失败也按 `deterministic_fallback` 暴露。完整记录见 [LLM_LIVE_CHECK.md](LLM_LIVE_CHECK.md)。
 
 测试库使用临时目录或独立 `data/*.db`，未修改 `data/profitops.db`。
 
@@ -93,7 +93,7 @@
 ## 尚未验证（环境阻碍）
 
 - Docker Compose 已于 2026-10-31 在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 通过。其他机器仍需按本文件复验；本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
-- Phase 2C 原生 Function Calling 尚未对真实 DeepSeek 发起调用。Mock/FakeProvider 只能证明服务端协议构造、校验、循环与降级逻辑；不能证明真实模型会按预期返回 `tool_calls`。真实调用属于待批准的独立验收项。
+- Phase 2C 原生 Function Calling 已对真实 DeepSeek 执行 3 次脚本运行：第 1 次因网络错误降级，第 3 次完整成功并记录了 `tool_calls`、逐轮 Token/耗时和最终输出。样本只有 3 次，不能据此声明真实调用成功率或多轮稳定性。
 
 浏览器验收不属于未验证项：Playwright + Chromium 真实页面测试 2/2 通过，截图位于 `docs/screenshots/`。
 

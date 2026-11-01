@@ -71,7 +71,7 @@
 - [x] `result.llm` 持久化 `native_tools`、`termination_reason`、逐轮 `rounds`、逐次 `tool_calls`，失败保留部分轨迹
 - [x] 降级策略复用 `rules`/`fail`，工具循环错误码与 Provider 错误码分别可见
 - [x] 后端 102 通过（新增原生工具测试 28 项）、前端 8 通过、生产构建通过、独立数据库 HTTP 冒烟 11/11
-- [ ] 真实 DeepSeek Function Calling 调用（待批准；Mock/FakeProvider 通过不代表真实调用已验证）
+- [x] 真实 DeepSeek Function Calling 验收：3 次脚本运行；第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）；记录见 `docs/LLM_LIVE_CHECK.md`
 
 ## 后续（核心通过后再评估）
 - 实际 MCP Server（未实现前不能宣称已接入 MCP）
