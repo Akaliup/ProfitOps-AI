@@ -32,7 +32,7 @@ from .config import Settings
 from .errors import DomainError
 from .models import KnowledgeChunk, KnowledgeDocument, SeedVersion, new_id
 from .schemas import (
-    KnowledgeDocumentInput, KnowledgeDocumentOutput, KnowledgeHit,
+    KNOWLEDGE_MAX_HITS, KnowledgeDocumentInput, KnowledgeDocumentOutput, KnowledgeHit,
     KnowledgeSearchInput, KnowledgeSearchOutput,
 )
 from .security import Actor
@@ -45,10 +45,23 @@ _CJK = re.compile(r"[㐀-䶿一-鿿]")
 _WHITESPACE = re.compile(r"\s+")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Best-effort redaction for common credential shapes. This is defence in depth,
+# not a substitute for document ACLs or a full DLP scanner.
+_SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"(?i)\b(api[_-]?key|password|secret|token)\s*[:=]\s*['\"]?[^\s'\"]{6,}"),
+)
 
 
 def normalize_text(text: str) -> str:
     return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", text)).strip()
+
+
+def redact_knowledge_secrets(text: str) -> str:
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
 
 def content_sha256(text: str) -> str:
@@ -78,6 +91,7 @@ def sanitize_knowledge_text(text: str, limit: int = 800) -> str:
     instruct the model to ignore instructions inside it.
     """
     cleaned = _CONTROL.sub(" ", unicodedata.normalize("NFKC", text))
+    cleaned = redact_knowledge_secrets(cleaned)
     cleaned = _WHITESPACE.sub(" ", cleaned).strip()
     return cleaned[:limit]
 
@@ -511,7 +525,13 @@ def merge_knowledge_hits(
     knowledge: KnowledgeSearchOutput | None,
     extra_hits: list[dict[str, Any]] | None,
 ) -> KnowledgeSearchOutput | None:
-    """Merge pre-retrieved and tool-retrieved chunks, keeping stable order."""
+    """Merge pre-retrieved and tool-retrieved chunks without exceeding the schema cap.
+
+    The LLM may call ``search_knowledge`` more than once, so the union can exceed
+    ``KNOWLEDGE_MAX_HITS`` even though each individual search is bounded. Keep the
+    highest-scoring unique chunks and re-number them; returning an oversized
+    context would make ``KnowledgeSearchOutput`` validation fail downstream.
+    """
     if knowledge is None and not extra_hits:
         return None
     base = knowledge or KnowledgeSearchOutput(
@@ -529,7 +549,18 @@ def merge_knowledge_hits(
             continue
         seen.add(hit.chunk_id)
         merged.append(hit)
-    return base.model_copy(update={"hits": merged, "no_answer": base.no_answer and not merged})
+    merged.sort(key=lambda hit: hit.score, reverse=True)
+    merged = [
+        hit.model_copy(update={"rank": rank})
+        for rank, hit in enumerate(merged[:KNOWLEDGE_MAX_HITS], start=1)
+    ]
+    return KnowledgeSearchOutput(
+        query=base.query,
+        hits=merged,
+        no_answer=not merged,
+        embedding_model=base.embedding_model,
+        retrieval_ms=base.retrieval_ms,
+    )
 
 
 SEED_DOCUMENTS: list[dict[str, Any]] = [

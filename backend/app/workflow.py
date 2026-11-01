@@ -364,8 +364,13 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
         "create_recommendation": lambda state: {"recommendation_id": tool_data(registry, "create_recommendation", {"analysis_id": analysis_id, "report": state["report"], "findings": state["findings"], "llm": state.get("llm"), "knowledge": state.get("knowledge")}, context)["recommendation_id"]},
         "wait_for_approval": wait,
     }
+    # These nodes have their own bounded HTTP client timeouts and must degrade to
+    # a visible error instead of failing the whole analysis on the generic step
+    # budget. Retrieval's embedding timeout can legitimately exceed
+    # step_timeout_seconds; the LLM node has llm_timeout plus its tool budget.
+    untimed_steps = {"llm_root_cause_analysis", "retrieve_knowledge"}
     for name, handler in handlers.items():
-        graph.add_node(name, tracked(name, handler, check_timeout=name != "llm_root_cause_analysis"))
+        graph.add_node(name, tracked(name, handler, check_timeout=name not in untimed_steps))
     chain = [START, "receive_request", "get_sales_metrics", "calculate_profit", "analyze_profit_drivers", "verify_evidence"]
     for before, after in zip(chain, chain[1:]):
         graph.add_edge(before, after)

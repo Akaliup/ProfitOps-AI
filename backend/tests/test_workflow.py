@@ -1,3 +1,5 @@
+import time
+
 from sqlalchemy import select, update
 
 from app.models import Analysis, AuditLog, DailyOperation, Order, Recommendation
@@ -88,6 +90,26 @@ def test_failed_node_and_timeout_are_visible(client, analyst, monkeypatch):
     created = client.post("/api/analyses", json={}, headers=analyst).json()
     result = client.get(f"/api/analyses/{created['id']}", headers=analyst).json()
     assert result["status"] == "failed" and result["error"]["code"] == "step_timeout"
+
+
+def test_slow_knowledge_retrieval_degrades_without_failing_analysis(client, analyst, monkeypatch):
+    registry = client.app.state.registry
+    original = registry.invoke
+
+    def slow(name, payload, context):
+        if name == "search_knowledge":
+            time.sleep(1.2)
+        return original(name, payload, context)
+
+    monkeypatch.setattr(registry, "invoke", slow)
+    client.app.state.settings.step_timeout_seconds = 1.0
+    created = client.post("/api/analyses", json={}, headers=analyst).json()
+    result = client.get(f"/api/analyses/{created['id']}", headers=analyst).json()
+
+    assert result["status"] == "waiting_approval", result
+    retrieve = next(step for step in result["steps"] if step["name"] == "retrieve_knowledge")
+    assert retrieve["status"] == "completed"
+    assert retrieve["duration_ms"] >= 1000
 
 
 def test_tool_policy_catalog_and_deny(client, analyst):

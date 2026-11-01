@@ -290,14 +290,17 @@ class KnowledgeHit(StrictModel):
     rank: int = Field(ge=1, le=100)
 
 
+KNOWLEDGE_MAX_HITS = 10
+
+
 class KnowledgeSearchInput(StrictModel):
     query: str = Field(min_length=2, max_length=300)
-    top_k: int = Field(default=5, ge=1, le=10)
+    top_k: int = Field(default=5, ge=1, le=KNOWLEDGE_MAX_HITS)
 
 
 class KnowledgeSearchOutput(StrictModel):
     query: str
-    hits: list[KnowledgeHit] = Field(default_factory=list, max_length=10)
+    hits: list[KnowledgeHit] = Field(default_factory=list, max_length=KNOWLEDGE_MAX_HITS)
     no_answer: bool = False
     embedding_model: str
     retrieval_ms: float = Field(ge=0)
