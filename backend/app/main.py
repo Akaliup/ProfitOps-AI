@@ -30,13 +30,14 @@ from .observability import (
     METRICS, RATE_LIMIT_EXEMPT_PATHS, RATE_LIMITED_ROUTE_LABEL, TokenBucketLimiter,
     normalize_path, rate_limit_key, rate_limit_scope, retry_after_header, route_label,
 )
+from .ops import build_ops_summary
 from .schemas import (
     AnalysisRequest, DecisionRequest, KnowledgeDocumentInput, KnowledgeSearchInput,
     LoginRequest, LoginResponse,
 )
 from .security import (
     Actor, authenticate, create_access_token, get_actor, get_optional_actor,
-    require_role, scoped_idempotency_key,
+    rate_limit_identity, require_role, scoped_idempotency_key,
 )
 from .seed import seed_demo, seed_identity
 from .services import decide
@@ -151,6 +152,11 @@ def create_app(settings: Settings | None = None):
                 # key the brute-force bucket: rotating arbitrary tokens would
                 # otherwise hand out a fresh bucket for every password attempt.
                 token = None
+            else:
+                # Only accepted demo tokens or signed, unexpired JWTs may mint a
+                # per-caller bucket. Invalid bearer values share the anonymous
+                # bucket, so rotating them cannot bypass the base limit.
+                token = rate_limit_identity(token, settings)
             allowed, retry_after = limiter.allow(
                 f"{scope}:{rate_limit_key(request, token)}",
                 capacity=limit, window=settings.rate_limit_window_seconds,
@@ -544,6 +550,19 @@ def create_app(settings: Settings | None = None):
                 raise DomainError("recommendation_not_found", "建议不存在", 404)
             result = run_execution_graph(factory, registry, session, row, key, actor, request.state.request_id)
         return JSONResponse(status_code=500 if result["status"] == "execution_failed" else 200, content=result)
+
+    @app.get("/api/ops/summary", tags=["ops"])
+    def ops_summary(
+        window_hours: int = Query(default=24, ge=1, le=168),
+        actor: Actor = Depends(identity),
+    ):
+        # Operational telemetry exposes cross-team failure detail, so it is
+        # restricted to the approver role and always scoped to the JWT tenant.
+        require_role(actor, "approver")
+        with factory() as session:
+            return build_ops_summary(
+                session, actor.tenant_id, window_hours=window_hours,
+            )
 
     @app.get("/api/audit-logs", tags=["audit"])
     def audit_logs(limit: int = Query(default=100, ge=1, le=200), object_id: str | None = None, request_id: str | None = Query(default=None, max_length=64), actor: Actor = Depends(identity)):

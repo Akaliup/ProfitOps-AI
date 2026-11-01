@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
@@ -8,7 +9,7 @@ from app.config import Settings
 from app.llm import CircuitBreakerProvider, LLMError, LLMResult
 from app.main import create_app
 from app.observability import (
-    METRICS, RATE_LIMITED_ROUTE_LABEL, UNMATCHED_ROUTE_LABEL,
+    METRICS, RATE_LIMITED_ROUTE_LABEL, UNMATCHED_ROUTE_LABEL, TokenBucketLimiter,
 )
 
 
@@ -114,6 +115,66 @@ def test_integer_gauges_render_as_integers():
     body = METRICS.render()
     assert 'profitops_analysis_queue_depth{state="queued"} 3' in body
     assert "profitops_llm_circuit_state 2" in body
+
+
+def test_token_bucket_cap_is_hard_for_unique_key_burst():
+    limiter = TokenBucketLimiter(max_buckets=100)
+    for index in range(10_000):
+        allowed, _ = limiter.allow(f"key-{index}", capacity=5, window=60, now=0.0)
+        assert allowed
+    assert len(limiter._buckets) == 100
+
+
+def test_token_bucket_cap_holds_under_concurrent_access():
+    limiter = TokenBucketLimiter(max_buckets=128)
+
+    def hit(index: int) -> bool:
+        allowed, _ = limiter.allow(f"key-{index}", capacity=5, window=60, now=0.0)
+        return allowed
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        assert all(pool.map(hit, range(10_000)))
+    assert len(limiter._buckets) <= 128
+
+
+def test_invalid_bearer_rotation_cannot_bypass_base_limit(tmp_path):
+    with make_client(
+        tmp_path, rate_limit_enabled=True, rate_limit_requests=2,
+        rate_limit_window_seconds=60,
+    ) as http:
+        # Unsigned values are not identities: every one shares the anonymous
+        # bucket, so rotating them must still hit the base limit.
+        for index in range(2):
+            response = http.get(
+                "/api/analyses", headers={"Authorization": f"Bearer forged-{index}"},
+            )
+            assert response.status_code == 401
+        blocked = http.get(
+            "/api/analyses", headers={"Authorization": "Bearer forged-final"},
+        )
+        assert blocked.status_code == 429
+        assert blocked.json()["error"]["details"]["scope"] == "default"
+
+
+def test_valid_jwt_users_get_separate_rate_limit_buckets(tmp_path):
+    with make_client(
+        tmp_path, rate_limit_enabled=True, rate_limit_requests=2,
+        rate_limit_login_requests=10, rate_limit_window_seconds=60,
+    ) as http:
+        def login(email: str, password: str) -> dict[str, str]:
+            response = http.post(
+                "/api/auth/login", json={"email": email, "password": password},
+            )
+            assert response.status_code == 200
+            return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+        analyst = login("analyst@demo.local", "demo-analyst")
+        approver = login("approver@demo.local", "demo-approver")
+        assert http.get("/api/analyses", headers=analyst).status_code == 200
+        assert http.get("/api/analyses", headers=analyst).status_code == 200
+        assert http.get("/api/analyses", headers=analyst).status_code == 429
+        # A different signed identity still has its own bucket.
+        assert http.get("/api/analyses", headers=approver).status_code == 200
 
 
 def test_default_rate_limit_is_per_bearer_token(tmp_path):

@@ -71,7 +71,7 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 
 ## API
 
-全部 JSON；`/health` 与 `/metrics` 无认证，`/api/demo` 可匿名读取 demo 租户概览（带 Bearer 时返回该租户自己的店铺与数据范围），其余 API 需 Bearer。`POST /api/auth/login` 返回 `{access_token,token_type,expires_in,user}`；`GET /api/auth/me` 返回当前用户、角色与租户。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。登录、创建分析和其他 API 分别按 IP + token 哈希限流，超限返回 429 `rate_limited` 与 `Retry-After`；`/health`、`/metrics` 不限流。
+全部 JSON；`/health` 与 `/metrics` 无认证，`/api/demo` 可匿名读取 demo 租户概览（带 Bearer 时返回该租户自己的店铺与数据范围），其余 API 需 Bearer。`POST /api/auth/login` 返回 `{access_token,token_type,expires_in,user}`；`GET /api/auth/me` 返回当前用户、角色与租户。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。登录、创建分析和其他 API 分别按 IP + token 哈希限流，超限返回 429 `rate_limited` 与 `Retry-After`；`/health`、`/metrics` 不限流。限流身份只接受 demo token 或签名有效的 JWT；缺失、伪造或过期 Bearer 共用匿名桶，轮换无效 token 不能绕过基础限额。TokenBucketLimiter 的 bucket 数量是硬上限，达到上限时先清理一小时未更新的桶，再按最旧时间淘汰，唯一 key 突发不会突破 `max_buckets`。
 
 - GET /health：数据库连通性、simulation 标志、`llm.{configured,provider,model}` 与 `knowledge.{provider,model,remote,seed_error}`（不含密钥）；`seed_error` 为 `null` 或 `{code,message}`。
 - GET /metrics：Prometheus 文本格式，包含 HTTP 请求计数/耗时、分析任务事件与耗时、队列深度、工具调用、LLM 调用/熔断状态和限流命中；`PROFITOPS_METRICS_ENABLED=false` 时返回 404。HTTP 指标标签使用路由模板（如 `/api/analyses/{analysis_id}`）；未匹配路由固定为 `<unmatched>`，限流器在路由前提前返回的 429 固定为 `<rate_limited>`，任意请求路径都不能制造无界标签。
@@ -92,6 +92,7 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 - POST /api/recommendations/{id}/approve 或 /reject：`{reason}`，仅 pending_approval；409 表示状态冲突。
 - POST /api/recommendations/{id}/execute：必须 Idempotency-Key；批准后执行，仅模拟。
 - GET /api/audit-logs：最新在前，limit 1..200；支持 object_id 与 request_id 精确过滤（request_id 最长 64 字符）。
+- GET /api/ops/summary：仅 approver；`window_hours` 1..168，默认 24。按 JWT 租户聚合持久化的 `analyses`、`recommendations`、`executions` 和 `audit_logs`：任务状态（queued/running/waiting_approval/completed/insufficient_data/failed）、死信、重试、错误码、LLM 状态、工具调用/失败/轮次、token 用量、按版本化单价估算的成本、审批/执行当前状态和最近失败任务。不返回原始提示词、工具参数或 API Key；进程内 Prometheus 指标不作为持久历史。成本仅在每次调用都有 Usage 且模型有版本化单价时给出 `complete`；任一缺失返回 `partial` 且 `amount_usd=null`，不以 0 代替。analyst 返回 403，跨租户记录不可见。
 
 运行保护配置：`PROFITOPS_METRICS_ENABLED`、`PROFITOPS_RATE_LIMIT_ENABLED`、`PROFITOPS_RATE_LIMIT_REQUESTS`（默认 120/窗口）、`PROFITOPS_RATE_LIMIT_WINDOW_SECONDS`（默认 60）、`PROFITOPS_RATE_LIMIT_LOGIN_REQUESTS`（默认 10/窗口）、`PROFITOPS_RATE_LIMIT_ANALYSIS_REQUESTS`（默认 30/窗口）、`PROFITOPS_CIRCUIT_BREAKER_ENABLED`、`PROFITOPS_CIRCUIT_BREAKER_FAILURES`、`PROFITOPS_CIRCUIT_BREAKER_COOLDOWN_SECONDS`。限流桶是进程内状态，多副本部署需要共享限流存储；当前单进程部署不共享。
 
