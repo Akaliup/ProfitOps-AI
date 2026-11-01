@@ -2,6 +2,128 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-02 最终验收收口（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `dd104c2`，PR #8。本轮只补齐验收证据：浏览器 E2E、Python 3.11、历史库重复文档、真实 LLM 状态；不新增业务功能，不调用真实 LLM，不修改 `data/profitops.db`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（121.10s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 独立 3.11 venv + `backend/requirements.lock.txt` + `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（193.75s，1 个第三方 DeprecationWarning） |
+| 迁移测试（Python 3.11） | 同一 3.11 venv：`pytest backend/tests/test_migrations.py backend/tests/test_postgres_migrations.py -q` | 6 passed（SQLite 4 + PostgreSQL 2，3.53s） |
+| 前端单元测试 | `npm --prefix frontend test` | 15 passed（1 file，8.27s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，4.55s |
+| 浏览器 E2E（隔离临时库） | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e -- --workers=1` | 6 passed（30.0s）；后端 `LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| 历史库重复文档 | `python scripts/legacy_duplicate_review.py` | 12/12 检查 PASS；详见 `docs/LEGACY_DUPLICATE_REVIEW.md` |
+| Python 3.11 CI | `.github/workflows/ci.yml` 新增 `Backend pytest (Python 3.11)` | 与现有 3.12 job 相同的锁定依赖、pytest、回放评测和 Alembic 检查；推送后由 GitHub Actions 执行 |
+| 真实 LLM | 只读取 `Settings().llm_configured` | `configured=true`（provider=`deepseek`）；未输出密钥；本轮无新增授权，未发起真实调用 |
+| 空白字符 | `git diff --check` | 通过 |
+| 敏感文件 | 暂存区与未跟踪文件检查 | 未包含 `.env`、API Key、数据库、缓存或构建产物 |
+
+E2E 覆盖（6/6）：
+
+1. `JWT 登录、401、角色权限与跨租户隔离（真实 API）`：登录与 `/api/auth/me`、匿名 401、篡改 JWT 401、错误密码 401、analyst 创建知识文档 403、租户 B 登录、跨租户读取 404、本租户读取 200、列表与推荐隔离。
+2. `失败状态展示与手动重试（真实 Worker）`：页面显示 `llm_tool_execution_failed`、`尝试 3/3` 和重试按钮；点击后重新排队并最终进入 `waiting_approval`，生成 `recommendation_id`，无页面异常。
+3. `知识库页面：新增、检索与停用（真实 API）`：approver 新增文档、检索片段、停用后列表移除。
+4. `真实 API：分析、越权拦截、审批、模拟执行、幂等与审计`。
+5. `Agent Trace：原生轮次、失败调用与移动端布局可见`。
+6. `拒绝分支和手机视图保持可用`。
+
+**NOT TESTED（未测试）**：
+
+- 前端登录页：本分支未实现登录表单，前端通过 `/api/demo` 选择演示身份；浏览器内的用户名/密码登录流程未测试。
+- 登出：后端没有 logout 端点，前端没有登出入口，未测试。
+- 独立运营/ops 页面：本分支不存在该页面，未测试。
+- 浏览器内 401 全局跳转/拦截：无登录页可跳转，未测试；401 与角色校验仅在 E2E 用例 1 的真实 API 层验证。
+- 非 Chromium 浏览器、生产容器内的 E2E：未测试；本轮 E2E 使用 Vite dev server + Chromium。
+
+E2E 的 Playwright 配置在设置 `PROFITOPS_E2E_DATABASE_URL` 时启动独立后端，并将后端 `reuseExistingServer` 固定为 `false`，避免误复用绑定到 `data/profitops.db` 的已运行进程。E2E 会重写 `docs/screenshots/*.png`；这些副作用文件未纳入本次提交。
+
+Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.8，本机原先没有 3.11。本轮用 `uv python install 3.11` 获取 CPython 3.11.16，在操作系统临时目录创建独立 venv，安装 `backend/requirements.lock.txt` 后执行全量测试；未覆盖、未修改现有 `.venv`。CI 采用新增独立 job 而非矩阵，以保留现有必需检查名 `Backend pytest`，同时用官方 `actions/setup-python` 固定 3.11。
+
+真实 LLM：`LLM_API_KEY` 已配置（`configured=true`），但 `docs/EVALUATION.md` D5 要求显式授权字符串与正整数 `--max-calls`；本轮没有新的真实调用授权，因此 `REAL_LLM_EVAL=NOT RUN`，未执行 `native --real`，也没有用 FakeProvider 冒充真实 DeepSeek。历史 Phase 2B 的 22 次真实调用不在本轮范围。
+
+历史库重复文档：使用 `backend/tests/legacy_schema.py` 构造隔离临时 SQLite（6 条文档，5 条共享同一 SHA-256，其中 4 条迁移前 active），执行 `stamp 0001_baseline → upgrade head`。全部文档 ID 与分片保留、外键有效、每组内容仅 1 条 active、最早创建的 `legacy-document` 保留、3 条重复活跃文档软删除、原有 inactive 与不同内容文档不变、业务表行数不变、重复 upgrade no-op；12/12 PASS。未读取或修改 `data/profitops.db`。
+
+## 2026-11-01 PR #8 最终合并门禁（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `fb02522`。本轮只处理三项明确问题：真实历史库迁移（P1）、指标标签基数（P2）、租约到期严格保护（P3）；不扩展功能，不调用付费模型，不修改 `data/profitops.db`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 240 passed, 0 failed, 0 skipped（120.71s，1 个第三方 DeprecationWarning） |
+| 历史 SQLite 迁移 | `python -m pytest backend/tests/test_migrations.py -q` | 4 passed；真实前租户 schema（无 `tenants`/`users`、`tenant_id`、任务字段）+ `stamp 0001_baseline → upgrade head`；行数与外键保留；列宽 200、复合唯一、租约字段、索引到位；重复 upgrade no-op；跨租户同键可用、同租户重复键拒绝；重复活跃文档保留最新一行并软删除其余；含跨租户同键时 downgrade 因唯一约束失败且保留原行 |
+| 历史 PostgreSQL 迁移 | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests/test_postgres_migrations.py -q` | 2 passed；一次性 schema + 真实前租户 schema，原地升级、数据与外键保留、约束与索引正确、重复 upgrade no-op；downgrade 冲突时失败且保留行；schema 结束后删除 |
+| 指标标签基数 | `python -m pytest backend/tests/test_observability.py -q` | 16 passed；40 个随机未匹配路径只产生一个 `<unmatched>` 404 序列；匹配路由使用模板 `/api/analyses/{analysis_id}`；25 个随机路径的提前 429 只产生一个 `<rate_limited>` 序列 |
+| 租约到期保护 | `python -m pytest backend/tests/test_worker.py -q` | 22 passed；恰好到期、到期未接管（`write_job` 与 `create_recommendation`）、`assert_owned`、心跳延迟、已被接管、活跃租约正常续租 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件，7.82s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，4.57s |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| Alembic 新库与降级 | 临时 SQLite：`python scripts/migrate.py upgrade head` / `current` / `python -m alembic -c backend/alembic.ini check` / `downgrade base` | `0002_tenant_scoped_idempotency (head)`；`No new upgrade operations detected`；降级成功 |
+
+真实进程 kill/restart **本轮未重跑**：上一轮（基线 `40a629c`）已在临时库完成真实 `taskkill /F` 与重启恢复；本轮 P3 只增加写入时的租约校验，`requeue_expired` / `finalize_job` 的恢复路径未改，并由 22 个 worker 测试覆盖。真实 LLM、浏览器 E2E、Python 3.11 **未验证**（本机 `.venv` 为 3.12.8，`LLM_API_KEY` 为空）；CI 结果在推送后确认。迁移测试与冒烟均使用临时数据库，未修改 `data/profitops.db`。
+
+## 2026-11-01 PR #8 P2 收口复验（Claude Code）
+
+分支 `feat/platform-reliability`，基线 `40a629c`。本轮只修复四项 P2：跨租户幂等键冲突、租户前缀后的列宽、并发手工重试状态回退、`run_analysis` 写入 failed 后 `finalize_job` 前退出的恢复；不新增功能，不修改 RAG、前端页面或执行语义。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 227 passed, 0 failed, 0 skipped（120.12s，6 个第三方/适配器 warning） |
+| 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 2 passed；旧 SQLite schema 升级后数据保留、列宽 200、复合唯一约束存在、旧全局唯一约束消失、`ix_analyses_tenant_id` / `ix_analyses_status_next_run` / `ix_executions_tenant_id` 保留 |
+| PostgreSQL 幂等专项 | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests/test_postgres_idempotency.py -q` | 1 passed；跨租户同存储键、105 字符键、同租户重复键拒绝 |
+| PostgreSQL 旧库迁移 | 一次性 schema + 手工旧约束 + `stamp 0001_baseline` + `upgrade head` | 升级成功；旧行保留；`analyses`/`executions` 均为 `VARCHAR(200)` 且带 `(tenant_id, idempotency_key)` 复合唯一；schema 已删除 |
+| Alembic 新库 | 临时 SQLite：`python scripts/migrate.py upgrade head` / `current` / `alembic check` | `0002_tenant_scoped_idempotency (head)`；`No new upgrade operations detected`；重建后三个索引均存在 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件，8.75s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，5.41s |
+| HTTP 冒烟 | 独立临时 SQLite + 端口 8015 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | 15/15 通过，failed=0 |
+| 真实进程 kill/restart | 独立临时 SQLite + 端口 8013/8014；测试专用 `sitecustomize.py` 在 failed 写入后停住，`taskkill /F` 杀掉进程，再启动无补丁进程 | 通过；见下方时间线 |
+
+真实 kill/restart 时间线（临时库，已删除；未修改 `data/profitops.db`）：
+
+1. 14:55:34 创建分析，旧进程 PID 31228 的 worker 抢占 attempt 1。
+2. 14:55:39 attempt 1 的 failed 行租约过期，运行中的 worker 通过 `_recover_failed_jobs` 重排为 attempt 2（审计 `analysis.retry_scheduled`，`reason=failed_before_finalize`）。
+3. attempt 2 再次写入 failed 后，进程在 `finalize_job` 前被 `taskkill /F /PID 31228` 强制终止；库中保留 `status=failed`、`worker_id` 和过期租约。
+4. 14:56:13 新进程 PID 16960 启动，启动恢复把该行重排为 attempt 3（同一审计原因），worker 随后完成分析，最终 `waiting_approval`、`attempts=3/3`、`worker_id=null`、`lease_until=null`、`error=null`。
+
+测试专用补丁只存在于操作系统临时目录，通过 `PYTHONPATH` 加载，未提交、未修改生产代码；它用于把进程稳定停在“failed 已写入、finalize 未执行”的窗口，kill 本身是真实操作系统强制终止。真实 LLM、浏览器 E2E、PostgreSQL 0002 downgrade 本轮未执行；CI 结果在推送后另行确认。Python 3.11 未验证（本机 `.venv` 为 3.12.8）。
+
+## 2026-11-01 可靠性 P1 修复复验（Claude Code）
+
+分支 `feat/platform-reliability`，只修复两个 P1：过期租约遵守 `max_attempts` 并进入死信；推荐建议写入与租约所有权校验处于同一数据库事务。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 217 passed, 0 failed, 0 skipped（76.87s） |
+| 新增故障测试 | `python -m pytest backend/tests/test_worker.py -q -k 'requeue_expired_dead_letters or create_recommendation_rejects_reclaimed'` | 2 passed |
+| Alembic 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 1 passed |
+| PostgreSQL 专项 | 既有 3 个 PostgreSQL 测试 + 一次性脚本验证死信与推荐租约守卫 | 3 passed；脚本两项断言通过 |
+| 前端测试 | `npm --prefix frontend test -- --run` | 15 passed（1 个测试文件） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules |
+
+真实进程 kill/restart **未验证**：本轮只通过数据库租约过期/回收与旧/新 worker 交错测试模拟故障，没有真实终止操作系统进程后重启。真实 LLM、浏览器 E2E 未在本轮执行。
+
+## 2026-11-01 阶段十一验证（Claude Code）
+
+分支 `feat/agent-evaluation-trace`，工作区包含持久化任务队列、认证与租户隔离、可观测性/限流/熔断、Alembic 基线、离线回放评测和运行手册。以下为本次实际输出：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... python -m pytest backend/tests -q` | 215 passed, 0 failed, 0 skipped（110.94s，1 个第三方 DeprecationWarning） |
+| Alembic 迁移测试 | `python -m pytest backend/tests/test_migrations.py -q` | 1 passed |
+| 迁移脚本（临时 SQLite） | `python scripts/migrate.py upgrade head` / `current` / `alembic check` / `downgrade base` | 全部通过；`alembic check` 无 drift；降级后仅保留 `alembic_version` |
+| PostgreSQL 知识库测试 | 一次性 `postgres:16-alpine` + `PROFITOPS_TEST_POSTGRES_URL=... pytest backend/tests/test_knowledge.py -q` | 44 passed（含 3 项 PostgreSQL 并发/索引测试） |
+| 前端测试 | `npm --prefix frontend test` | 15 passed（1 个测试文件） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules |
+| RAG 离线评测 | `python backend/evals/rag.py` | hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，network_calls=0 |
+| LLM 回放评测 | `python backend/evals/replay.py` | 4/4 案例通过，network_calls=0 |
+| HTTP 冒烟 | 独立临时 SQLite + `python scripts/smoke.py --base-url http://127.0.0.1:8011` | 15/15 通过 |
+| Prometheus 指标 | `curl http://127.0.0.1:8010/metrics` | 早先运行已确认；本轮未重复 |
+| Python 语法检查 | `python -m py_compile`（迁移与评测脚本） | 通过 |
+
+早先一次运行在未安装 `alembic` 时为 204 passed、4 skipped；安装 `backend/requirements.lock.txt` 后复验为 215 passed、0 skipped。PostgreSQL 使用一次性 `postgres:16-alpine` 容器与独立 schema，结束后删除，未连接或修改本机 Supabase 实例。Python 3.11 未验证（本机 `.venv` 为 3.12.8）；真实 LLM 未调用（`LLM_API_KEY` 为空）；CI 结果尚未观察，不标记为通过。迁移脚本使用临时 SQLite，未修改 `data/profitops.db`。
+
 ## 2026-10-31 Docker Compose 实际运行验收（Claude Code）
 
 本机 Docker Desktop 29.5.3 / Compose v5.1.4（WSL2）。Docker Hub 直连受限，构建时通过本机代理拉取基础镜像并传入 BuildKit 代理参数；未修改 `compose.yaml`、Dockerfile 或业务代码。`node:22-alpine` 使用 AWS ECR Public 的官方镜像 `public.ecr.aws/docker/library/node:22-alpine` 后本地打标签。后端启动参数为 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不调用真实 LLM。

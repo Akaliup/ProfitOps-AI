@@ -89,7 +89,8 @@ export const analysis: Analysis = {
   id: 'analysis-1', status: 'waiting_approval', request: { period: metrics.period, store_id: null },
   steps: [{ name: 'get_sales_metrics', label: '读取经营数据', status: 'completed', started_at: '2026-10-30T00:00:00Z', request_id: 'test-request', phase: 'analysis', duration_ms: 10, summary: '读取 60 条每日经营记录' }],
   result: { metrics, findings: { conclusion: '销售额上涨、净利润下降。广告支出是最大负向贡献项。', evidence: [], primary_driver: metrics.drivers[0] }, engine: 'deterministic-rules-v1', llm: llmFallback, knowledge: knowledgeSearch },
-  error: null, recommendation_id: 'rec-1', request_id: 'test-request', created_at: '2026-10-30T00:00:00Z',
+  error: null, recommendation_id: 'rec-1', attempts: 1, max_attempts: 3, next_run_at: null,
+  request_id: 'test-request', created_at: '2026-10-30T00:00:00Z',
 }
 export const recommendation: Recommendation = {
   id: 'rec-1', analysis_id: 'analysis-1', status: 'pending_approval', title: 'TRAVEL-BAG-01 · 广告预算优化模拟',

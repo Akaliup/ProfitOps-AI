@@ -7,14 +7,14 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .audit import record
-from .errors import DomainError
+from .errors import DomainError, LeaseLost
 from .metrics import verify_evidence
-from .models import Analysis, Execution, Recommendation, new_id
+from .models import Analysis, Execution, Recommendation, lease_is_live, new_id, utcnow
 from .schemas import (
     DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsReport,
     RecommendationInput, RecommendationOutput, StrictModel,
 )
-from .security import Actor, require_role
+from .security import Actor, require_role, scoped_idempotency_key
 
 
 class SimulationAction(StrictModel):
@@ -59,15 +59,46 @@ def plan_action(report: MetricsReport, findings: DriverReport) -> ActionPlan:
     return ActionPlan(action=action, target=target, days=days, is_budget=is_budget, potential=potential)
 
 
-def create_recommendation(session: Session, payload: RecommendationInput, actor: Actor, request_id: str):
+def create_recommendation(
+    session: Session, payload: RecommendationInput, actor: Actor, request_id: str,
+    worker_id: str | None = None, expected_attempt: int | None = None,
+):
     require_role(actor, "analyst", "approver")
     verify_evidence(payload.report, payload.findings)
     if not payload.findings.anomaly:
         raise DomainError("no_anomaly", "没有待处理的利润异常", 409)
-    analysis = session.get(Analysis, payload.analysis_id)
+    analysis = session.scalar(select(Analysis).where(
+        Analysis.id == payload.analysis_id, Analysis.tenant_id == actor.tenant_id,
+    ))
     if analysis is None:
         raise DomainError("analysis_not_found", "分析不存在", 404)
-    existing = session.scalar(select(Recommendation).where(Recommendation.analysis_id == analysis.id))
+    if worker_id is not None:
+        if expected_attempt is None:
+            raise LeaseLost("analysis lease attempt missing")
+        # Lock the analysis row in this same transaction before writing. A
+        # worker whose lease was reclaimed, or whose lease merely ran out
+        # before a takeover, fails here, so it cannot insert a recommendation
+        # first and discover the lost lease afterwards. The expiry comparison
+        # runs in SQL: SQLite hands back naive datetimes while ``utcnow()`` is
+        # aware, so evaluating it in Python would be wrong or raise.
+        owned = session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == analysis.id,
+                Analysis.status == "running",
+                Analysis.worker_id == worker_id,
+                Analysis.attempts == expected_attempt,
+                lease_is_live(utcnow()),
+            )
+            .values(updated_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if owned.rowcount != 1:
+            raise LeaseLost("analysis lease lost")
+    existing = session.scalar(select(Recommendation).where(
+        Recommendation.analysis_id == analysis.id,
+        Recommendation.tenant_id == actor.tenant_id,
+    ))
     if existing:
         return RecommendationOutput(recommendation_id=existing.id, status=existing.status)
     report, findings = payload.report, payload.findings
@@ -114,7 +145,7 @@ def create_recommendation(session: Session, payload: RecommendationInput, actor:
         "source": report.source,
     }
     recommendation = Recommendation(
-        id=new_id(), analysis_id=analysis.id, status="proposed",
+        id=new_id(), tenant_id=actor.tenant_id, analysis_id=analysis.id, status="proposed",
         title=f"{target['sku']} · 广告预算优化模拟" if is_budget else f"{target['sku']} · 成本核查模拟",
         body=body, action=action.model_dump(mode="json"),
     )
@@ -131,14 +162,21 @@ def decide(session: Session, recommendation_id: str, decision: str, reason: str,
     status = "approved" if decision == "approve" else "rejected"
     changed = session.execute(update(Recommendation).where(
         Recommendation.id == recommendation_id, Recommendation.status == "pending_approval",
+        Recommendation.tenant_id == actor.tenant_id,
     ).values(status=status, approved_by=actor.id if status == "approved" else None, approval_reason=reason))
     if changed.rowcount != 1:
-        if session.get(Recommendation, recommendation_id) is None:
+        if session.scalar(select(Recommendation).where(
+            Recommendation.id == recommendation_id, Recommendation.tenant_id == actor.tenant_id,
+        )) is None:
             raise DomainError("recommendation_not_found", "建议不存在", 404)
         raise DomainError("invalid_transition", "只有待审批建议可以批准或拒绝", 409)
     recommendation = session.get(Recommendation, recommendation_id)
     session.refresh(recommendation)
-    analysis = session.get(Analysis, recommendation.analysis_id)
+    analysis = session.scalar(select(Analysis).where(
+        Analysis.id == recommendation.analysis_id, Analysis.tenant_id == actor.tenant_id,
+    ))
+    if analysis is None:
+        raise DomainError("analysis_not_found", "分析不存在", 404)
     analysis.status = "approved" if status == "approved" else "rejected"
     record(session, actor, f"recommendation.{decision}", "recommendation", recommendation_id, request_id, details={"reason": reason, "status": status})
     return recommendation
@@ -168,26 +206,35 @@ def execution_output(execution: Execution, replayed=False):
 
 def execute_once(session: Session, recommendation_id: str, key: str, actor: Actor, request_id: str) -> ExecuteOutput:
     require_role(actor, "approver")
+    key = scoped_idempotency_key(actor.tenant_id, key)
     # First write serializes competing transactions on SQLite and locks the row on PostgreSQL.
     claimed = session.execute(update(Recommendation).where(
         Recommendation.id == recommendation_id, Recommendation.status == "approved",
+        Recommendation.tenant_id == actor.tenant_id,
     ).values(status="executing"))
-    occupied = session.scalar(select(Execution).where(Execution.idempotency_key == key))
+    occupied = session.scalar(select(Execution).where(
+        Execution.idempotency_key == key, Execution.tenant_id == actor.tenant_id,
+    ))
     if occupied and occupied.recommendation_id != recommendation_id:
         raise DomainError("idempotency_conflict", "该执行请求键已用于其他建议", 409)
     if claimed.rowcount != 1:
-        existing = session.scalar(select(Execution).where(Execution.recommendation_id == recommendation_id))
+        existing = session.scalar(select(Execution).where(
+            Execution.recommendation_id == recommendation_id,
+            Execution.tenant_id == actor.tenant_id,
+        ))
         if existing:
             record(session, actor, "execution.replayed", "recommendation", recommendation_id, request_id, "replayed", {"execution_id": existing.id})
             return execution_output(existing, replayed=True)
-        recommendation = session.get(Recommendation, recommendation_id)
+        recommendation = session.scalar(select(Recommendation).where(
+            Recommendation.id == recommendation_id, Recommendation.tenant_id == actor.tenant_id,
+        ))
         if recommendation is None:
             raise DomainError("recommendation_not_found", "建议不存在", 404)
         raise DomainError("not_approved", "只有已批准的建议可以模拟执行", 409, {"status": recommendation.status})
     recommendation = session.get(Recommendation, recommendation_id)
     session.refresh(recommendation)
     execution = Execution(
-        id=new_id(), recommendation_id=recommendation_id, idempotency_key=key,
+        id=new_id(), tenant_id=actor.tenant_id, recommendation_id=recommendation_id, idempotency_key=key,
         status="executing", actor=actor.id, request_id=request_id, simulation=True,
     )
     session.add(execution)
@@ -202,7 +249,11 @@ def execute_once(session: Session, recommendation_id: str, key: str, actor: Acto
         execution.status = recommendation.status = "execution_failed"
         execution.error = {"code": "simulation_failed", "message": str(exc), "exception_type": type(exc).__name__}
         record(session, actor, "execution.failed", "recommendation", recommendation_id, request_id, "failure", execution.error)
-    analysis = session.get(Analysis, recommendation.analysis_id)
+    analysis = session.scalar(select(Analysis).where(
+        Analysis.id == recommendation.analysis_id, Analysis.tenant_id == actor.tenant_id,
+    ))
+    if analysis is None:
+        raise DomainError("analysis_not_found", "分析不存在", 404)
     analysis.status = execution.status
     session.flush()
     return execution_output(execution)

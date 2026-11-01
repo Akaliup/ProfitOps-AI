@@ -15,23 +15,24 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 
 ## 数据模型
 
-- stores、products、orders、daily_operations：业务事实；daily_operations 为每日覆盖依据。
-- analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID；idempotency_key 全局唯一且绑定请求内容与创建者。`result` 包含确定性 `metrics`、`findings`、`llm` 运行元数据和 `engine`。
+- tenants、users：租户与登录用户；用户以 `(tenant_id, email)` 唯一，密码只保存 scrypt 哈希，角色由服务端数据库决定。
+- stores、products、orders、daily_operations：业务事实；均带 `tenant_id`，查询必须先按租户过滤；daily_operations 为每日覆盖依据。
+- analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID、`tenant_id`、任务执行字段（`attempts`、`max_attempts`、`next_run_at`、`lease_until`、`worker_id`）；idempotency_key 按 `(tenant_id, idempotency_key)` 唯一且绑定请求内容与创建者，存储列宽 200，客户端键最多 100 字符，非 demo 租户在存储时加租户前缀，因此同一客户端键在不同租户互不占用。`result` 包含确定性 `metrics`、`findings`、`llm` 运行元数据和 `engine`。
 - recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。`body.llm` 保存本次 LLM 运行结果（成功时含结构化输出），`body.knowledge` 保存检索片段及 `cited` 标记。
-- knowledge_documents、knowledge_chunks：运营知识文档与 Markdown 分段；正文 SHA-256 用于创建幂等，文档软删除，片段保存 embedding 与模型名；`heading` 最长 200 字符。`knowledge_documents(content_sha256)` 上有部分唯一索引（仅 `active=true`），保证同一正文最多一个 active 文档；历史软删除行可保留任意数量。启动时对旧库先按 `(created_at, id)` 保留最早 active 行、其余软删除，再创建索引；不删除任何行。
-- executions：recommendation_id 唯一，idempotency_key 唯一；模拟结果和错误诊断。
-- audit_logs：操作人、动作、对象、时间、请求 ID、结果与详情。
+- knowledge_documents、knowledge_chunks：运营知识文档与 Markdown 分段；文档带 `tenant_id`，正文 SHA-256 用于创建幂等，文档软删除，片段保存 embedding 与模型名；`heading` 最长 200 字符。`knowledge_documents(tenant_id, content_sha256)` 上有部分唯一索引（仅 `active=true`），保证同一租户同一正文最多一个 active 文档；不同租户可以各自拥有相同正文，历史软删除行可保留任意数量。启动时对旧库先按 `(tenant_id, created_at, id)` 保留最早 active 行、其余软删除，再创建索引；不删除任何行。
+- executions：recommendation_id 唯一，idempotency_key 按 `(tenant_id, idempotency_key)` 唯一（列宽 200，客户端键最多 100 字符）；带 `tenant_id`，模拟结果和错误诊断。
+- audit_logs：`tenant_id`、操作人、动作、对象、时间、请求 ID、结果与详情；列表按租户过滤。
 - schema_versions、seed_versions：可重复初始化版本记录。
 
 ## 身份与状态机
 
-本地演示 Bearer token：demo-analyst → analyst；demo-approver → approver。客户端传 X-Role 或 actor 无效；服务端映射身份。只在 demo mode 提供演示账号元信息。此机制不是生产认证。
+认证有两种方式：demo mode 下固定 Bearer token（demo-analyst → analyst，demo-approver → approver，均属于 demo 租户），以及 `POST /api/auth/login` 用邮箱密码换取 HS256 JWT。JWT 包含 `sub`、`tenant_id`、`iss`、`iat`、`exp`，服务端校验签名、签发方、过期时间，并从数据库重新读取用户、角色和租户状态；不信任 token 内的角色声明。客户端传 X-Role 或 actor 无效。非 demo mode 必须配置至少 16 字符的 `AUTH_SECRET`，演示 token 不再生效。所有租户数据查询都带 `tenant_id` 条件，跨租户对象按不存在处理（404），不返回资源是否存在。
 
 建议：proposed → pending_approval → approved → executing → executed；pending_approval → rejected；executing → execution_failed。审批结果不可反转。只有 approver 可以审批、拒绝和模拟执行。analyst 可发起分析、读指标和审计。
 
 条件 UPDATE 抢占审批或执行；执行在单个数据库事务中将 approved 变为 executing、插入唯一执行记录、模拟修改并存结果，最终 executed / execution_failed。等待竞争事务后重复调用返回同一 execution 且 replayed=true，不产生第二条模拟变更。不同建议不能复用执行 Idempotency-Key。拒绝的请求和失败同样审计。
 
-LangGraph 分析图（异常路径）：receive_request → get_sales_metrics → calculate_profit → analyze_profit_drivers → verify_evidence → retrieve_knowledge → llm_root_cause_analysis → verify_llm_evidence → create_recommendation → wait_for_approval → END。无异常或数据不完整时从 verify_evidence 直接进入 wait_for_approval，不检索知识库，也不调用 LLM。每个节点将状态快照提交到数据库；等待为持久化业务暂停点。审批后从数据库加载同一快照进入 LangGraph 执行图：get_approval_status → simulate_execute_approved_action → save_execution_result。不使用仅内存 checkpoint 冒充可恢复性。读快照不重跑已经完成的建议生成。节点超时预算在每次步骤前后检查，失败记录 failed/timeout；不强行终止 Python 阻塞线程。LLM 节点使用 Provider 自身的 `LLM_TIMEOUT` 与有界重试，不叠加步骤超时。启动时将中断的 running 分析标记为 failed（restart_interrupted），保留步骤用于诊断。
+LangGraph 分析图（异常路径）：receive_request → get_sales_metrics → calculate_profit → analyze_profit_drivers → verify_evidence → retrieve_knowledge → llm_root_cause_analysis → verify_llm_evidence → create_recommendation → wait_for_approval → END。无异常或数据不完整时从 verify_evidence 直接进入 wait_for_approval，不检索知识库，也不调用 LLM。每个节点将状态快照提交到数据库；等待为持久化业务暂停点。审批后从数据库加载同一快照进入 LangGraph 执行图：get_approval_status → simulate_execute_approved_action → save_execution_result。不使用仅内存 checkpoint 冒充可恢复性。读快照不重跑已经完成的建议生成。节点超时预算在每次步骤前后检查，失败记录 failed/timeout；不强行终止 Python 阻塞线程。LLM 节点使用 Provider 自身的 `LLM_TIMEOUT` 与有界重试，不叠加步骤超时。分析是持久化任务：POST 先写入 queued 行，worker 用条件 UPDATE 抢占（status=queued → running）并写入 attempts、worker_id 和 lease_until；工作流执行期间心跳续租。租约过期的 running 行在启动或轮询时重新排队（lease_expired），不会因为进程重启永久卡住；已用完 `max_attempts` 的过期租约行保持 failed 并标记 `dead_letter`，不会无限重新入队。worker 的每次写入——创建建议、持久化步骤/结果（`write_job`）、写审计前的所有权确认（`assert_owned`）以及心跳续租（`LeaseHeartbeat`）——都在同一条条件 UPDATE 中校验 `status='running'`、`worker_id`、`attempts` 和 `lease_until > 当前时间`。时间比较在数据库侧执行（SQLite 返回无时区值，Python 侧比较会出错或与存储值不一致）；`lease_until == now` 视为已到期，与恢复扫描的 `lease_until <= now` 一致。租约到期后，即使尚未被新 worker 接管，旧 worker 也不能创建建议、持久化新结果或延长租约；心跳发现租约丢失后停止。已被回收的旧 worker 写入会回滚并停止工作流。`workflow_failed`、`step_timeout`、`database_locked`、`worker_crashed` 按指数退避重试，达到 `max_attempts` 后保持 failed 并标记 `dead_letter`；`source_failed`、`llm_failed` 等确定性失败不自动重试。失败行可由认证用户调用 retry 接口手动重新排队。`run_analysis` 已写入 failed 但进程在 `finalize_job` 之前退出时，该行仍保留 `worker_id` 与过期租约；启动或轮询的恢复扫描会用同一重试/死信规则处理这些行，并在错误详情标记 `recovered_before_finalize=true`，不会永久卡在 failed。
 
 ## LLM 分析与降级
 
@@ -50,7 +51,9 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 - `llm_failed`：仅当 `LLM_FALLBACK_POLICY=fail`；分析状态 `failed`，错误码 `llm_failed`，运行元数据仍写入 `result.llm`。
 - `not_requested`：无异常（`reason=no_anomaly`）或数据不完整（`reason=insufficient_data`），LLM 未被触发。
 
-`engine` 仅在 `llm_success` 时为 `deepseek-llm-v1`，否则为 `deterministic-rules-v1`。审计动作：`analysis.llm_succeeded`、`analysis.llm_fallback`（outcome=degraded）、`analysis.llm_failed`。Provider 错误码包括 `llm_auth_failed`、`llm_insufficient_balance`、`llm_rate_limited`、`llm_server_error`、`llm_http_error`、`llm_timeout`、`llm_network_error`、`llm_invalid_json`、`llm_empty_response`、`llm_schema_invalid`、`llm_invalid_tool_call`、`invalid_evidence_reference`；原生工具循环另有上文列出的 `llm_tool_*` 错误码。
+`engine` 仅在 `llm_success` 时为 `deepseek-llm-v1`，否则为 `deterministic-rules-v1`。审计动作：`analysis.llm_succeeded`、`analysis.llm_fallback`（outcome=degraded）、`analysis.llm_failed`。Provider 错误码包括 `llm_auth_failed`、`llm_insufficient_balance`、`llm_rate_limited`、`llm_server_error`、`llm_http_error`、`llm_timeout`、`llm_network_error`、`llm_invalid_json`、`llm_empty_response`、`llm_schema_invalid`、`llm_invalid_tool_call`、`llm_circuit_open`、`invalid_evidence_reference`；原生工具循环另有上文列出的 `llm_tool_*` 错误码。
+
+Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错误达到 `PROFITOPS_CIRCUIT_BREAKER_FAILURES`（默认 3）后打开熔断，`PROFITOPS_CIRCUIT_BREAKER_COOLDOWN_SECONDS`（默认 30）内直接返回 `llm_circuit_open`，冷却后放行一个半开探测。鉴权、余额不足、非法输出等确定性错误不计入熔断。熔断状态通过 `/metrics` 的 `profitops_llm_circuit_state`（0 closed、1 half-open、2 open）暴露；熔断期间仍按 `LLM_FALLBACK_POLICY` 降级或失败，不会产生真实外部副作用。
 
 ## 知识库检索（RAG）
 
@@ -68,15 +71,17 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 
 ## API
 
-全部 JSON；`/health` 无认证，其余 API 除 `/api/demo` 外需 Bearer。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。
+全部 JSON；`/health` 与 `/metrics` 无认证，`/api/demo` 可匿名读取 demo 租户概览（带 Bearer 时返回该租户自己的店铺与数据范围），其余 API 需 Bearer。`POST /api/auth/login` 返回 `{access_token,token_type,expires_in,user}`；`GET /api/auth/me` 返回当前用户、角色与租户。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。登录、创建分析和其他 API 分别按 IP + token 哈希限流，超限返回 429 `rate_limited` 与 `Retry-After`；`/health`、`/metrics` 不限流。
 
 - GET /health：数据库连通性、simulation 标志、`llm.{configured,provider,model}` 与 `knowledge.{provider,model,remote,seed_error}`（不含密钥）；`seed_error` 为 `null` 或 `{code,message}`。
+- GET /metrics：Prometheus 文本格式，包含 HTTP 请求计数/耗时、分析任务事件与耗时、队列深度、工具调用、LLM 调用/熔断状态和限流命中；`PROFITOPS_METRICS_ENABLED=false` 时返回 404。HTTP 指标标签使用路由模板（如 `/api/analyses/{analysis_id}`）；未匹配路由固定为 `<unmatched>`，限流器在路由前提前返回的 429 固定为 `<rate_limited>`，任意请求路径都不能制造无界标签。
 - GET /api/demo：demo mode、演示身份、可用店铺和数据日期（可空）、`llm.{configured,provider,model,fallback_policy}`，以及 `knowledge.{documents,embedding_provider,embedding_model,seed_error}`。
 - POST /api/demo/seed：analyst 可重复初始化，不清除历史；同时幂等初始化 `knowledge-v1` 知识库。
 - GET /api/dashboard/summary：period、previous_period、current、previous、changes、trend、drivers、sku_breakdown、data_quality、anomaly。
 - GET /api/metrics：同一指标契约（支持范围/店铺）。
-- POST /api/analyses：`{start_date?,end_date?,store_id?}`，可选 Idempotency-Key；202 返回 queued 分析，FastAPI 后台启动有状态图。
-- GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据、错误、`result.engine`、`result.llm` 和 `result.knowledge`；原生路径的 `result.llm` 另含 `native_tools`、`termination_reason`、`rounds` 和 `tool_calls`。检索失败时保留 `result.knowledge_error`，不阻断确定性分析。
+- POST /api/analyses：`{start_date?,end_date?,store_id?}`，可选 Idempotency-Key；202 返回 queued 分析，任务被 worker 抢占后执行有状态图。
+- GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据、错误、`result.engine`、`result.llm`、`result.knowledge`，以及 `attempts`、`max_attempts`、`next_run_at`；原生路径的 `result.llm` 另含 `native_tools`、`termination_reason`、`rounds` 和 `tool_calls`。检索失败时保留 `result.knowledge_error`，不阻断确定性分析。GET 列表支持 `status` 过滤。
+- POST /api/analyses/{id}/retry：仅 failed 分析可重试；用单条条件 UPDATE（`status='failed'`）原子地重置为 queued、清除租约并增加一次允许尝试，返回 202。并发重试或重试与 worker 交错时只有一个请求成功，其余返回 409 `analysis_not_retryable`；running/completed 不会被改回 queued。
 - GET /api/tools：工具输入输出 JSON Schema、权限和副作用分类。
 - GET /api/knowledge/documents：当前 active 知识文档及 chunk 数。
 - POST /api/knowledge/documents：仅 approver；`{title,source,version,effective_date?,content,metadata?}`；新建返回 201，相同正文幂等返回已有文档 200（`created=false`），并发重复上传也返回同一文档；若当前 embedding model 或向量维度不同则重嵌入并返回 `reindexed=true`。
@@ -88,10 +93,12 @@ LLM 在确定性利润计算、异常归因和证据校验之后运行，输入�
 - POST /api/recommendations/{id}/execute：必须 Idempotency-Key；批准后执行，仅模拟。
 - GET /api/audit-logs：最新在前，limit 1..200；支持 object_id 与 request_id 精确过滤（request_id 最长 64 字符）。
 
+运行保护配置：`PROFITOPS_METRICS_ENABLED`、`PROFITOPS_RATE_LIMIT_ENABLED`、`PROFITOPS_RATE_LIMIT_REQUESTS`（默认 120/窗口）、`PROFITOPS_RATE_LIMIT_WINDOW_SECONDS`（默认 60）、`PROFITOPS_RATE_LIMIT_LOGIN_REQUESTS`（默认 10/窗口）、`PROFITOPS_RATE_LIMIT_ANALYSIS_REQUESTS`（默认 30/窗口）、`PROFITOPS_CIRCUIT_BREAKER_ENABLED`、`PROFITOPS_CIRCUIT_BREAKER_FAILURES`、`PROFITOPS_CIRCUIT_BREAKER_COOLDOWN_SECONDS`。限流桶是进程内状态，多副本部署需要共享限流存储；当前单进程部署不共享。
+
 时间戳字段统一为 UTC ISO 8601 并带 `Z` 后缀；SQLite 与 PostgreSQL 输出一致，前端按 UTC 解析后本地化显示。
 
 工具统一返回 `{ok,data,error}`，Pydantic 校验输入与输出；权限在 Tool Registry 与业务处理器双层验证。当前注册 9 个工具；`get_profit_analysis`、`get_sku_breakdown` 与 `search_knowledge` 是面向模型的原生只读工具。前两者输入只有 `MetricsInput`（period/store_id），由服务端用可信账本调用既有 `fetch_metrics`/`build_report`/`analyze_drivers` 计算，模型不能提交 `RawMetrics` 或完整报告；`search_knowledge` 只接受 `{query,top_k}`，无 period 范围要求，返回可引用的 chunk_id。每个工具在 `/api/tools` 声明 `policy`：`safe`（只读、纯计算或仅写本系统提案）、`ask`（必须经人工审批后执行的模拟动作）、`deny`（外部系统副作用，注册表直接拒绝，当前未注册）。`ask` 工具由审批状态机与 approver 角色双重约束。模型可见工具另受 `LLM_TOOL_ALLOWLIST`、`effect`、`policy` 和角色四重限制；`create_recommendation` 虽为 `safe`，但 `effect=database_write`，不会暴露给模型。工具参数失败为 invalid_tool_input，执行失败保留代码和消息。
 
 ## 验收
 
-pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。LLM 测试覆盖 Provider 成功/重试/鉴权/超时/非法 JSON/空响应、环境变量读取、结构化 Schema、证据引用校验、无 Key 降级、调用失败降级、Schema 无效降级、`fail` 策略以及 LLM 成功后的审批与幂等执行；原生 Function Calling 测试覆盖请求携带 `tools`/`tool_choice`、`tool_calls` 解析、多轮工具调用、禁止写工具/未知工具/非法参数/越界范围、轮次/次数/重复/预算上限、Provider 超时与工具异常降级、结果截断和工作流轨迹持久化。全部使用 MockTransport/FakeProvider，不消耗真实 Token；原生 Function Calling 另执行了 3 次真实 `deepseek-flash` 脚本运行，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），第 1 次网络错误降级，见 `docs/LLM_LIVE_CHECK.md`。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤、API 错误、LLM 成功/降级面板，以及原生轨迹的正常轮次、工具参数摘要、逐轮 token、失败调用错误码和单次 JSON 路径说明；生产构建和实际 HTTP + 浏览器演示闭环。Phase 2D 原生评测测试覆盖 fixture 到临时账本的可复现性、正常多轮、多余工具、未知/写/审批工具、非法参数、越界范围、重复调用、轮次上限、工具执行失败、非法最终 JSON、非法证据、数据不完整跳过、真实入口授权/预算/未配置检查，以及 CLI 失败退出码；全部使用 `FakeToolProvider`，不消耗真实 Token。PostgreSQL 已在本机 Docker Desktop 完成容器验收；其他环境若无法运行 Docker，需明确记录验证缺口。真实 DeepSeek 单次 JSON 调用已通过 `scripts/llm_check.py` 完成一次：`deepseek-flash`、15467.974 ms、4801 tokens、`all_references_valid=true`，详见 `docs/LLM_LIVE_CHECK.md`。知识库测试覆盖 Seed 幂等与不删用户文档、相关/无关查询、`no_answer` 清空 hits、approver 创建/停用、analyst 403、重复正文幂等、引用子集校验、提示词隔离、Markdown 切分边界、OpenAI 兼容 embedding 排序/归一化与失败映射。离线 RAG 评测 `backend/evals/rag.py` 在 6 篇文档、6 个可回答与 2 个不可回答查询上得到 hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；这是合成知识库上的检索门禁，不是通用语义准确率。
+pytest 覆盖利润边界、环比、归因加总、缺失数据、LangGraph 路径与失败、Schema、身份伪造、审批冲突、并发幂等、审计过滤、工具策略、UTC 时间戳与 Seed 保留历史。LLM 测试覆盖 Provider 成功/重试/鉴权/超时/非法 JSON/空响应、环境变量读取、结构化 Schema、证据引用校验、无 Key 降级、调用失败降级、Schema 无效降级、`fail` 策略以及 LLM 成功后的审批与幂等执行；原生 Function Calling 测试覆盖请求携带 `tools`/`tool_choice`、`tool_calls` 解析、多轮工具调用、禁止写工具/未知工具/非法参数/越界范围、轮次/次数/重复/预算上限、Provider 超时与工具异常降级、结果截断和工作流轨迹持久化。全部使用 MockTransport/FakeProvider，不消耗真实 Token；原生 Function Calling 另执行了 3 次真实 `deepseek-flash` 脚本运行，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），第 1 次网络错误降级，见 `docs/LLM_LIVE_CHECK.md`。独立 JSON 样本验证业务结论。Vitest + RTL 覆盖启动、轮询、审批、动作预览、执行、审计过滤、API 错误、LLM 成功/降级面板，以及原生轨迹的正常轮次、工具参数摘要、逐轮 token、失败调用错误码和单次 JSON 路径说明；生产构建和实际 HTTP + 浏览器演示闭环。Phase 2D 原生评测测试覆盖 fixture 到临时账本的可复现性、正常多轮、多余工具、未知/写/审批工具、非法参数、越界范围、重复调用、轮次上限、工具执行失败、非法最终 JSON、非法证据、数据不完整跳过、真实入口授权/预算/未配置检查，以及 CLI 失败退出码；全部使用 `FakeToolProvider`，不消耗真实 Token。PostgreSQL 已在本机 Docker Desktop 完成容器验收；其他环境若无法运行 Docker，需明确记录验证缺口。真实 DeepSeek 单次 JSON 调用已通过 `scripts/llm_check.py` 完成一次：`deepseek-flash`、15467.974 ms、4801 tokens、`all_references_valid=true`，详见 `docs/LLM_LIVE_CHECK.md`。知识库测试覆盖 Seed 幂等与不删用户文档、相关/无关查询、`no_answer` 清空 hits、approver 创建/停用、analyst 403、重复正文幂等、引用子集校验、提示词隔离、Markdown 切分边界、OpenAI 兼容 embedding 排序/归一化与失败映射。离线 RAG 评测 `backend/evals/rag.py` 在 6 篇文档、6 个可回答与 2 个不可回答查询上得到 hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；这是合成知识库上的检索门禁，不是通用语义准确率。多租户幂等回归覆盖 Analysis 与 Execution 的跨租户同键、105 字符租户前缀键、同租户重复键拒绝；迁移测试用真实的前租户 schema（无 `tenants`/`users` 表、无 `tenant_id`、无任务字段、知识库为全局部分唯一索引）构造 SQLite 与 PostgreSQL 库，按官方路径 `stamp 0001_baseline → upgrade head` 原地升级：Analysis/Recommendation/Execution/Audit 行数与外键关系保留，列宽 200、复合唯一约束与租约字段到位，跨租户同键可用、同租户重复键拒绝，重复 upgrade 为 no-op；SQLite 迁移期间关闭外键强制并在结束后通过 `PRAGMA foreign_key_check`，重复活跃文档会保留最新一行并软删除其余行；含跨租户同键的库执行 downgrade 会因唯一约束失败并保留原行；手工重试覆盖 running/completed 不被覆盖与并发重试只成功一次；恢复测试覆盖 `run_analysis` 写入 failed 后、`finalize_job` 之前退出的行按重试/死信规则恢复。

@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 
 from .audit import record
 from .config import Settings
-from .errors import DomainError
+from .errors import DomainError, LeaseLost
 from .knowledge import build_knowledge_query, merge_knowledge_hits
 from .llm import LLMError
 from .llm_analysis import (
@@ -18,7 +18,7 @@ from .llm_analysis import (
 )
 from .llm_tools import ToolLoopResult, run_tool_loop
 from .metrics import verify_evidence
-from .models import Analysis, utcnow
+from .models import Analysis, lease_is_live, utcnow
 from .schemas import (
     DriverReport, KnowledgeSearchOutput, LLMAnalysisOutput, LLMErrorInfo, LLMRun,
     LLMUsage, MetricsInput, MetricsReport,
@@ -106,17 +106,91 @@ def usage_model(usage: dict[str, int] | None) -> LLMUsage | None:
     return LLMUsage(**allowed) if allowed else None
 
 
-def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=None):
+def run_analysis(
+    factory, registry, analysis_id: str, settings: Settings, llm=None,
+    claimed: bool = False, worker_id: str | None = None,
+    expected_attempt: int | None = None,
+):
+    fence: tuple[str, int] | None = None
     with factory.begin() as session:
-        claim = session.execute(update(Analysis).where(Analysis.id == analysis_id, Analysis.status == "queued").values(status="running"))
-        if claim.rowcount != 1:
-            return
-        analysis = session.get(Analysis, analysis_id)
-        actor = Actor(analysis.actor, "analyst")
+        if claimed:
+            if worker_id is None:
+                return
+            # Ownership is checked in SQL, including the lease expiry: a worker
+            # whose lease ran out before anyone reclaimed the job must not
+            # start work it can no longer commit.
+            conditions = [
+                Analysis.id == analysis_id,
+                Analysis.status == "running",
+                Analysis.worker_id == worker_id,
+                lease_is_live(utcnow()),
+            ]
+            if expected_attempt is not None:
+                conditions.append(Analysis.attempts == expected_attempt)
+            analysis = session.scalar(select(Analysis).where(*conditions))
+            if analysis is None:
+                return
+            fence = (worker_id, analysis.attempts)
+        else:
+            claim = session.execute(update(Analysis).where(Analysis.id == analysis_id, Analysis.status == "queued").values(status="running"))
+            if claim.rowcount != 1:
+                return
+            analysis = session.get(Analysis, analysis_id)
+        actor = Actor(analysis.actor, "analyst", analysis.tenant_id)
         request_id = analysis.request_id
+        attempt = analysis.attempts
         initial = ProfitState(analysis_id=analysis_id, scope=analysis.request, status="running")
-    context = ToolContext(factory, actor, request_id)
+    context = ToolContext(
+        factory, actor, request_id,
+        analysis_id=analysis_id, lease_fence=fence,
+    )
     timeout_seconds = settings.step_timeout_seconds
+
+    def write_job(session, **values) -> None:
+        """Persist job state only while this worker still owns the lease."""
+        if fence is None:
+            row = session.get(Analysis, analysis_id)
+            if row is None:
+                raise LeaseLost("analysis row disappeared")
+            for key, value in values.items():
+                setattr(row, key, value)
+            return
+        owned = session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == analysis_id,
+                Analysis.worker_id == fence[0],
+                Analysis.attempts == fence[1],
+                # An expired lease is lost even if no newer worker has claimed
+                # the row yet: the job may already be requeued for retry.
+                lease_is_live(utcnow()),
+            )
+            .values(**values)
+            # The expiry predicate is a database comparison; skip ORM-side
+            # evaluation, which would compare a naive SQLite value to an aware
+            # ``utcnow()``.
+            .execution_options(synchronize_session=False)
+        )
+        if owned.rowcount != 1:
+            raise LeaseLost("analysis lease lost")
+
+    def assert_owned(session) -> None:
+        """Acquire the row's write lock and verify the fence before an audit."""
+        if fence is None:
+            return
+        owned = session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == analysis_id,
+                Analysis.worker_id == fence[0],
+                Analysis.attempts == fence[1],
+                lease_is_live(utcnow()),
+            )
+            .values(updated_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if owned.rowcount != 1:
+            raise LeaseLost("analysis lease lost")
 
     def audit_llm(run: LLMRun, action: str, outcome: str):
         details = {
@@ -132,14 +206,17 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
             "tool_calls": [item.model_dump(mode="json") for item in run.tool_calls],
         }
         with factory.begin() as session:
+            assert_owned(session)
             record(session, actor, action, "analysis", analysis_id, request_id, outcome, details)
 
     def persist_llm_run(run: LLMRun):
         with factory.begin() as session:
             row = session.get(Analysis, analysis_id)
+            if row is None:
+                raise LeaseLost("analysis row disappeared")
             result = dict(row.result or {})
             result["llm"] = run.model_dump(mode="json")
-            row.result = result
+            write_job(session, result=result)
 
     def llm_failure(exc: LLMError, loop: ToolLoopResult | None = None):
         error = LLMErrorInfo(code=exc.code, message=exc.message, retryable=exc.retryable)
@@ -310,10 +387,12 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
     def tracked(name, handler, check_timeout=True):
         def node(state):
             start = perf_counter()
-            step = {"name": name, "label": LABELS[name], "status": "running", "started_at": utcnow().isoformat(), "request_id": request_id, "phase": "analysis"}
+            step = {"name": name, "label": LABELS[name], "status": "running", "started_at": utcnow().isoformat(), "request_id": request_id, "phase": "analysis", "attempt": attempt}
             with factory.begin() as session:
                 row = session.get(Analysis, analysis_id)
-                row.steps = [*row.steps, step]
+                if row is None:
+                    raise LeaseLost("analysis row disappeared")
+                write_job(session, steps=[*row.steps, step])
             try:
                 updates = handler(state)
                 duration = round((perf_counter() - start) * 1000, 3)
@@ -323,25 +402,34 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
                 merged = {**state, **updates}
                 with factory.begin() as session:
                     row = session.get(Analysis, analysis_id)
-                    row.steps = [*row.steps[:-1], step]
-                    row.snapshot = merged
-                    row.status = merged.get("status", "running")
+                    if row is None:
+                        raise LeaseLost("analysis row disappeared")
+                    values = {
+                        "steps": [*row.steps[:-1], step],
+                        "snapshot": merged,
+                        "status": merged.get("status", "running"),
+                        "recommendation_id": merged.get("recommendation_id"),
+                        "error": merged.get("error"),
+                    }
                     if "report" in merged:
                         llm_meta = merged.get("llm")
                         engine = "deepseek-llm-v1" if llm_meta and llm_meta.get("status") == "llm_success" else "deterministic-rules-v1"
-                        row.result = {
+                        values["result"] = {
                             "metrics": merged["report"], "findings": merged.get("findings"),
                             "knowledge": merged.get("knowledge"),
                             "knowledge_error": merged.get("knowledge_error"),
                             "llm": llm_meta, "engine": engine,
                         }
-                    row.recommendation_id = merged.get("recommendation_id")
-                    row.error = merged.get("error")
+                    write_job(session, **values)
                 return updates
+            except LeaseLost:
+                raise
             except Exception as exc:
                 with factory.begin() as session:
                     row = session.get(Analysis, analysis_id)
-                    row.steps = [*row.steps[:-1], {**step, "status": "failed", "duration_ms": round((perf_counter() - start) * 1000, 3), "summary": str(exc)}]
+                    if row is None:
+                        raise LeaseLost("analysis row disappeared") from exc
+                    write_job(session, steps=[*row.steps[:-1], {**step, "status": "failed", "duration_ms": round((perf_counter() - start) * 1000, 3), "summary": str(exc)}])
                 raise
         return node
 
@@ -368,6 +456,7 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
         if status == "running":
             status = "completed"
         with factory.begin() as session:
+            assert_owned(session)
             record(session, actor, "analysis.finished", "analysis", analysis_id, request_id,
                    "insufficient_data" if status == "insufficient_data" else "success", {"status": status})
         return {"status": status}
@@ -403,17 +492,36 @@ def run_analysis(factory, registry, analysis_id: str, settings: Settings, llm=No
     graph.add_edge("wait_for_approval", END)
     try:
         graph.compile().invoke(initial, {"recursion_limit": 20})
+    except LeaseLost:
+        logger.warning(
+            "analysis_lease_lost",
+            extra={"analysis_id": analysis_id, "request_id": request_id, "worker_id": worker_id, "attempt": attempt},
+        )
+        return
     except Exception as exc:
         error = {"code": exc.code if isinstance(exc, DomainError) else "workflow_failed", "message": str(exc), "exception_type": type(exc).__name__}
-        with factory.begin() as session:
-            row = session.get(Analysis, analysis_id)
-            row.status, row.error = "failed", error
-            record(session, actor, "analysis.failed", "analysis", analysis_id, request_id, "failure", error)
+        try:
+            with factory.begin() as session:
+                row = session.get(Analysis, analysis_id)
+                if row is None:
+                    raise LeaseLost("analysis row disappeared") from exc
+                write_job(session, status="failed", error=error)
+                record(session, actor, "analysis.failed", "analysis", analysis_id, request_id, "failure", error)
+        except LeaseLost:
+            logger.warning(
+                "analysis_lease_lost",
+                extra={"analysis_id": analysis_id, "request_id": request_id, "worker_id": worker_id, "attempt": attempt},
+            )
+            return
         logger.exception("analysis_failed", extra={"analysis_id": analysis_id, "request_id": request_id})
 
 
 def run_execution_graph(factory, registry, session, recommendation, key, actor, request_id):
-    analysis = session.get(Analysis, recommendation.analysis_id)
+    analysis = session.scalar(select(Analysis).where(
+        Analysis.id == recommendation.analysis_id, Analysis.tenant_id == actor.tenant_id,
+    ))
+    if analysis is None:
+        raise DomainError("analysis_not_found", "分析不存在", 404)
     initial = ProfitState(**{**analysis.snapshot, "analysis_id": analysis.id, "recommendation_id": recommendation.id, "idempotency_key": key})
     context = ToolContext(factory, actor, request_id, session)
     steps = []
@@ -442,10 +550,17 @@ def run_execution_graph(factory, registry, session, recommendation, key, actor, 
     return result["execution"]
 
 
-def recover_interrupted(factory):
-    with factory.begin() as session:
-        rows = session.scalars(select(Analysis).where(Analysis.status.in_(["queued", "running"]))).all()
-        for row in rows:
-            row.status = "failed"
-            row.error = {"code": "restart_interrupted", "message": "服务重启中断了分析，请用新的请求键重新发起"}
-            record(session, "system", "analysis.interrupted", "analysis", row.id, row.request_id, "failure", row.error)
+def recover_interrupted(factory, engine=None, settings=None):
+    """Requeue running analyses whose worker lease is gone.
+
+    A running row with a live lease belongs to another worker (or to this
+    process before a graceful restart), so it is left alone. Rows with no lease
+    or an expired lease are safe to retry: the workflow only writes simulation
+    data and approval/execution remain separate idempotent operations. Failed
+    rows that still carry a lease are the crash window between ``run_analysis``
+    writing ``failed`` and ``finalize_job``; they are recovered with the same
+    retry/dead-letter rules.
+    """
+    from .worker import requeue_expired
+
+    return requeue_expired(factory, engine, settings=settings)

@@ -30,7 +30,7 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 
 ## 工作流与持久化
 
-`run_analysis` 在后台执行 LangGraph 分析图。每个节点开始和完成时更新 `analyses.steps` 与 `snapshot`；`wait_for_approval` 是真实的业务暂停点，不是内存等待。执行阶段从数据库快照进入单独执行图，读取审批状态、调用唯一模拟执行工具并保存结果，避免重跑建议生成。失败会写入 `failed` 状态、失败步骤和错误码；重启恢复将遗留 `queued/running` 分析标记为 `restart_interrupted`。超时在步骤完成后检查实际耗时（`step_timeout`），不声称能够强杀同步线程。
+分析是持久化任务而不是只存在于进程内的 BackgroundTasks。`POST /api/analyses` 先提交 queued 行，worker 用条件 UPDATE 抢占为 running，记录 `attempts`、`worker_id` 和 `lease_until`；执行期间心跳续租，进程崩溃后过期租约在启动或轮询时重新排队。租约同时是写入许可：创建建议、持久化步骤/结果、写审计前的所有权确认和心跳续租都在同一条条件 UPDATE 中要求 `status='running'`、`worker_id`、`attempts` 匹配且 `lease_until > 数据库当前时间`（SQL 侧比较，等于当前时间即到期）。因此租约到期后即使尚未被接管，旧 worker 也不能创建建议、持久化新结果或续租；心跳在租约丢失后停止，`finalize_job` 仍按原重试/死信规则清理到期行。`run_analysis` 执行 LangGraph 分析图，每个节点开始和完成时更新 `analyses.steps` 与 `snapshot`；`wait_for_approval` 是真实的业务暂停点，不是内存等待。执行阶段从数据库快照进入单独执行图，读取审批状态、调用唯一模拟执行工具并保存结果，避免重跑建议生成。失败会写入 `failed` 状态、失败步骤和错误码；`workflow_failed`、`step_timeout`、`database_locked`、`worker_crashed` 按指数退避重试，达到上限后标记 `dead_letter`，确定性失败不自动重试。手动 retry 只允许 failed 行，并用单条带 `status='failed'` 条件的 UPDATE 完成状态转换，避免读后写在并发重试或 worker 交错时把 running/completed 改回 queued。`run_analysis` 写入 failed 后、`finalize_job` 之前进程退出时，行上仍保留 `worker_id` 和过期租约；恢复扫描按同一重试/死信规则处理这些行，并标记 `recovered_before_finalize=true`，因此失败写入本身不会造成永久卡死。超时在步骤完成后检查实际耗时（`step_timeout`），不声称能够强杀同步线程。
 
 ## LLM 推理层
 
@@ -56,15 +56,25 @@ LLM 节点位于确定性利润、异常归因和证据校验之后、创建建�
 
 ## 状态机与并发
 
-`proposed → pending_approval → approved → executing → executed`，另有 `rejected` 和 `execution_failed` 终态。审批和执行都通过带旧状态条件的 UPDATE 抢占状态；执行先抢占行锁/写锁，再检查唯一执行记录，最后在同一个事务中插入执行记录、模拟变更、更新状态和写审计。`executions.recommendation_id` 与 `executions.idempotency_key` 唯一。重复请求返回已有执行记录并标记 `replayed=true`；不同建议复用执行键返回 409。失败保留错误诊断并返回 HTTP 500，不会伪装成成功。
+`proposed → pending_approval → approved → executing → executed`，另有 `rejected` 和 `execution_failed` 终态。审批和执行都通过带旧状态条件的 UPDATE 抢占状态；执行先抢占行锁/写锁，再检查唯一执行记录，最后在同一个事务中插入执行记录、模拟变更、更新状态和写审计。`executions.recommendation_id` 唯一，`(tenant_id, idempotency_key)` 复合唯一。重复请求返回已有执行记录并标记 `replayed=true`；不同建议复用执行键返回 409。失败保留错误诊断并返回 HTTP 500，不会伪装成成功。
 
 ## 权限与安全边界
 
-演示 Bearer token 在服务端映射为 analyst / approver。客户端传入的 `X-Role`、`X-Actor` 不参与身份判断。Tool Registry 和业务服务都做角色校验，普通分析师即使调用 API 或隐藏前端按钮也无法批准或执行。
+认证支持两种路径：demo mode 的固定 Bearer token，以及邮箱密码登录换取的 HS256 JWT。密码使用带随机盐的 scrypt 哈希；JWT 只携带 `sub/tenant_id/iss/iat/exp`，服务端每次请求都重新读取用户、角色和租户状态，不信任 token 内的角色声明。`AUTH_SECRET` 在非 demo mode 下必须显式配置，否则启动失败。客户端传入的 `X-Role`、`X-Actor` 不参与身份判断。
+
+多租户隔离覆盖 stores、products、orders、daily_operations、analyses、recommendations、executions、audit_logs 和 knowledge_documents：所有读取、列表、审批、执行、知识检索和审计查询都先按 `tenant_id` 过滤，跨租户对象返回 404，不暴露是否存在。知识文档的部分唯一索引改为 `(tenant_id, content_sha256)`，不同租户可以各自保存相同 SOP；非 demo 租户的 idempotency key 在存储时加租户前缀，数据库再以 `(tenant_id, idempotency_key)` 复合唯一约束兜底，存储列宽 200，因此 100 字符客户端键加租户前缀不会超限，同一存储字符串也可被不同租户各自使用。Tool Registry 和业务服务都做角色校验，普通分析师即使调用 API 或隐藏前端按钮也无法批准或执行。
 
 工具在 `/api/tools` 中显式声明 `policy`：`safe` 表示只读、纯计算或仅写入本系统提案；`ask` 表示需要人工审批后才能执行的模拟动作；`deny` 表示外部系统副作用，注册表在调用前直接拒绝（当前没有注册任何 deny 工具）。`simulate_execute_approved_action` 是唯一的 `ask` 工具，同时受 approver 角色、`approved` 条件 UPDATE 和唯一执行记录约束。审批页面在执行前展示待模拟动作的参数（SKU、参考日预算、模拟新预算），避免“只看到建议、看不到具体动作”。模型可见工具另受 `LLM_TOOL_ALLOWLIST`、`effect`、`policy` 和角色四重限制：`create_recommendation` 虽为 `safe`，但 `effect=database_write`，不会暴露给模型；审批与模拟执行工具也不在允许列表。
 
-审计接口支持按 `object_id` 或 `request_id` 精确过滤；时间戳统一输出 UTC ISO 8601（`Z`），SQLite 与 PostgreSQL 行为一致。这个机制明确是本地演示身份，不是生产认证；生产需要 OIDC、租户隔离、密钥管理、速率限制和真实授权策略。
+审计接口支持按 `object_id` 或 `request_id` 精确过滤；时间戳统一输出 UTC ISO 8601（`Z`），SQLite 与 PostgreSQL 行为一致。当前认证是可运行的自建账号体系，不是完整生产 IAM：没有 OIDC/SSO、密码重置、多因素认证、密钥轮换和租户管理后台；生产仍需要这些能力、分布式限流/共享状态和审计留存策略。React 演示工作台仍通过 `/api/demo` 的固定 demo token 切换身份；JWT 登录 API 已实现并有后端测试，但演示前端尚未接入登录页。
+
+## 可观测性、限流与熔断
+
+`backend/app/observability.py` 提供进程内指标注册表和固定容量令牌桶，不引入 Prometheus 客户端或 Redis 依赖。`GET /metrics` 输出 Prometheus 文本格式：HTTP 请求计数/耗时直方图（路径标签使用路由模板，避免 UUID 造成高基数）、分析任务事件与执行耗时、队列深度、工具调用、LLM 调用与熔断状态、限流命中次数。`PROFITOPS_METRICS_ENABLED=false` 时端点返回 404 且不再记录指标；`/health` 与 `/metrics` 本身不参与限流。
+
+限流按 `scope + 客户端 IP + Bearer token 哈希` 分桶：登录默认 10 次/分钟，创建分析默认 30 次/分钟，其他 API 默认 120 次/分钟；超限返回 429 `rate_limited`、`Retry-After` 和 `X-RateLimit-Limit`，不泄露账号是否存在。桶是进程内状态，多副本部署必须换成共享存储；当前单进程 API + 进程内 worker 的演示/单机部署不跨进程共享。
+
+LLM Provider 在 `build_llm_provider` 中被 `CircuitBreakerProvider` 包装：连续可重试错误（429、5xx、超时、网络、空响应）达到阈值后打开熔断，冷却期内直接返回 `llm_circuit_open`，不再发起网络请求；冷却后放行一个半开探测，成功关闭，失败重新打开。鉴权、余额不足和非法输出等确定性错误不计入熔断，避免掩盖配置问题。熔断错误仍走既有 `LLM_FALLBACK_POLICY`：`rules` 时确定性分析继续并标记降级，`fail` 时分析失败；状态和错误码在 `result.llm`、审计和 `/metrics` 中可见。当前没有分布式追踪、OpenTelemetry 导出或跨进程日志聚合。
 
 ## 前端
 
@@ -76,4 +86,6 @@ Agent 工作台新增 LLM 面板：显示实际模型、`llm_success/determinist
 
 ## 数据初始化与迁移
 
-首次启动自动建表并加载固定种子 `demo-60d-v1`：2026-09-01 至 2026-10-30、2 店铺、3 SKU，订单和每日广告/库存记录均由确定性规则生成。知识库另用 `knowledge-v1` 幂等加载 6 篇合成 SOP。`seed_versions` 与事务保证重复调用不重复插入，也不清除审批、审计历史或用户知识文档。MVP 采用版本化初始化和数据库快照，不包含 Alembic 增量迁移；生产化前需要补齐迁移和备份策略。
+首次启动自动建表并加载固定种子 `demo-60d-v1`：2026-09-01 至 2026-10-30、2 店铺、3 SKU，订单和每日广告/库存记录均由确定性规则生成。知识库另用 `knowledge-v1` 幂等加载 6 篇合成 SOP。`seed_versions` 与事务保证重复调用不重复插入，也不清除审批、审计历史或用户知识文档。
+
+Alembic 入口位于 `backend/alembic.ini` 和 `backend/migrations/`，`0001_baseline` 用当前 SQLAlchemy metadata 建立新库；已由启动兼容迁移建表的旧库用 `scripts/migrate.py stamp 0001_baseline` 标记，不要重复 upgrade。真正的前租户库（没有 `tenants`/`users`、`tenant_id` 和任务字段）也走同一条路径：`stamp 0001_baseline` 不执行 DDL，`0002_tenant_scoped_idempotency` 会先调用 `upgrade_legacy_schema` 补齐基线结构，再把 analyses/executions 的 idempotency_key 从全局唯一、`VARCHAR(100)` 改为 `(tenant_id, idempotency_key)` 复合唯一、`VARCHAR(200)`，并保留既有行。迁移原地完成，不删业务表、不清库；SQLite 在写入前关闭当前连接的外键强制以完成父表重建，行复制后关系保持并由 `PRAGMA foreign_key_check` 验证，PostgreSQL 使用常规 `ALTER TABLE`。这一步必须由 Alembic 执行，启动兼容迁移不会改这两个唯一约束。应用启动仍执行 `initialize_database` 的兼容迁移（补充 `tenant_id`、任务字段和知识库部分唯一索引），因此现有演示库可先启动；涉及幂等约束的旧库必须运行 `python scripts/migrate.py upgrade head`。后续 schema 变更必须新增显式 revision。备份、迁移和回滚步骤见 `docs/RUNBOOK.md`。

@@ -431,13 +431,13 @@ def knowledge_document_output(
     )
 
 
-def list_documents(session: Session) -> list[KnowledgeDocumentOutput]:
+def list_documents(session: Session, tenant_id: str = "demo") -> list[KnowledgeDocumentOutput]:
     counts = dict(session.execute(
         select(KnowledgeChunk.document_id, func.count()).group_by(KnowledgeChunk.document_id)
     ).all())
     rows = session.scalars(
         select(KnowledgeDocument)
-        .where(KnowledgeDocument.active.is_(True))
+        .where(KnowledgeDocument.active.is_(True), KnowledgeDocument.tenant_id == tenant_id)
         .order_by(KnowledgeDocument.created_at.desc())
     ).all()
     return [knowledge_document_output(row, int(counts.get(row.id, 0))) for row in rows]
@@ -455,13 +455,14 @@ def _insert_document(
     embeddings: EmbeddingProvider,
     chunk_chars: int,
     overlap: int,
+    tenant_id: str = "demo",
 ) -> tuple[KnowledgeDocument, int]:
     chunks = chunk_text(content, chunk_chars, overlap)
     if not chunks:
         raise DomainError("knowledge_empty_document", "知识文档没有可索引的正文", 422)
     vectors = embeddings.embed([str(chunk["content"]) for chunk in chunks])
     document = KnowledgeDocument(
-        id=new_id(), title=title, source=source, version=version,
+        id=new_id(), tenant_id=tenant_id, title=title, source=source, version=version,
         effective_date=effective_date, content=normalize_text(content),
         content_sha256=content_sha256(content), metadata_json=metadata,
     )
@@ -486,10 +487,12 @@ def create_document(
     overlap: int = 100,
     actor: Actor | None = None,
     request_id: str = "",
+    tenant_id: str = "demo",
 ) -> KnowledgeDocumentOutput:
     sha = content_sha256(payload.content)
     existing = session.scalar(
         select(KnowledgeDocument).where(
+            KnowledgeDocument.tenant_id == tenant_id,
             KnowledgeDocument.content_sha256 == sha,
             KnowledgeDocument.active.is_(True),
         )
@@ -499,6 +502,7 @@ def create_document(
         # chunks in place so the document ID, chunk IDs and content survive.
         return reindex_document(
             session, existing.id, embeddings, actor=actor, request_id=request_id,
+            tenant_id=tenant_id,
         )
 
     try:
@@ -510,13 +514,14 @@ def create_document(
                 title=payload.title, source=payload.source, version=payload.version,
                 effective_date=payload.effective_date, content=payload.content,
                 metadata=payload.metadata, embeddings=embeddings,
-                chunk_chars=chunk_chars, overlap=overlap,
+                chunk_chars=chunk_chars, overlap=overlap, tenant_id=tenant_id,
             )
     except IntegrityError:
         # Another request won the race between our SELECT and INSERT. Reuse its
         # document instead of creating a duplicate active row.
         existing = session.scalar(
             select(KnowledgeDocument).where(
+                KnowledgeDocument.tenant_id == tenant_id,
                 KnowledgeDocument.content_sha256 == sha,
                 KnowledgeDocument.active.is_(True),
             )
@@ -525,6 +530,7 @@ def create_document(
             raise
         return reindex_document(
             session, existing.id, embeddings, actor=actor, request_id=request_id,
+            tenant_id=tenant_id,
         )
     if actor is not None:
         record(
@@ -544,6 +550,7 @@ def reindex_document(
     *,
     actor: Actor | None = None,
     request_id: str = "",
+    tenant_id: str = "demo",
 ) -> KnowledgeDocumentOutput:
     """Re-embed an existing document's chunks with the current provider model.
 
@@ -552,7 +559,10 @@ def reindex_document(
     fails, the previous valid chunks remain in the database. Calling this again
     with the same model is a no-op, so it is safe to retry.
     """
-    document = session.get(KnowledgeDocument, document_id)
+    document = session.scalar(select(KnowledgeDocument).where(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == tenant_id,
+    ))
     if document is None or not document.active:
         raise DomainError("knowledge_document_not_found", "知识文档不存在", 404)
     chunks = list(session.scalars(
@@ -615,8 +625,12 @@ def reindex_document(
 
 def delete_document(
     session: Session, document_id: str, actor: Actor, request_id: str,
+    tenant_id: str = "demo",
 ) -> KnowledgeDocumentOutput:
-    document = session.get(KnowledgeDocument, document_id)
+    document = session.scalar(select(KnowledgeDocument).where(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == tenant_id,
+    ))
     if document is None or not document.active:
         raise DomainError("knowledge_document_not_found", "知识文档不存在", 404)
     count = int(session.scalar(
@@ -637,6 +651,7 @@ def search_knowledge(
     *,
     candidate_k: int = 20,
     min_score: float = 0.15,
+    tenant_id: str = "demo",
 ) -> KnowledgeSearchOutput:
     started = perf_counter()
     query = normalize_text(payload.query)
@@ -647,6 +662,7 @@ def search_knowledge(
         select(KnowledgeChunk, KnowledgeDocument)
         .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
         .where(
+            KnowledgeDocument.tenant_id == tenant_id,
             KnowledgeDocument.active.is_(True),
             KnowledgeChunk.embedding_model == embeddings.model,
         )
@@ -901,7 +917,7 @@ proposed → pending_approval → approved → executing → executed；pending_
 ]
 
 
-def seed_knowledge(factory, embeddings: EmbeddingProvider, settings: Settings) -> dict:
+def seed_knowledge(factory, embeddings: EmbeddingProvider, settings: Settings, tenant_id: str = "demo") -> dict:
     """Seed synthetic SOP documents once; never delete user documents."""
     try:
         with factory.begin() as session:
@@ -917,6 +933,7 @@ def seed_knowledge(factory, embeddings: EmbeddingProvider, settings: Settings) -
                 sha = content_sha256(item["content"])
                 existing = session.scalar(
                     select(KnowledgeDocument).where(
+                        KnowledgeDocument.tenant_id == tenant_id,
                         KnowledgeDocument.content_sha256 == sha,
                         KnowledgeDocument.active.is_(True),
                     )
@@ -930,6 +947,7 @@ def seed_knowledge(factory, embeddings: EmbeddingProvider, settings: Settings) -
                     metadata=item["metadata"], embeddings=embeddings,
                     chunk_chars=settings.knowledge_chunk_chars,
                     overlap=settings.knowledge_chunk_overlap,
+                    tenant_id=tenant_id,
                 )
                 created += 1
             return {

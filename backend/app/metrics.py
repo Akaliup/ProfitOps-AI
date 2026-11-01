@@ -29,31 +29,40 @@ def calculate_totals(totals: Totals) -> Totals:
     return totals.model_copy(update={"net_sales": net_sales, "net_profit": profit, "margin_pct": rounded_ratio(profit, net_sales)})
 
 
-def resolve_scope(session, request: AnalysisRequest) -> MetricsInput:
-    if request.store_id and session.get(Store, request.store_id) is None:
-        raise DomainError("store_not_found", "店铺不存在", 404)
+def resolve_scope(session, request: AnalysisRequest, tenant_id: str = "demo") -> MetricsInput:
+    if request.store_id:
+        store = session.scalar(select(Store).where(Store.id == request.store_id, Store.tenant_id == tenant_id))
+        if store is None:
+            raise DomainError("store_not_found", "店铺不存在", 404)
     if request.start_date is not None:
         period = Period(start_date=request.start_date, end_date=request.end_date)
     else:
-        last_day = session.scalar(select(func.max(DailyOperation.date)))
+        last_day = session.scalar(
+            select(func.max(DailyOperation.date)).where(DailyOperation.tenant_id == tenant_id)
+        )
         if last_day is None:
             raise DomainError("no_data", "尚无经营数据，请初始化演示数据", 409)
         period = Period(start_date=last_day - timedelta(days=29), end_date=last_day)
     return MetricsInput(period=period, store_id=request.store_id)
 
 
-def fetch_metrics(session, scope: MetricsInput) -> RawMetrics:
+def fetch_metrics(session, scope: MetricsInput, tenant_id: str = "demo") -> RawMetrics:
     days = (scope.period.end_date - scope.period.start_date).days + 1
     previous = Period(start_date=scope.period.start_date - timedelta(days=days), end_date=scope.period.start_date - timedelta(days=1))
-    stores = session.scalars(select(Store).where(Store.id == scope.store_id) if scope.store_id else select(Store)).all()
+    store_query = select(Store).where(Store.tenant_id == tenant_id)
+    if scope.store_id:
+        store_query = store_query.where(Store.id == scope.store_id)
+    stores = session.scalars(store_query).all()
     if scope.store_id and not stores:
         raise DomainError("store_not_found", "店铺不存在", 404)
-    products = session.scalars(select(Product).order_by(Product.sku)).all()
+    products = session.scalars(select(Product).where(Product.tenant_id == tenant_id).order_by(Product.sku)).all()
     store_ids = [store.id for store in stores]
     orders = session.scalars(select(Order).where(
+        Order.tenant_id == tenant_id,
         Order.date.between(previous.start_date, scope.period.end_date), Order.store_id.in_(store_ids),
     )).all()
     operations = session.scalars(select(DailyOperation).where(
+        DailyOperation.tenant_id == tenant_id,
         DailyOperation.date.between(previous.start_date, scope.period.end_date), DailyOperation.store_id.in_(store_ids),
     )).all()
     daily = {previous.start_date + timedelta(days=i): Totals() for i in range(days * 2)}

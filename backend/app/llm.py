@@ -15,6 +15,7 @@ Verified against https://api-docs.deepseek.com on 2026-10-31:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -23,6 +24,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .observability import METRICS
 
 Message = dict[str, Any]
 
@@ -98,6 +100,21 @@ def parse_json_object(content: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise LLMError("llm_invalid_json", "模型输出的 JSON 顶层必须是对象")
     return data
+
+
+def json_result_from(meta: LLMResult) -> LLMJsonResult:
+    """Parse a JSON-mode response and attach transport metadata to failures."""
+    try:
+        data = parse_json_object(meta.content)
+    except LLMError as exc:
+        exc.attempts = meta.attempts
+        exc.latency_ms = meta.latency_ms
+        if meta.finish_reason:
+            exc.details = {**(exc.details or {}), "finish_reason": meta.finish_reason}
+            if meta.finish_reason == "length":
+                exc.message = "模型输出达到 max_tokens 被截断，不是合法 JSON"
+        raise
+    return LLMJsonResult(data=data, meta=meta)
 
 
 def extract_usage(payload: dict[str, Any]) -> dict[str, int] | None:
@@ -312,27 +329,158 @@ class DeepSeekProvider:
             response_format={"type": "json_object"},
             max_tokens=max_tokens,
         )
+        return json_result_from(meta)
+
+
+class CircuitBreakerProvider:
+    """Metered provider wrapper with a consecutive-failure circuit breaker.
+
+    Only retryable transport/provider failures trip the breaker; auth errors and
+    invalid model output are deterministic and should not hide the real cause.
+    The wrapper delegates every provider method, including ``chat`` used by the
+    native tool loop, and exposes the wrapped provider's attributes.
+    """
+
+    STATE_VALUES = {"closed": 0, "half_open": 1, "open": 2}
+
+    def __init__(
+        self,
+        provider,
+        *,
+        enabled: bool = True,
+        failure_threshold: int = 3,
+        cooldown_seconds: float = 30.0,
+        clock=time.monotonic,
+    ):
+        self.provider = provider
+        self.enabled = enabled
+        self.failure_threshold = max(1, failure_threshold)
+        self.cooldown_seconds = max(0.0, cooldown_seconds)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._failures = 0
+        self._opened_at = 0.0
+        self._state = "closed"
+        self._trial_in_flight = False
+        METRICS.set_gauge("llm_circuit_state", self.STATE_VALUES[self._state])
+
+    def __getattr__(self, name: str):
+        return getattr(self.provider, name)
+
+    def _set_state(self, state: str) -> None:
+        self._state = state
+        METRICS.set_gauge("llm_circuit_state", self.STATE_VALUES[state])
+
+    def _before_call(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            now = self._clock()
+            if self._state == "open":
+                remaining = self.cooldown_seconds - (now - self._opened_at)
+                if remaining <= 0:
+                    self._set_state("half_open")
+                    self._trial_in_flight = True
+                    return
+                raise LLMError(
+                    "llm_circuit_open",
+                    f"LLM 连续失败，熔断中，约 {max(1, int(remaining))}s 后重试",
+                    retryable=False,
+                )
+            if self._state == "half_open":
+                if self._trial_in_flight:
+                    raise LLMError("llm_circuit_open", "LLM 熔断半开，已有探测请求在执行", retryable=False)
+                self._trial_in_flight = True
+
+    def _record_success(self) -> None:
+        with self._lock:
+            self._failures = 0
+            self._trial_in_flight = False
+            if self._state != "closed":
+                self._set_state("closed")
+
+    def _record_failure(self, error: LLMError) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            # A half-open probe must never leave the breaker stuck when the
+            # failure is deterministic (for example an auth error).
+            self._trial_in_flight = False
+            if not error.retryable:
+                return
+            self._failures += 1
+            if self._state == "half_open" or self._failures >= self.failure_threshold:
+                self._opened_at = self._clock()
+                self._set_state("open")
+
+    def _call(self, method: str, *args, **kwargs):
         try:
-            data = parse_json_object(meta.content)
+            self._before_call()
         except LLMError as exc:
-            exc.attempts = meta.attempts
-            exc.latency_ms = meta.latency_ms
-            if meta.finish_reason:
-                exc.details = {**(exc.details or {}), "finish_reason": meta.finish_reason}
-                if meta.finish_reason == "length":
-                    exc.message = "模型输出达到 max_tokens 被截断，不是合法 JSON"
+            METRICS.inc("llm_requests_total", outcome="rejected", code=exc.code)
             raise
-        return LLMJsonResult(data=data, meta=meta)
+        started = perf_counter()
+        try:
+            result = getattr(self.provider, method)(*args, **kwargs)
+        except LLMError as exc:
+            self._record_failure(exc)
+            METRICS.inc("llm_requests_total", outcome="failure", code=exc.code)
+            METRICS.observe(
+                "llm_request_duration_seconds", perf_counter() - started,
+                outcome="failure", code=exc.code,
+            )
+            raise
+        except Exception:
+            # Release a half-open probe without counting a provider bug as a
+            # transport outage; otherwise the breaker can stay half-open forever.
+            self._record_failure(LLMError("llm_unknown_error", "Provider 异常", retryable=False))
+            METRICS.inc("llm_requests_total", outcome="failure", code="llm_unknown_error")
+            METRICS.observe(
+                "llm_request_duration_seconds", perf_counter() - started,
+                outcome="failure", code="llm_unknown_error",
+            )
+            raise
+        self._record_success()
+        METRICS.inc("llm_requests_total", outcome="success", code="ok")
+        METRICS.observe("llm_request_duration_seconds", perf_counter() - started, outcome="success", code="ok")
+        return result
+
+    def generate(self, messages, *, response_format=None, max_tokens: int = 1200, temperature: float = 0.2):
+        return self._call(
+            "generate", messages,
+            response_format=response_format, max_tokens=max_tokens, temperature=temperature,
+        )
+
+    def chat(self, messages, *, tools=None, tool_choice=None, response_format=None, max_tokens: int = 1200, temperature: float = 0.2):
+        return self._call(
+            "chat", messages,
+            tools=tools, tool_choice=tool_choice, response_format=response_format,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+
+    def generate_json(self, *, system: str, user: str, max_tokens: int = 1400) -> LLMJsonResult:
+        meta = self.generate(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+        )
+        return json_result_from(meta)
 
 
-def build_llm_provider(settings: Settings) -> DeepSeekProvider | None:
+def build_llm_provider(settings: Settings) -> CircuitBreakerProvider | None:
     """Return None when the deployment has no key, so the rules engine stays usable."""
     if not settings.llm_configured:
         return None
-    return DeepSeekProvider(
+    provider = DeepSeekProvider(
         api_key=settings.llm_api_key.get_secret_value().strip(),
         model=settings.llm_model,
         base_url=settings.llm_base_url,
         timeout=settings.llm_timeout,
         max_retries=settings.llm_max_retries,
+    )
+    return CircuitBreakerProvider(
+        provider,
+        enabled=settings.circuit_breaker_enabled,
+        failure_threshold=settings.circuit_breaker_failures,
+        cooldown_seconds=settings.circuit_breaker_cooldown_seconds,
     )

@@ -151,14 +151,20 @@ def test_analysis_request_idempotency(client, analyst):
     assert changed.status_code == 409
 
 
-def test_restart_marks_interrupted_analysis(client, analyst):
+def test_restart_requeues_interrupted_analysis(client, analyst):
     factory = client.app.state.factory
     with factory.begin() as session:
-        row = Analysis(id="interrupted", idempotency_key="interrupted", request={}, actor="demo-analyst", request_id="restart-test", status="running", steps=[{"name": "get_sales_metrics", "status": "running"}])
+        row = Analysis(
+            id="interrupted", idempotency_key="interrupted", request={}, actor="demo-analyst",
+            request_id="restart-test", status="running", attempts=1,
+            steps=[{"name": "get_sales_metrics", "status": "running"}],
+        )
         session.add(row)
     recover_interrupted(factory)
     with factory() as session:
         row = session.get(Analysis, "interrupted")
-        assert row.status == "failed" and row.error["code"] == "restart_interrupted"
+        assert row.status == "queued"
+        assert row.error["code"] == "lease_expired"
+        assert row.lease_until is None and row.worker_id is None
         assert row.steps[0]["name"] == "get_sales_metrics"
-        assert session.scalar(select(AuditLog).where(AuditLog.action == "analysis.interrupted")) is not None
+        assert session.scalar(select(AuditLog).where(AuditLog.action == "analysis.recovered")) is not None

@@ -101,9 +101,22 @@
 - [x] 离线评测 `backend/evals/rag.py`：6 篇文档、8 个查询，hit@3 100%、no-answer 100%、citation validity 100%、网络 0
 - [x] 后端 142 通过、前端 15 通过、生产构建通过；契约、架构、评测、README、面试材料同步
 
+## 阶段十一：持久化任务、认证租户、可观测性与工程化（2026-11-01）
+- [x] 分析改为数据库任务队列：条件 UPDATE 抢占、`worker_id`/`lease_until` 心跳、`attempts`/`max_attempts`、指数退避、dead-letter、启动与轮询回收过期租约
+- [x] 手动 retry 仅允许 failed；任务状态与错误码通过 API 和前端轨迹可见
+- [x] 邮箱密码 scrypt 哈希 + HS256 JWT；服务端每请求重载用户/角色/租户，不信任 token 内角色；demo token 保留
+- [x] 租户隔离覆盖业务表、审批、执行、审计与知识库；跨租户返回 404；幂等键按租户隔离
+- [x] `GET /metrics` 输出 HTTP、任务、队列、工具、LLM、熔断与限流指标；进程内令牌桶限流返回 429 + `Retry-After`
+- [x] LLM 熔断器：连续可重试错误打开、冷却后半开探测、确定性错误不计入，降级状态仍可见
+- [x] Alembic `0001_baseline`、`scripts/migrate.py`、旧库 stamp 说明；CI 执行 upgrade/downgrade
+- [x] 离线 LLM 回放评测与固定录制文件；CI 以空 `LLM_API_KEY` 执行，网络调用 0 次
+- [x] 运行手册、Docker 镜像构建 job、契约/架构/评测/README 同步
+- [x] 后端 204 通过、4 跳过；前端 15 通过、生产构建通过；回放 4/4；RAG 评测通过；HTTP 冒烟 15/15
+- [ ] Alembic 本地执行与容器镜像构建未验证（本机未安装依赖/未构建），待 CI 或安装依赖后复验
+
 ## 后续（核心通过后再评估）
 - 实际 MCP Server（未实现前不能宣称已接入 MCP）
 - RAG 生产化：真实 embedding、业务语料与人工标注查询集、reranker、文档级 ACL、PDF/OCR
 - LLM 解释质量评测集（固定案例比较结论、证据引用、知识引用与越权承诺）
-- 生产身份（OIDC）、租户隔离、数据导入、汇率与多币种
-- Alembic 增量迁移与持久化任务队列（MVP 使用版本化初始化和数据库快照恢复）
+- 生产身份（OIDC/SSO）、密码重置、MFA、租户管理后台、分布式限流与共享指标状态
+- 数据导入、汇率与多币种、审计留存策略

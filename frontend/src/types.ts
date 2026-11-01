@@ -89,6 +89,7 @@ export interface Analysis {
   id: string; status: string; request: { period: Period; store_id: string | null };
   steps: Step[]; result: { metrics: Metrics; findings: { conclusion: string; evidence: Evidence[]; primary_driver: Driver | null }; engine: string; llm?: LLMRun | null; knowledge?: KnowledgeSearch | null; knowledge_error?: { code: string; message: string } | null } | null;
   error: { code: string; message: string } | null; recommendation_id: string | null;
+  attempts: number; max_attempts: number; next_run_at: string | null;
   request_id: string; created_at: string; replayed?: boolean;
 }
 export interface Execution {

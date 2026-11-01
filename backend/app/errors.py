@@ -5,3 +5,12 @@ class DomainError(Exception):
         self.status = status
         self.details = details
         super().__init__(message)
+
+
+class LeaseLost(Exception):
+    """The worker no longer owns the analysis job lease.
+
+    This is an internal control-flow signal, not a user-facing domain error:
+    an expired worker must stop writing instead of overwriting the job that a
+    newer worker has reclaimed.
+    """
