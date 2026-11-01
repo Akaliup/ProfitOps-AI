@@ -2,6 +2,27 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-02 PR #9 运维汇总 P2 修复复验（Claude Code）
+
+分支 `feat/final-agent-validation`，PR #9，基线 `e99a016`。本轮只修复 `GET /api/ops/summary` 的成本口径、审计历史去重与查询边界，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史失败数据。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | **260 passed, 0 failed, 0 skipped**（105.95s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 同上，使用 `.venv311/Scripts/python.exe` | **260 passed, 0 failed, 0 skipped**（175.21s，1 个第三方 DeprecationWarning） |
+| 运维汇总定向回归 | `.venv/Scripts/python.exe -m pytest backend/tests/test_ops.py -q` | **11 passed**（5.53s） |
+| SQLite 迁移 | `.venv/Scripts/python.exe -m pytest backend/tests/test_migrations.py -q` | **4 passed**（1.05s） |
+| PostgreSQL 迁移与租户幂等 | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests/test_postgres_migrations.py backend/tests/test_postgres_idempotency.py -q` | **3 passed**（3.40s），使用一次性 schema |
+| 前端单元/交互 | `npm --prefix frontend test` | **16 passed**（1 file，8.90s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | **PASS**；Vite 6.4.5，2252 modules，4.83s |
+| Playwright 浏览器 E2E | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e` | **7 passed**（22.5s）；独立临时库，`LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| HTTP 冒烟 | 独立临时 SQLite + 8015 端口 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | **15/15 passed**，`failed=0` |
+| 空白字符 | `git diff --check` | 通过 |
+| 真实 LLM | 未调用 | **NOT RUN**；本轮没有真实调用授权，付费 token 0 |
+| GitHub Actions | 推送后由 `.github/workflows/ci.yml` 执行 | 推送后确认，不以本地结果代替 CI |
+
+本轮定向回归覆盖：无异常/数据不足/未配置模型不进入成本分母；一次可定价调用加一次未知价格调用时 `amount_usd=null` 且 `known_subtotal_usd` 单独展示；同一 Analysis 前两次失败、第三次成功时历史调用、Token 与成本不覆盖也不重复；成功调用缺少 Usage 时标记 `partial`；租户 A/B 的 LLM 审计不串读；250 条 Analysis 下统计正确且最近失败明细限制为 10 条。汇总改为 SQL 聚合与分批流式读取，窗口内审计事件按 `created_at <= end` 截断，旧数据仅在窗口内没有审计事件时回退读取 `Analysis.result.llm`。
+
 ## 2026-11-02 最终功能收尾验收（feat/final-agent-validation）
 
 基线：`origin/master` 合并 PR #8 后的 `3876cc6`。本轮在独立分支执行；后端使用 `.venv`（Python 3.12.8）与 `.venv311`（Python 3.11.16，`backend/requirements.lock.txt`），PostgreSQL 使用本机 `profitops-pg16-test`（PostgreSQL 16，端口 55432，测试库 `profitops_test`）。除真实 DeepSeek 评测外，不读写 `data/profitops.db`。

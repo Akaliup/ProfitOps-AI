@@ -1,7 +1,7 @@
 """Tenant-scoped operational summary for the Agent ops page.
 
 The summary is built from durable database rows only: analysis jobs, the
-persisted LLM/tool trace, recommendations, executions and audit events.
+persisted LLM/tool audit events, recommendations, executions and audit events.
 Process-local Prometheus counters are intentionally excluded, so a restart
 never makes the page look like historical data disappeared.
 """
@@ -12,7 +12,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .models import Analysis, AuditLog, Execution, Recommendation, utcnow
@@ -21,6 +21,7 @@ from .views import iso_utc
 
 JOB_STATUSES = ("queued", "running", "waiting_approval", "completed", "insufficient_data", "failed")
 LLM_STATUSES = ("llm_success", "deterministic_fallback", "llm_failed", "not_requested")
+LLM_AUDIT_ACTIONS = ("analysis.llm_succeeded", "analysis.llm_fallback", "analysis.llm_failed")
 RETRY_AUDIT_ACTIONS = ("analysis.retry_scheduled",)
 DEAD_LETTER_AUDIT_ACTIONS = ("analysis.dead_letter",)
 
@@ -29,15 +30,48 @@ def _number(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _llm_run(row: Analysis) -> dict[str, Any] | None:
-    result = row.result if isinstance(row.result, dict) else {}
+def _result_run(result: Any) -> dict[str, Any] | None:
+    """Return the latest persisted LLM run from an analysis result."""
+    if not isinstance(result, dict):
+        return None
     run = result.get("llm")
     return run if isinstance(run, dict) else None
 
 
-def _dead_letter(row: Analysis) -> bool:
-    error = row.error if isinstance(row.error, dict) else {}
-    return row.status == "failed" and error.get("dead_letter") is True
+def _is_model_call(run: dict[str, Any]) -> bool:
+    """Whether a persisted LLM record represents an actual provider call.
+
+    ``not_requested`` jobs never reach the LLM node. A fallback created with
+    ``configured=false`` (or ``reason=not_configured``) is also not a call, so
+    it must not enter token/cost denominators.
+    """
+    status = run.get("status")
+    if status == "not_requested":
+        return False
+    if run.get("configured") is False:
+        return False
+    if status == "deterministic_fallback" and run.get("reason") == "not_configured":
+        return False
+    return True
+
+
+def _same_model_call(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Match the success audit and its terminal fallback for one model call.
+
+    ``verify_llm`` audits a successful call before evidence validation and then
+    audits a fallback/failure for the same call when references are invalid.
+    The terminal event keeps the same usage and trace, so those two audit rows
+    describe one model call, not two.
+    """
+    keys = (
+        "configured", "provider", "model", "attempts", "latency_ms", "usage",
+        "native_tools", "termination_reason", "rounds", "tool_calls",
+    )
+    return all(first.get(key) == second.get(key) for key in keys)
+
+
+def _dead_letter(error: Any) -> bool:
+    return isinstance(error, dict) and error.get("dead_letter") is True
 
 
 def build_ops_summary(
@@ -50,64 +84,95 @@ def build_ops_summary(
     """
     end = now or utcnow()
     start = end - timedelta(hours=window_hours)
-    rows = session.scalars(
-        select(Analysis)
-        .where(Analysis.tenant_id == tenant_id, Analysis.created_at >= start)
-        .order_by(Analysis.created_at.desc())
-    ).all()
+    base_filter = (
+        Analysis.tenant_id == tenant_id,
+        Analysis.created_at >= start,
+        Analysis.created_at <= end,
+    )
 
-    status_counts = Counter(row.status for row in rows)
+    # Base job metrics are computed by the database; no full Analysis ORM rows
+    # are loaded for the window.
+    total_jobs = int(session.scalar(
+        select(func.count()).select_from(Analysis).where(*base_filter)
+    ) or 0)
+    status_counts = Counter(dict(session.execute(
+        select(Analysis.status, func.count()).where(*base_filter).group_by(Analysis.status)
+    ).all()))
+    retry_count = int(session.scalar(
+        select(func.coalesce(
+            func.sum(case((Analysis.attempts > 1, Analysis.attempts - 1), else_=0)), 0,
+        )).where(*base_filter)
+    ) or 0)
+
     error_codes: Counter[str] = Counter()
-    retry_count = 0
     dead_letter_count = 0
-    llm_counts: Counter[str] = Counter()
-    tool_calls = 0
-    failed_tool_calls = 0
-    tool_names: Counter[str] = Counter()
-    failed_tool_names: Counter[str] = Counter()
-    tool_rounds = 0
-    termination_reasons: Counter[str] = Counter()
-    native_runs = 0
-    token_totals = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
-    runs_with_usage = 0
-    runs_without_usage = 0
-    priced_runs = 0
-    unpriced_runs = 0
-    cost_total = 0.0
-    pricing_versions: set[str] = set()
     recent_failures: list[dict[str, Any]] = []
 
-    for row in rows:
-        retry_count += max(0, row.attempts - 1)
+    # Stream only the columns needed for failure counts and the bounded recent
+    # list. The list is capped at 10, but counts still cover the whole window.
+    failed_stmt = (
+        select(
+            Analysis.id, Analysis.status, Analysis.request_id, Analysis.attempts,
+            Analysis.max_attempts, Analysis.error, Analysis.created_at, Analysis.updated_at,
+        )
+        .where(*base_filter, Analysis.status == "failed")
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc())
+    )
+    for row in session.execute(failed_stmt).yield_per(200):
         error = row.error if isinstance(row.error, dict) else {}
-        if row.status == "failed":
-            code = error.get("code")
-            if isinstance(code, str) and code:
-                error_codes[code] += 1
-            if _dead_letter(row):
-                dead_letter_count += 1
-            if len(recent_failures) < 10:
-                recent_failures.append({
-                    "id": row.id,
-                    "status": row.status,
-                    "request_id": row.request_id,
-                    "attempts": row.attempts,
-                    "max_attempts": row.max_attempts,
-                    "dead_letter": _dead_letter(row),
-                    "error_code": code if isinstance(code, str) else None,
-                    "error_message": error.get("message") if isinstance(error.get("message"), str) else None,
-                    "updated_at": iso_utc(row.updated_at),
-                    "created_at": iso_utc(row.created_at),
-                })
+        code = error.get("code")
+        if isinstance(code, str) and code:
+            error_codes[code] += 1
+        if _dead_letter(error):
+            dead_letter_count += 1
+        if len(recent_failures) < 10:
+            recent_failures.append({
+                "id": row.id,
+                "status": row.status,
+                "request_id": row.request_id,
+                "attempts": row.attempts,
+                "max_attempts": row.max_attempts,
+                "dead_letter": _dead_letter(error),
+                "error_code": code if isinstance(code, str) else None,
+                "error_message": error.get("message") if isinstance(error.get("message"), str) else None,
+                "updated_at": iso_utc(row.updated_at),
+                "created_at": iso_utc(row.created_at),
+            })
 
-        run = _llm_run(row)
-        if run is None:
-            continue
+    llm_counts: Counter[str] = Counter()
+    tool_names: Counter[str] = Counter()
+    failed_tool_names: Counter[str] = Counter()
+    termination_reasons: Counter[str] = Counter()
+    token_totals = {"prompt": 0, "completion": 0, "total": 0, "cached": 0}
+    pricing_versions: set[str] = set()
+    llm_stats = {
+        "runs": 0,
+        "model_calls": 0,
+        "no_model_call_runs": 0,
+        "native_runs": 0,
+        "tool_calls": 0,
+        "failed_tool_calls": 0,
+        "tool_rounds": 0,
+        "runs_with_usage": 0,
+        "runs_without_usage": 0,
+        "priced_runs": 0,
+        "unpriced_runs": 0,
+        "cost_total": 0.0,
+    }
+
+    def consume_run(run: dict[str, Any]) -> None:
+        """Aggregate one logical LLM record, including no-call records."""
+        llm_stats["runs"] += 1
         status = run.get("status")
-        if isinstance(status, str):
+        if isinstance(status, str) and status:
             llm_counts[status] += 1
+        if not _is_model_call(run):
+            llm_stats["no_model_call_runs"] += 1
+            return
+
+        llm_stats["model_calls"] += 1
         if run.get("native_tools") is True:
-            native_runs += 1
+            llm_stats["native_runs"] += 1
         reason = run.get("termination_reason")
         if isinstance(reason, str) and reason:
             termination_reasons[reason] += 1
@@ -117,73 +182,160 @@ def build_ops_summary(
             for call in calls:
                 if not isinstance(call, dict):
                     continue
-                tool_calls += 1
+                llm_stats["tool_calls"] += 1
                 name = call.get("name") if isinstance(call.get("name"), str) else "unknown"
                 tool_names[name] += 1
                 if call.get("ok") is False:
-                    failed_tool_calls += 1
+                    llm_stats["failed_tool_calls"] += 1
                     failed_tool_names[name] += 1
         rounds = run.get("rounds")
         if isinstance(rounds, list):
-            tool_rounds += len(rounds)
+            llm_stats["tool_rounds"] += len(rounds)
 
         usage = run.get("usage")
         if not isinstance(usage, dict):
-            runs_without_usage += 1
-            unpriced_runs += 1
-            continue
+            llm_stats["runs_without_usage"] += 1
+            llm_stats["unpriced_runs"] += 1
+            return
         prompt = _number(usage.get("prompt_tokens"))
         completion = _number(usage.get("completion_tokens"))
         total = _number(usage.get("total_tokens"))
         cached = _number(usage.get("cached_tokens")) or 0
         if prompt is None and completion is None and total is None:
-            runs_without_usage += 1
-            unpriced_runs += 1
-            continue
-        runs_with_usage += 1
+            llm_stats["runs_without_usage"] += 1
+            llm_stats["unpriced_runs"] += 1
+            return
+        llm_stats["runs_with_usage"] += 1
         token_totals["prompt"] += prompt or 0
         token_totals["completion"] += completion or 0
         token_totals["total"] += total if total is not None else (prompt or 0) + (completion or 0)
         token_totals["cached"] += cached
         estimate = estimate_cost_usd(run.get("model"), usage)
         if estimate is None:
-            unpriced_runs += 1
+            llm_stats["unpriced_runs"] += 1
         else:
-            priced_runs += 1
-            cost_total += float(estimate["amount_usd"])
+            llm_stats["priced_runs"] += 1
+            llm_stats["cost_total"] += float(estimate["amount_usd"])
             pricing_versions.add(str(estimate["pricing_version"]))
 
-    if priced_runs == 0:
-        cost_status = "partial" if unpriced_runs else "no_data"
+    # LLM history comes from durable audit events. A success event followed by
+    # a terminal event for the same call (invalid evidence references) is
+    # collapsed into the terminal event, so usage/tools/cost are counted once.
+    # Keep one pending event of each kind per analysis so a pair is collapsed
+    # even when both rows share a timestamp and are read in either order.
+    pending_success: dict[str, dict[str, Any]] = {}
+    pending_terminal: dict[str, dict[str, Any]] = {}
+
+    def consume_event(object_id: str, details: Any) -> None:
+        run = details if isinstance(details, dict) else {}
+        if run.get("status") == "llm_success":
+            terminal = pending_terminal.pop(object_id, None)
+            if terminal is not None and _same_model_call(run, terminal):
+                consume_run(terminal)
+                return
+            if terminal is not None:
+                consume_run(terminal)
+            previous = pending_success.pop(object_id, None)
+            if previous is not None:
+                consume_run(previous)
+            pending_success[object_id] = run
+            return
+        success = pending_success.pop(object_id, None)
+        if success is not None and _same_model_call(success, run):
+            consume_run(run)
+            return
+        if success is not None:
+            consume_run(success)
+        previous = pending_terminal.pop(object_id, None)
+        if previous is not None:
+            consume_run(previous)
+        pending_terminal[object_id] = run
+
+    llm_audit_stmt = (
+        select(AuditLog.object_id, AuditLog.details)
+        .where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.object_type == "analysis",
+            AuditLog.action.in_(LLM_AUDIT_ACTIONS),
+            AuditLog.created_at >= start,
+            AuditLog.created_at <= end,
+        )
+        .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
+    )
+    for object_id, details in session.execute(llm_audit_stmt).yield_per(500):
+        consume_event(str(object_id), details)
+    for details in pending_success.values():
+        consume_run(details)
+    for details in pending_terminal.values():
+        consume_run(details)
+
+    # Compatibility for analyses written before LLM audit events existed (or
+    # by older code paths). Only analyses with no LLM audit event in this
+    # window use result.llm, so the same run is never counted twice.
+    audit_exists = (
+        select(AuditLog.id)
+        .where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.object_type == "analysis",
+            AuditLog.object_id == Analysis.id,
+            AuditLog.action.in_(LLM_AUDIT_ACTIONS),
+            AuditLog.created_at >= start,
+            AuditLog.created_at <= end,
+        )
+        .exists()
+    )
+    legacy_stmt = select(Analysis.id, Analysis.result).where(*base_filter, ~audit_exists)
+    for _, result in session.execute(legacy_stmt).yield_per(200):
+        run = _result_run(result)
+        if run is not None:
+            consume_run(run)
+
+    model_calls = llm_stats["model_calls"]
+    priced_runs = llm_stats["priced_runs"]
+    unpriced_runs = llm_stats["unpriced_runs"]
+    cost_total = round(llm_stats["cost_total"], 6)
+    if model_calls == 0:
+        cost_status = "no_data"
+        amount_usd = None
     elif unpriced_runs:
         cost_status = "partial"
+        amount_usd = None
     else:
         cost_status = "complete"
+        amount_usd = cost_total
     cost = {
         "status": cost_status,
         "currency": "USD",
-        "amount_usd": round(cost_total, 6) if priced_runs else None,
+        "amount_usd": amount_usd,
+        # A known subtotal is useful for diagnostics, but it is never presented
+        # as the total when any actual call is unpriced.
+        "known_subtotal_usd": cost_total if priced_runs else None,
         "priced_runs": priced_runs,
         "unpriced_runs": unpriced_runs,
-        "pricing_version": pricing_versions.pop() if len(pricing_versions) == 1 else None,
+        "pricing_version": next(iter(pricing_versions)) if len(pricing_versions) == 1 else None,
         "source": PRICING_SOURCE,
         "note": (
-            "Public list-price estimate from persisted token usage, not an invoice. "
-            "A missing usage or price is reported as unpriced, never as zero cost."
+            "Public list-price estimate from persisted LLM audit events, not an invoice. "
+            "Runs with no model call are excluded from token and cost denominators. "
+            "Any missing usage or price makes the total unknown; known_subtotal_usd is separate."
         ),
     }
 
     retry_events = session.scalar(
         select(func.count()).select_from(AuditLog).where(
             AuditLog.tenant_id == tenant_id,
+            AuditLog.object_type == "analysis",
             AuditLog.created_at >= start,
+            AuditLog.created_at <= end,
             AuditLog.action.in_(RETRY_AUDIT_ACTIONS),
         )
     ) or 0
     dead_letter_events = session.scalar(
         select(func.count()).select_from(AuditLog).where(
             AuditLog.tenant_id == tenant_id,
+            AuditLog.object_type == "analysis",
             AuditLog.created_at >= start,
+            AuditLog.created_at <= end,
             AuditLog.action.in_(DEAD_LETTER_AUDIT_ACTIONS),
         )
     ) or 0
@@ -217,7 +369,7 @@ def build_ops_summary(
             ),
         },
         "jobs": {
-            "total": len(rows),
+            "total": total_jobs,
             "by_status": {status: status_counts.get(status, 0) for status in JOB_STATUSES},
             "retry_count": retry_count,
             "retry_scheduled_events": retry_events,
@@ -228,30 +380,32 @@ def build_ops_summary(
             ],
         },
         "llm": {
-            "runs": sum(llm_counts.values()),
+            "runs": llm_stats["runs"],
+            "model_calls": model_calls,
+            "no_model_call_runs": llm_stats["no_model_call_runs"],
             "by_status": {status: llm_counts.get(status, 0) for status in LLM_STATUSES},
-            "native_tool_runs": native_runs,
+            "native_tool_runs": llm_stats["native_runs"],
             "termination_reasons": [
                 {"reason": reason, "count": count}
                 for reason, count in termination_reasons.most_common()
             ],
         },
         "tools": {
-            "calls": tool_calls,
-            "failed_calls": failed_tool_calls,
-            "rounds": tool_rounds,
+            "calls": llm_stats["tool_calls"],
+            "failed_calls": llm_stats["failed_tool_calls"],
+            "rounds": llm_stats["tool_rounds"],
             "by_name": [
                 {"name": name, "calls": count, "failed": failed_tool_names.get(name, 0)}
                 for name, count in tool_names.most_common()
             ],
         },
         "tokens": {
-            "runs_with_usage": runs_with_usage,
-            "runs_without_usage": runs_without_usage,
-            "prompt": token_totals["prompt"] if runs_with_usage else None,
-            "completion": token_totals["completion"] if runs_with_usage else None,
-            "total": token_totals["total"] if runs_with_usage else None,
-            "cached": token_totals["cached"] if runs_with_usage else None,
+            "runs_with_usage": llm_stats["runs_with_usage"],
+            "runs_without_usage": llm_stats["runs_without_usage"],
+            "prompt": token_totals["prompt"] if llm_stats["runs_with_usage"] else None,
+            "completion": token_totals["completion"] if llm_stats["runs_with_usage"] else None,
+            "total": token_totals["total"] if llm_stats["runs_with_usage"] else None,
+            "cached": token_totals["cached"] if llm_stats["runs_with_usage"] else None,
         },
         "cost": cost,
         "approvals": {
@@ -269,7 +423,9 @@ def build_ops_summary(
         "recent_failures": recent_failures,
         "pricing": {"version": PRICING_VERSION, "source": PRICING_SOURCE},
         "notes": [
-            "Window filters analysis jobs by created_at; approvals and executions show current state.",
+            "Window filters analysis jobs and LLM audit events by created_at; approvals and executions show current state.",
+            "LLM history comes from audit events; result.llm is used only when an analysis has no LLM audit event in the window.",
+            "Runs with no model call are counted separately and excluded from usage/cost denominators.",
             "Tool arguments and raw prompts are not returned; only names and counts.",
         ],
     }
