@@ -115,3 +115,39 @@ export interface Audit {
   request_id: string; outcome: string; details: Record<string, unknown>; created_at: string;
 }
 export interface Scope { days: number; storeId: string }
+export interface OpsSummary {
+  tenant_id: string; generated_at: string;
+  window: { hours: number; start: string; end: string; timezone: string };
+  source: { kind: string; tables: string[]; note: string };
+  jobs: {
+    total: number; by_status: Record<string, number>; retry_count: number;
+    retry_scheduled_events: number; dead_letter: number; dead_letter_events: number;
+    error_codes: { code: string; count: number }[];
+  };
+  llm: {
+    runs: number; by_status: Record<string, number>; native_tool_runs: number;
+    termination_reasons: { reason: string; count: number }[];
+  };
+  tools: {
+    calls: number; failed_calls: number; rounds: number;
+    by_name: { name: string; calls: number; failed: number }[];
+  };
+  tokens: {
+    runs_with_usage: number; runs_without_usage: number;
+    prompt: number | null; completion: number | null; total: number | null; cached: number | null;
+  };
+  cost: {
+    status: 'complete' | 'partial' | 'no_data'; currency: string; amount_usd: number | null;
+    priced_runs: number; unpriced_runs: number; pricing_version: string | null;
+    source: string; note: string;
+  };
+  approvals: { current_state: boolean; by_status: Record<string, number> };
+  executions: { current_state: boolean; total: number; by_status: Record<string, number> };
+  recent_failures: {
+    id: string; status: string; request_id: string; attempts: number; max_attempts: number;
+    dead_letter: boolean; error_code: string | null; error_message: string | null;
+    updated_at: string; created_at: string;
+  }[];
+  pricing: { version: string; source: string };
+  notes: string[];
+}

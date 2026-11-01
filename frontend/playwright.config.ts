@@ -8,7 +8,9 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.resolve('../data/browsers')
 const databaseUrl = process.env.PROFITOPS_E2E_DATABASE_URL ?? 'sqlite:///../data/e2e.db'
 
 export default defineConfig({
-  testDir: './e2e', fullyParallel: true, workers: 2,
+  // Tests in one spec share a seeded database and mutate it (retry, approve),
+  // so they must not race inside a file; separate files still run in parallel.
+  testDir: './e2e', fullyParallel: false, workers: 2,
   timeout: 45000, expect: { timeout: 15000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { baseURL: 'http://127.0.0.1:5180', trace: 'retain-on-failure', screenshot: 'only-on-failure' },

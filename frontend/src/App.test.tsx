@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { analysis, demo, knowledgeDocument, knowledgeSearch, llmNativeFailure, llmNativeSuccess, llmSuccess, metrics, recommendation } from './test/fixtures'
-import type { Analysis, Recommendation } from './types'
+import type { Analysis, OpsSummary, Recommendation } from './types'
 
 vi.mock('./components/TrendChart', () => ({ TrendChart: () => <div>经营趋势图</div> }))
 let rows: Recommendation[]
@@ -14,6 +14,36 @@ let apiFailure: boolean
 let empty: boolean
 let documents = [structuredClone(knowledgeDocument)]
 let noKnowledgeAnswer: boolean
+
+const opsSummary: OpsSummary = {
+  tenant_id: 'demo', generated_at: '2026-11-02T00:00:00Z',
+  window: { hours: 24, start: '2026-11-01T00:00:00Z', end: '2026-11-02T00:00:00Z', timezone: 'UTC' },
+  source: { kind: 'database', tables: ['analyses'], note: '数据来自持久化记录。' },
+  jobs: {
+    total: 4, by_status: { queued: 1, running: 0, waiting_approval: 0, completed: 1, insufficient_data: 0, failed: 2 },
+    retry_count: 3, retry_scheduled_events: 1, dead_letter: 1, dead_letter_events: 1,
+    error_codes: [{ code: 'llm_network_error', count: 2 }],
+  },
+  llm: {
+    runs: 2, by_status: { llm_success: 1, deterministic_fallback: 1, llm_failed: 0, not_requested: 0 },
+    native_tool_runs: 1, termination_reasons: [{ reason: 'final_answer', count: 1 }],
+  },
+  tools: { calls: 2, failed_calls: 1, rounds: 2, by_name: [{ name: 'get_profit_analysis', calls: 2, failed: 1 }] },
+  tokens: { runs_with_usage: 1, runs_without_usage: 1, prompt: 1000, completion: 100, total: 1100, cached: 200 },
+  cost: {
+    status: 'partial', currency: 'USD', amount_usd: null, priced_runs: 1, unpriced_runs: 1,
+    pricing_version: '2026-11-02', source: 'https://api-docs.deepseek.com/quick_start/pricing', note: '估算',
+  },
+  approvals: { current_state: true, by_status: { pending_approval: 1, approved: 0, rejected: 0, executed: 0, execution_failed: 0 } },
+  executions: { current_state: true, total: 0, by_status: {} },
+  recent_failures: [{
+    id: 'analysis-failed-1', status: 'failed', request_id: 'req-failed', attempts: 3, max_attempts: 3,
+    dead_letter: true, error_code: 'llm_network_error', error_message: 'upstream reset',
+    updated_at: '2026-11-02T00:00:00Z', created_at: '2026-11-01T00:00:00Z',
+  }],
+  pricing: { version: '2026-11-02', source: 'https://api-docs.deepseek.com/quick_start/pricing' },
+  notes: ['工具参数与原始提示词不返回。'],
+}
 
 beforeEach(() => {
   rows = []; history = []; executeCount = 0; lastActor = ''; apiFailure = false; empty = false
@@ -30,6 +60,8 @@ beforeEach(() => {
     }
     if (path === '/api/analyses') return respond({ items: history })
     if (path === '/api/analyses/analysis-1') return respond(analysis)
+    if (path === '/api/analyses/analysis-failed-1') return respond({ ...analysis, id: 'analysis-failed-1' })
+    if (path.startsWith('/api/ops/summary')) return respond(opsSummary)
     if (path === '/api/recommendations') return respond({ items: rows })
     if (path === '/api/knowledge/documents' && options?.method === 'POST') {
       const body = JSON.parse(String(options.body))
@@ -304,5 +336,24 @@ describe('ProfitOps workspace', () => {
     await user.click(screen.getByRole('button', { name: /Agent 工作台/ }))
     expect(await screen.findByText('知识引用')).toBeVisible()
     expect(screen.getAllByText('chunk-ad-1').length).toBeGreaterThan(0)
+  })
+
+  it('gates the ops page by role, shows unknown cost and opens a failed trace', async () => {
+    history = [structuredClone(analysis)]
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.click(screen.getByRole('button', { name: /Agent 运维/ }))
+    expect(await screen.findByText('需要审批负责人权限')).toBeVisible()
+
+    await user.selectOptions(screen.getByLabelText('演示身份'), 'demo-approver')
+    expect((await screen.findAllByText('部分未知')).length).toBeGreaterThan(0)
+    expect(screen.getByText('1 次调用缺少 Usage 或价格，未按 0 计。')).toBeVisible()
+    expect(screen.getAllByText('死信').length).toBeGreaterThan(0)
+    expect(screen.getByText(/upstream reset/)).toBeVisible()
+    expect(screen.queryByText('system_prompt')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '查看 Trace' }))
+    expect(await screen.findByText(/已打开分析 analysis/)).toBeVisible()
   })
 })
