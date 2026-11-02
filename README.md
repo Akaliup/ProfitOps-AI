@@ -2,7 +2,7 @@
 
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从真实经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 
-LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、向量 + 词法混合检索、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。另提供只读 **MCP Server**，通过 stdio 暴露利润分析、SKU 明细、RAG 检索和审批状态查询，不暴露审批/执行写工具。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
+LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、BM25 + 向量混合检索（RRF）、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。另提供只读 **MCP Server**，通过 stdio 暴露利润分析、SKU 明细、RAG 检索和审批状态查询，不暴露审批/执行写工具。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
 
 ![经营总览](docs/screenshots/overview.png)
 
@@ -12,6 +12,12 @@ LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根�
 ![建议与证据](docs/screenshots/approval.png)
 
 ![模拟执行结果](docs/screenshots/execution.png)
+</details>
+
+<details>
+<summary>移动端布局截图</summary>
+
+![移动端布局](docs/screenshots/mobile.png)
 </details>
 
 ## 开发方式与协作边界
@@ -67,6 +73,14 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 
 不配置任何变量即可使用 6 篇合成 SOP。默认 `hashing` embedding 完全离线，检索在 `verify_evidence` 之后、LLM 之前运行；命中片段进入分析结果和建议详情，LLM 只能引用本次返回的 `chunk_id`，未知引用会触发降级。低于阈值的查询返回 `no_answer=true`，不会拿低分片段凑答案。
 
+![运营知识库检索：命中片段、来源、版本与分数](docs/screenshots/knowledge.png)
+
+<details>
+<summary>无可靠答案（拒答）截图</summary>
+
+![知识库无可靠答案](docs/screenshots/knowledge-no-answer.png)
+</details>
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `KNOWLEDGE_EMBEDDING_PROVIDER` | `hashing` | `hashing`（离线）或 `openai`（任意 OpenAI 兼容 `/embeddings`） |
@@ -83,6 +97,8 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 | `KNOWLEDGE_MAX_PER_DOCUMENT` | `2` | 单篇文档最多占几个片段 |
 
 完整设计、API、打分公式与限制见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)。
+
+切换 embedding 模型后，旧库可用 `scripts/reindex_knowledge.py` 就地重嵌入：先 `--dry-run` 预览，运行前备份数据库；它保留文档/chunk ID、标题和审计记录，只替换向量与 `embedding_model`。
 
 ### MCP Server（只读，stdio）
 
@@ -102,6 +118,12 @@ MCP 进程不建表、不 Seed，使用前需先初始化数据库；默认 hash
 ```
 
 未配置 Key 时脚本会输出 `{"status":"skipped","reason":"LLM_API_KEY 未配置"}` 并以退出码 2 结束，不会发起网络请求。
+
+<details>
+<summary>Agent 执行轨迹截图（失败调用与降级可见）</summary>
+
+![Agent 执行轨迹](docs/screenshots/agent-trace.png)
+</details>
 
 ### Agent 评测（Phase 2D，默认离线）
 
@@ -145,7 +167,7 @@ MCP 进程不建表、不 Seed，使用前需先初始化数据库；默认 hash
 - 临时 SQLite，不联网、不读写 `data/profitops.db`（默认 hashing）。
 - 6 篇合成 SOP，**42 条固定标注查询**（36 可回答 + 6 不可回答），按 keyword / paraphrase / cross_doc / unanswerable 分层统计。
 - 报告 hit@1、hit@3、MRR、nDCG@5、no-answer accuracy、citation validity、延迟，以及阈值校准建议；硬门禁失败时退出码非 0。
-- 本次结果（hashing，`min_score=0.15`）：hit@1 97.22%、hit@3 100%、MRR 0.9815、no-answer 100%、citation validity 100%、网络调用 0。
+- 本次结果（hashing，`min_score=0.15`）：hit@1 97.22%、hit@3 100%、MRR 0.9815、no-answer 100%、citation validity 100%、网络调用 0。hashing 下 `hybrid_rrf` 与 `weighted` 指标相同：hashing 没有排序能力，不参与稠密路投票，两种排序在这套语料上等价。
 - 真实 embedding（各自按校准阈值）：**BGE-M3**（`min_score=0.42`）hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 50%（旧排序 25%）；`qwen3-embedding:0.6b`（`0.40`）hit@1 100%、跨文档覆盖 75%。两者都证明「换 embedding 必须重算阈值」：0.15 下 6 条不可回答全部误答。
 - 报告写入 `backend/evals/reports/rag-latest.json`；口径与消融见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) 第 5、9 节。
 
@@ -278,7 +300,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果（2026-11-02，MCP 分支）：后端 272 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、MCP 专项 9 通过、MCP 真实 stdio 检查通过、前端 17 通过、生产构建通过。HTTP 冒烟 15/15 与云端单机 Compose 十项验收是上一轮既有结果，本轮未重新执行；详见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果（2026-11-03，RAG 分支）：后端 277 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、新增 BM25/融合测试 5 通过、RAG 离线评测（weighted 与 hybrid_rrf）退出码 0、BGE-M3 与 qwen3-embedding 真实检索评测退出码 0、前端生产构建通过；前端单测本轮未重跑（上一轮 17 通过），MCP 专项 9 通过、MCP stdio 检查、HTTP 冒烟 15/15 与云端单机 Compose 十项验收均为既有结果，本轮未重新执行。详见 [docs/TEST_REPORT.md](docs/TEST_REPORT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
@@ -289,7 +311,7 @@ backend/evals/       LLM Agent 评测样本、RAG/回放评测、Runner 与报�
 backend/migrations/  Alembic 基线与增量迁移
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
-scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、MCP/真实 LLM 验证
+scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、MCP/真实 LLM 验证、知识库重嵌入
 docs/                契约、架构、运行手册、云端部署、知识库、MCP、验证记录、截图
 compose.yaml         PostgreSQL + 后端 + 前端
 compose.cloud.yaml   云端单机覆盖：独立 worker、一次性 init、HTTPS 入口
@@ -303,7 +325,7 @@ TASKS.md             交付与后续任务
 - 认证是可运行的自建账号 + JWT + 租户隔离，但不是完整生产 IAM：没有 OIDC/SSO、密码重置、MFA、密钥轮换和租户管理后台；限流桶和指标是进程内状态，多副本部署需要共享存储。本地演示工作台使用 `/api/demo` 返回的 demo token 切换身份；云端覆盖把该接口放在 Nginx Basic Auth 之后，token 由不进入 Git 的随机配置生成，但仍不是正式认证。JWT 登录 API 已实现并有后端测试，演示前端未接入登录页，非 demo 模式需要登录客户端。
 - LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
 - 原生 Function Calling 已用 3 次真实脚本运行验收；第 3 次完整成功，但样本很小，不能据此声明真实调用成功率或多轮稳定性。
-- RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、8 个查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；知识库规模增大后需要换成真实 embedding + 向量索引。
+- RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、42 条标注查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。BGE-M3 与 qwen3-embedding 已在同一套合成语料上验证，hit@1 与 MRR 更高，但换模型必须重新校准 `KNOWLEDGE_MIN_SCORE`。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；当前是 SQLite/PostgreSQL 上全量候选打分，知识库规模增大后需要专用向量索引与批处理/缓存。
 - Phase 2D 工具调用评测默认使用脚本化 `FakeToolProvider`，37 次运行只证明生产工具循环和门禁在合成案例上的行为，不是真实模型的工具选择准确率；`native --real` 入口已实现但本阶段未授权执行。
 - 预期影响是明确标注的条件性情景，不构成收益承诺。
 - 模拟执行只写数据库预览，不改变任何真实平台。
