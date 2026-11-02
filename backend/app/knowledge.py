@@ -5,10 +5,12 @@ tests and the demo never need a network call. An OpenAI-compatible embedding
 endpoint (for example Ollama or a private embedding service) can be enabled
 with ``KNOWLEDGE_EMBEDDING_PROVIDER=openai``.
 
-Retrieval is deliberately small and inspectable: cosine similarity over stored
-vectors plus a lexical overlap score and a heading/title boost. It is a hybrid
-retriever, not a cross-encoder reranker. Every returned chunk carries a stable
-``chunk_id`` so the LLM can cite it and the workflow can verify the citation.
+Retrieval is deliberately small and inspectable: two candidate lists (cosine
+similarity over stored vectors, and Okapi BM25 over the same tokens) fused with
+reciprocal rank fusion, then a bounded per-chunk confidence for abstention. It is
+a hybrid retriever, not a cross-encoder reranker. Every returned chunk carries a
+stable ``chunk_id`` so the LLM can cite it and the workflow can verify the
+citation.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .audit import record
+from .bm25 import BM25Index
 from .config import Settings
 from .errors import DomainError
 from .models import KnowledgeChunk, KnowledgeDocument, SeedVersion, new_id, utcnow
@@ -111,7 +114,15 @@ class HashingEmbeddingProvider:
     This is a feature-hashing bag of tokens, not a semantic neural embedding.
     It is the default so the demo and CI are fully offline; configure an
     OpenAI-compatible provider for semantic retrieval.
+
+    Feature hashing has no notion of similarity: on the 42-query set a relevant
+    short chunk scored cosine 0.0, i.e. the dense ranking is noise here. The
+    retriever therefore does not let this provider vote in the rank fusion; see
+    ``semantic_ranking``.
     """
+
+    #: Ranking by cosine is a reliable signal only for a trained embedding model.
+    semantic_ranking = False
 
     def __init__(self, dimensions: int = 256, model: str = "hashing-v1"):
         self.dimensions = dimensions
@@ -142,6 +153,8 @@ class OpenAIEmbeddingProvider:
     Point ``KNOWLEDGE_EMBEDDING_BASE_URL`` at a local Ollama/vLLM gateway or a
     private embedding service. The API key is optional for local gateways.
     """
+
+    semantic_ranking = True
 
     def __init__(
         self, *, base_url: str, api_key: str, model: str,
@@ -407,6 +420,46 @@ def _heading_match(query: str, heading: str | None) -> float:
     return 1.0 if query_tokens & heading_tokens else 0.0
 
 
+def _reciprocal_rank_fusion(rankings: list[list[str]], *, k: int) -> dict[str, float]:
+    """Fuse ranked chunk-id lists: ``sum(1 / (k + rank))`` per chunk.
+
+    Rank-based fusion needs no score normalisation, so a cosine in [0, 1] and a
+    BM25 score in [0, 2] can be combined without hand-tuned weights.
+    """
+    fused: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (k + rank)
+    return fused
+
+
+def _diversify_by_document(
+    ordered_ids: list[str], document_of: dict[str, str], *, top_k: int, max_per_document: int,
+) -> list[str]:
+    """Keep the fused order but cap how many chunks one document may occupy.
+
+    Measured on the 42-query set: pure fusion filled all three slots with one
+    document and cross-document coverage dropped (see docs/EVALUATION.md). The
+    cap only applies when the candidate pool holds enough distinct documents to
+    still return ``top_k`` hits, so a single-document corpus is unaffected.
+    """
+    if max_per_document <= 0 or top_k <= 0:
+        return ordered_ids
+    if len({document_of.get(chunk_id) for chunk_id in ordered_ids}) * max_per_document < top_k:
+        return ordered_ids
+    counts: Counter[str] = Counter()
+    picked: list[str] = []
+    for chunk_id in ordered_ids:
+        document_id = document_of.get(chunk_id, "")
+        if counts[document_id] >= max_per_document:
+            continue
+        counts[document_id] += 1
+        picked.append(chunk_id)
+        if len(picked) >= top_k:
+            break
+    return picked
+
+
 def build_knowledge_query(report, findings) -> str:
     """Build a compact retrieval query from deterministic findings."""
     labels = [driver.label for driver in report.drivers if driver.contribution < 0][:3]
@@ -660,6 +713,11 @@ def search_knowledge(
     candidate_k: int = 20,
     min_score: float = 0.15,
     tenant_id: str = "demo",
+    retrieval_mode: str = "hybrid_rrf",
+    rrf_k: int = 60,
+    bm25_k1: float = 1.5,
+    bm25_b: float = 0.75,
+    max_per_document: int = 2,
 ) -> KnowledgeSearchOutput:
     started = perf_counter()
     query = normalize_text(payload.query)
@@ -675,38 +733,92 @@ def search_knowledge(
             KnowledgeChunk.embedding_model == embeddings.model,
         )
     ).all()
-    scored: list[tuple[float, KnowledgeChunk, KnowledgeDocument]] = []
+
+    documents: dict[str, tuple[KnowledgeChunk, KnowledgeDocument]] = {}
+    confidences: dict[str, float] = {}
+    dense: list[tuple[float, str]] = []
     for chunk, document in rows:
         embedding = list(chunk.embedding or [])
         # A same-model dimension change leaves old vectors in another space.
         # Do not let them contribute lexical-only hits before reindex.
         if len(embedding) != len(query_vector):
             continue
-        cosine = _cosine(query_vector, embedding)
+        cosine = max(0.0, _cosine(query_vector, embedding))
         lexical = _lexical_score(query, f"{chunk.heading or ''} {chunk.content}")
-        heading_boost = _heading_match(query, chunk.heading)
-        if lexical <= 0 and cosine <= 0.05:
+        if retrieval_mode == "weighted" and lexical <= 0 and cosine <= 0.05:
             continue
-        score = 0.65 * max(0.0, cosine) + 0.35 * lexical + 0.05 * heading_boost
-        scored.append((score, chunk, document))
+        documents[chunk.id] = (chunk, document)
+        # Abstention keeps an interpretable, bounded confidence: a rank-fusion
+        # score cannot express "nothing relevant was found" (a chunk that is rank
+        # 1 in a list of irrelevant chunks still scores high).
+        confidences[chunk.id] = min(
+            1.0,
+            0.65 * cosine
+            + 0.35 * lexical
+            + 0.05 * _heading_match(query, chunk.heading)
+            + 0.03 * _heading_match(query, document.title),
+        )
+        dense.append((cosine, chunk.id))
+    dense.sort(key=lambda item: item[0], reverse=True)
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    candidates = scored[:candidate_k]
-    reranked = [
-        (score + 0.03 * _heading_match(query, document.title), chunk, document)
-        for score, chunk, document in candidates
-    ]
-    reranked.sort(key=lambda item: item[0], reverse=True)
+    if retrieval_mode == "weighted":
+        ordered_ids = sorted(confidences, key=lambda chunk_id: confidences[chunk_id], reverse=True)
+        reported = {chunk_id: confidences[chunk_id] for chunk_id in ordered_ids}
+        ranker_names = ["weighted"]
+    else:
+        pool = max(candidate_k, payload.top_k)
+        index = BM25Index(
+            [
+                (chunk_id, f"{documents[chunk_id][0].heading or ''} {documents[chunk_id][0].content}")
+                for _, chunk_id in dense
+            ],
+            tokenize,
+            k1=bm25_k1,
+            b=bm25_b,
+        )
+        lexical_ids = index.ranked_ids(query, limit=pool)
+        confidence_ids = sorted(confidences, key=lambda chunk_id: confidences[chunk_id], reverse=True)
+        # Three rankers, not two: with only dense + BM25, a chunk that is clearly
+        # best on one signal but absent from the other is averaged away by chunks
+        # that are merely average on both. The confidence ranker keeps a
+        # single-path strong hit competitive (see the ablation in
+        # docs/EVALUATION.md).
+        #
+        # The dense list only votes when the provider can actually rank:
+        # feature hashing returns cosine 0.0 for a relevant short chunk, and an
+        # equal-weight vote from a noise ranker measurably demotes correct hits.
+        rankings: list[list[str]] = []
+        rankers: list[str] = []
+        if getattr(embeddings, "semantic_ranking", True):
+            rankings.append([chunk_id for _, chunk_id in dense[:pool]])
+            rankers.append("dense")
+        rankings.extend([lexical_ids, confidence_ids[:pool]])
+        rankers.extend(["bm25", "confidence"])
+        fused = _reciprocal_rank_fusion(rankings, k=rrf_k)
+        ordered_ids = sorted(fused, key=lambda chunk_id: fused[chunk_id], reverse=True)
+        # Normalise by the score a chunk would get if it ranked first in every
+        # list, so the reported score stays in [0, 1].
+        ceiling = len(rankings) / (rrf_k + 1)
+        reported = {chunk_id: min(1.0, fused[chunk_id] / ceiling) for chunk_id in ordered_ids}
+        ranker_names = rankers
 
     hits: list[KnowledgeHit] = []
-    for rank, (score, chunk, document) in enumerate(reranked[:payload.top_k], start=1):
+    document_of = {chunk_id: document.id for chunk_id, (_, document) in documents.items()}
+    selected = ordered_ids
+    if retrieval_mode != "weighted":
+        selected = _diversify_by_document(
+            ordered_ids, document_of, top_k=payload.top_k, max_per_document=max_per_document,
+        )
+    for rank, chunk_id in enumerate(selected[: payload.top_k], start=1):
+        chunk, document = documents[chunk_id]
         hits.append(KnowledgeHit(
             chunk_id=chunk.id, document_id=document.id, title=document.title,
             source=document.source, version=document.version,
             heading=chunk.heading, content=chunk.content,
-            score=round(score, 4), rank=rank,
+            score=round(min(1.0, reported[chunk_id]), 4), rank=rank,
+            confidence=round(confidences[chunk_id], 4),
         ))
-    no_answer = not hits or hits[0].score < min_score
+    no_answer = not hits or max(hit.confidence or 0.0 for hit in hits) < min_score
     if no_answer:
         # A low-confidence near miss must not become a citable source. The
         # caller sees no_answer=true and an empty hit list instead.
@@ -715,6 +827,8 @@ def search_knowledge(
         query=query, hits=hits, no_answer=no_answer,
         embedding_model=embeddings.model,
         retrieval_ms=round((perf_counter() - started) * 1000, 3),
+        retrieval_mode=retrieval_mode,
+        rankers=ranker_names,
     )
 
 

@@ -20,10 +20,13 @@ export interface KnowledgeDocumentInput {
 export interface KnowledgeHit {
   chunk_id: string; document_id: string; title: string; source: string; version: string;
   heading: string | null; content: string; score: number; rank: number;
+  // 排序分与拒答置信度是两套量：score 只表示融合排名，confidence 用于 no_answer
+  confidence?: number | null;
 }
 export interface KnowledgeCitation extends KnowledgeHit { cited: boolean }
 export interface KnowledgeSearch {
   query: string; hits: KnowledgeHit[]; no_answer: boolean; embedding_model: string; retrieval_ms: number;
+  retrieval_mode?: string; rankers?: string[];
 }
 export interface KnowledgeContext {
   query: string; hits: KnowledgeCitation[]; no_answer: boolean; embedding_model: string; retrieval_ms: number;
