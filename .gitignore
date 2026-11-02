@@ -7,6 +7,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+deploy/auth*/
+deploy/tls*/
 data/
 backend/evals/reports/native-*.json
 node_modules/

@@ -22,7 +22,7 @@
 - [x] 本地一键启动（含依赖安装）、SQLite 全新数据库初始化
 - [x] 核心 HTTP 闭环、并发测试、浏览器验收
 - [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
-- [x] 最终验证记录、README 与面试演示说明
+- [x] 最终验证记录、README 与演示说明
 
 ## 阶段五：接管复验与加固（2026-10-30）
 - [x] 只读接管审计：代码、文档、测试、数据库与 Git 状态
@@ -32,7 +32,7 @@
 - [x] 审计接口与页面支持按 request_id 精确追踪
 - [x] 审批页展示待执行模拟动作（SKU、参考日预算、模拟新预算）
 - [x] 新增 Seed 不删除审批/执行/审计的回归测试
-- [x] 新增交接报告与面试材料
+- [x] 新增交接报告与演示材料
 - [x] 按用户明确要求建立首个 Git 基线（`master` 根提交，67 个文件）
 - [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
 
@@ -99,7 +99,7 @@
 - [x] 前端运营知识库页面、检索/无答案状态、approver 管理、分析/建议知识面板与“LLM 已引用”标记
 - [x] `backend/tests/test_knowledge.py` 覆盖 Seed 幂等、检索/拒答、权限、引用校验、切分、embedding 失败
 - [x] 离线评测 `backend/evals/rag.py`：6 篇文档、8 个查询，hit@3 100%、no-answer 100%、citation validity 100%、网络 0
-- [x] 后端 142 通过、前端 15 通过、生产构建通过；契约、架构、评测、README、面试材料同步
+- [x] 后端 142 通过、前端 15 通过、生产构建通过；契约、架构、评测、README、演示材料同步
 
 ## 阶段十一：持久化任务、认证租户、可观测性与工程化（2026-11-01）
 - [x] 分析改为数据库任务队列：条件 UPDATE 抢占、`worker_id`/`lease_until` 心跳、`attempts`/`max_attempts`、指数退避、dead-letter、启动与轮询回收过期租约

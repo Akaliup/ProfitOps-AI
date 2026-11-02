@@ -121,21 +121,21 @@ docker compose -f compose.yaml config --quiet
 
 - 真实 MCP Server（README 未声称已接入）。
 - DeepSeek Provider 已实现（Phase 2A）；Phase 2B 已建立 4 个合成案例的评测系统并完成真实调用，最新 `max_tokens=4000` 三次重复为 9/9 `llm_success`，详见 `docs/EVALUATION.md`。仍未做人工语义标注和跨模型对比。
-- 生产身份（OIDC）、租户隔离、权限后台、速率限制、密钥轮换。
-- Alembic 增量迁移；当前是 `create_all` + 版本化 Seed。
-- 持久化任务队列；分析使用 FastAPI BackgroundTasks，进程重启会把中断分析标记为 failed。
+- 生产身份（OIDC）、权限后台、密钥轮换。
+- Alembic 已建立基线与租户幂等迁移；后续模型变更仍需补迁移文件，不能依赖 `create_all`。
+- 持久化任务队列已实现（`python -m app.worker`），但只验证了单机单 worker。
 - 数据导入、汇率、多币种、税项。
-- 分析/建议/审计列表的单租户演示视图（所有已认证身份可见全部数据）。
+- 多租户数据隔离已实现（业务表、审批、执行、审计按 `tenant_id` 过滤），但没有租户管理后台；前端演示仍固定使用 demo 身份。
 
 ## 7. 当前最严重的问题（按风险排序）
 
 1. **Git 基线已建立**：接管时仓库零 commit、全部文件未跟踪；用户随后明确要求提交，已在 `master` 建立根提交（67 个文件）。后续提交仍须遵守 `AGENTS.md`：由用户明确要求后才提交。
 2. **Docker/PostgreSQL 路径已实测**：2026-10-31 已在本机 Docker Desktop 完成实际启动与 11/11 HTTP 冒烟；其他机器仍需复验。详见 `docs/TEST_REPORT.md`。
-3. **演示认证不是生产安全方案**：`/api/demo` 会返回公开演示 token；没有租户隔离、限流、审计防篡改。文档已明确标注，不能把它说成生产能力。
-4. **LLM 已有门禁评测，但样本仍小**：Phase 2A 实现了 DeepSeek Provider、结构化输出和证据引用校验；Phase 2B 增加了 4 个合成案例、离线负向对照和真实三次重复（见 `docs/EVALUATION.md`）。最新 4000 复测为 9/9 通过，但只有 3 个异常案例、每个 3 次，没有人工语义标注或跨模型对比；面试时仍不能把规则输出说成 LLM 输出，应展示 `llm_success` 与降级状态的区分。
-5. **没有增量迁移**：修改模型后旧数据库不会自动加列/加约束；当前依赖删除数据库重建。生产化前必须补 Alembic。
-6. **后台任务是进程内的**：多 worker 部署时 BackgroundTasks 不会跨进程协调；重启会中断分析。MVP 可接受，生产需要队列 + worker。
-7. **单租户视图**：所有身份共享分析/建议/审计列表；没有按 actor 或 tenant 过滤。
+3. **演示认证不是生产安全方案**：本地 `/api/demo` 返回公开演示 token；云端覆盖用 Nginx Basic Auth 保护该入口并使用随机 token，但仍没有 OIDC/SSO/MFA，不能把它说成生产能力。
+4. **LLM 已有门禁评测，但样本仍小**：Phase 2A 实现了 DeepSeek Provider、结构化输出和证据引用校验；Phase 2B 增加了 4 个合成案例、离线负向对照和真实三次重复（见 `docs/EVALUATION.md`）。最新 4000 复测为 9/9 通过，但只有 3 个异常案例、每个 3 次，没有人工语义标注或跨模型对比；演示时仍不能把规则输出说成 LLM 输出，应展示 `llm_success` 与降级状态的区分。
+5. **Alembic 已有基线，但历史库需显式升级**：新库执行 `0001_baseline` + `0002_tenant_scoped_idempotency`；旧库必须先备份，再按 `docs/RUNBOOK.md` 第 2 节 `stamp`/`upgrade`，不能依赖启动兼容迁移修改唯一约束。
+6. **独立 worker 已实现，但只验证了单机单 worker**：`python -m app.worker` 消费持久化队列，API 可关闭内联执行；多副本 worker、共享限流/指标和故障切换仍未验证。
+7. **多租户已实现，但没有租户管理后台**：分析/建议/执行/审计按 `tenant_id` 过滤；前端演示仍固定 demo 身份，不等于正式用户管理。
 
 ## 8. 下一步开发顺序（建议）
 
@@ -155,7 +155,7 @@ docker compose -f compose.yaml config --quiet
 
 7. ~~抽象 LLM Provider 并接入真实 DeepSeek~~（Phase 2A 已完成真实调用；Phase 2B 已完成 4 案例门禁评测与数值一致性校验，剩余扩大样本、人工语义标注和跨模型对比）。
 8. 增加第二种演示场景（退款/履约驱动），让规则引擎与 LLM 的泛化能力在 UI 上可见。
-9. 增加 MCP Server（如果面试岗位强调工具协议），复用现有 Tool Registry 的 Schema。
+9. 增加 MCP Server（如果需要工具协议），复用现有 Tool Registry 的 Schema。
 10. 增加利润计算的属性测试与更多边界样本。
 
 ## 9. 关键文件地图
@@ -184,7 +184,6 @@ docs/CONTRACT.md           API/数据库/状态机契约
 docs/ARCHITECTURE.md       架构与关键决策
 docs/KNOWLEDGE.md          RAG 数据模型、检索、引用校验、API 与限制
 docs/TEST_REPORT.md        实际验证记录
-docs/INTERVIEW.md          面试讲解与高频追问
 ```
 
 ## 10. 本轮接管变更（2026-10-30）
@@ -199,7 +198,7 @@ docs/INTERVIEW.md          面试讲解与高频追问
 - `frontend/src/App.test.tsx`：新增动作预览与审计过滤测试（6 项）。
 - `frontend/src/styles.css`：审计过滤输入样式。
 - `docs/CONTRACT.md`、`docs/ARCHITECTURE.md`、`docs/TEST_REPORT.md`、`TASKS.md`、`README.md`：同步契约、验证记录与交付状态。
-- 新增本文件与 `docs/INTERVIEW.md`。
+- 新增本文件与运行/演示说明。
 - 按用户明确要求建立首个 Git 基线：`master` 根提交，67 个文件；`.env`、`data/`、`node_modules` 等运行文件保持忽略。
 
 ## 11. 运行与演示入口
@@ -214,7 +213,7 @@ python scripts/dev.py
 
 演示身份：`demo-analyst`（分析师）/ `demo-approver`（审批负责人）。所有执行均为 simulation，不调用真实广告、采购或支付系统。
 
-完整演示脚本与面试问答见 `docs/INTERVIEW.md`。
+完整演示步骤见 `docs/RUNBOOK.md`；端到端验收证据见 `docs/FINAL_DEMO_ACCEPTANCE.md`。
 
 ## 12. Phase 2A：接入 DeepSeek 真实 LLM（2026-10-31）
 

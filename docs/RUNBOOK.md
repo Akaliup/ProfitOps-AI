@@ -19,7 +19,14 @@ python scripts/smoke.py --base-url http://127.0.0.1:8010
 docker compose down
 ```
 
-`/health` 只检查数据库连通性，不返回密钥；`/api/demo` 可匿名读取 demo 租户概览。其余 API 需要 Bearer token 或 `POST /api/auth/login` 换取的 JWT。
+云端单机（独立 worker、一次性 init、只发布 HTTPS）使用覆盖文件，完整步骤见 [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md)：
+
+```bash
+python scripts/cloud_prepare.py --env-file .env.cloud --auth-dir deploy/auth --tls-dir deploy/tls --domain <domain> --https-bind 0.0.0.0 --https-port 443 --tls-mode existing
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud up -d --build
+```
+
+`/health` 只检查数据库连通性，不返回密钥；`/api/demo` 在云端覆盖中位于 Nginx Basic Auth 之后，不再匿名可读。其余 API 需要 Bearer token 或 `POST /api/auth/login` 换取的 JWT。
 
 ## 2. 数据库迁移
 
@@ -49,12 +56,14 @@ SQLite 备份：
 sqlite3 data/profitops.db ".backup 'data/profitops-backup.db'"
 ```
 
-PostgreSQL 备份（Compose）：
+PostgreSQL 备份（本地 Compose）：
 
 ```bash
 docker compose exec -T db pg_dump -U profitops_demo profitops > profitops.sql
 docker compose exec -T db psql -U profitops_demo profitops < profitops.sql
 ```
+
+云端覆盖使用独立项目名和随机数据库账号，备份/恢复命令见 [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) 第 7 节；不要对含审批/审计数据的卷执行 `down -v`。
 
 ## 3. 可观测性
 
@@ -158,9 +167,37 @@ python scripts/smoke.py --base-url http://127.0.0.1:8010
 
 CI 使用空 `LLM_API_KEY` 和临时测试数据库；真实 LLM 调用必须单独授权并记录次数，不得进入自动 CI。PR 不自动合并，合并前需要 CI 通过和人工审查。
 
-## 8. 已知限制
+## 8. 云端单机 Compose（准备）
+
+`compose.cloud.yaml` 是单机云端覆盖：关闭 API 内 worker 与 BackgroundTasks，新增独立 `worker`（`python -m app.worker`）和一次性 `init`（Alembic + `python -m app.init`），只发布 frontend 的 HTTPS 端口；backend、worker、db 不映射宿主机端口。完整部署、备份、排障和验收记录见 [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md)。
+
+首次初始化必须由 `init` 完成后再启动 API/worker。全新数据库上并发执行 `initialize_database` 可能撞到 `table users already exists`；`init` 服务的 `service_completed_successfully` 依赖就是部署层的规避方式。不要绕过它直接对空库启动多个应用进程。
+
+常用命令：
+
+```bash
+# 生成 .env.cloud、htpasswd、TLS 材料（不提交）
+python scripts/cloud_prepare.py --env-file .env.cloud --auth-dir deploy/auth --tls-dir deploy/tls --domain <domain> --https-bind 0.0.0.0 --https-port 443 --tls-mode existing
+
+# 启动 / 状态 / 日志
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud up -d --build
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud ps
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud logs -f --tail=100 backend worker frontend
+
+# 只停 worker；任务保留 queued；恢复后继续消费
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud stop worker
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud start worker
+
+# 停止但保留持久卷（不要加 -v）
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud down
+```
+
+云端访问入口是 Nginx HTTPS + Basic Auth；`/api/` 仍使用 Bearer token。演示 token 由随机 `.env.cloud` 生成，`/api/demo` 位于 Basic Auth 之后，不能把 demo token 当正式认证。本轮没有云服务器凭据，未实际部署公网；本机隔离栈的十项验收结果见 [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) 第 10 节。
+
+## 9. 已知限制
 
 - 限流桶和指标注册表都是进程内状态；多副本部署需要共享限流与指标聚合。独立 worker 已提供 CLI，但多副本 worker 的并发与指标聚合仍需部署侧验证。
+- 云端覆盖是单机单 API + 单 worker，不是高可用；Basic Auth 只是演示访问门，不是正式 IAM。
 - 没有 OIDC/SSO、密码重置、MFA、密钥轮换、租户管理后台和审计留存策略。
 - 没有分布式追踪/OpenTelemetry；日志目前只输出到进程 stdout。
 - Alembic 基线只覆盖当前 schema；后续变更必须新增显式 revision，不能修改已应用的基线。

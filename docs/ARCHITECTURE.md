@@ -17,7 +17,7 @@ React 工作台 (5180) --真实 HTTP--> FastAPI (8010) --SQLAlchemy--> SQLite / 
 
 ## 为什么选择 SQLite 默认、PostgreSQL 可选
 
-面试演示需要一条无需外部服务即可复现的路径，因此本地默认 SQLite（WAL、外键、30s busy timeout）。生产式容器路径使用 PostgreSQL 16 + psycopg，Compose 提供健康检查和持久卷。数据库事实模型、唯一约束和条件 UPDATE 在两者通用。2026-10-31 已在本机 Docker Desktop 完成 Compose 实际运行验收（PostgreSQL 16 + 后端 + nginx 前端，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）；其他机器仍需复验，详见 `docs/TEST_REPORT.md`。
+演示验收需要一条无需外部服务即可复现的路径，因此本地默认 SQLite（WAL、外键、30s busy timeout）。生产式容器路径使用 PostgreSQL 16 + psycopg，Compose 提供健康检查和持久卷。数据库事实模型、唯一约束和条件 UPDATE 在两者通用。2026-10-31 已在本机 Docker Desktop 完成 Compose 实际运行验收（PostgreSQL 16 + 后端 + nginx 前端，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）；其他机器仍需复验，详见 `docs/TEST_REPORT.md`。
 
 ## 利润口径与归因
 
