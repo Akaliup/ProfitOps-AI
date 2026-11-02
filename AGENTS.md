@@ -8,7 +8,7 @@
 - 服务端决定角色。演示 Bearer token 固定映射为 analyst / approver，不信任角色请求头。
 - 审批和执行依赖条件 UPDATE、事务和唯一约束；模拟执行记录是唯一副作用。
 - 用独立数据库测试；不能清空用户运行库。Seed 可重复执行且不删除审批、审计数据。
-- 相关验证：`python -m pytest backend/tests -q`、`npm --prefix frontend test`、`npm --prefix frontend run build`、`python scripts/smoke.py`。
+- 相关验证：`python -m pytest backend/tests -q`、`npm --prefix frontend test`、`npm --prefix frontend run build`、`python scripts/mcp_check.py`、`python scripts/smoke.py`。
 - 不推送远端，不部署公网；提交须由用户明确要求。
 
 ## PR 与审查规范

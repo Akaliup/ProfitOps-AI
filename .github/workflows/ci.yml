@@ -47,6 +47,9 @@ jobs:
       - name: Run backend tests
         run: python -m pytest backend/tests -q
 
+      - name: Run MCP stdio smoke
+        run: python scripts/mcp_check.py
+
       - name: Run offline LLM replay evaluation
         env:
           LLM_API_KEY: ""

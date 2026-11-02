@@ -2,7 +2,7 @@
 
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从真实经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 
-LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、向量 + 词法混合检索、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
+LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、向量 + 词法混合检索、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。另提供只读 **MCP Server**，通过 stdio 暴露利润分析、SKU 明细、RAG 检索和审批状态查询，不暴露审批/执行写工具。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
 
 ![经营总览](docs/screenshots/overview.png)
 
@@ -71,6 +71,17 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 | `KNOWLEDGE_MIN_SCORE` | `0.15` | 低于阈值返回 `no_answer` |
 
 完整设计、API、打分公式与限制见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)。
+
+### MCP Server（只读，stdio）
+
+`backend/app/mcp_server.py` 通过 stdio 暴露同一套 Tool Registry 的四个只读工具：`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge` 和 `get_approval_status`。RAG 检索与 HTTP/LangGraph 使用同一套知识库和 `chunk_id`；建议写入、审批和模拟执行不会暴露给 MCP 客户端。角色由 `PROFITOPS_MCP_ROLE` 在服务端决定，默认 `analyst`。
+
+```bash
+PYTHONPATH=backend .venv/Scripts/python.exe -m app.mcp_server
+.venv/Scripts/python.exe scripts/mcp_check.py
+```
+
+MCP 进程不建表、不 Seed，使用前需先初始化数据库；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。完整工具、客户端配置、安全边界和实测结果见 [docs/MCP.md](docs/MCP.md)。
 
 降级状态在 API 与前端明确区分：`llm_success`、`deterministic_fallback`、`llm_failed`、`not_requested`。Agent 工作台的“Agent 执行轨迹”面板展示轮次、模型、`finish_reason`、工具名、参数摘要、成功/失败、错误码、单轮 token 与耗时、总 token/总耗时和终止原因；失败调用不会被显示成成功，参数与结果只显示有界摘要。真实调用一次并查看模型、耗时、Token 与证据引用：
 
@@ -243,24 +254,25 @@ npm --prefix frontend test
 npm --prefix frontend run build
 .venv/Scripts/python.exe backend/evals/rag.py      # RAG 检索评测，离线
 .venv/Scripts/python.exe backend/evals/replay.py   # LLM 录制响应回放，离线
+.venv/Scripts/python.exe scripts/mcp_check.py      # MCP stdio 真实子进程检查
 .venv/Scripts/python.exe scripts/migrate.py upgrade head
 .venv/Scripts/python.exe scripts/smoke.py          # 需服务已启动
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果（2026-11-02）：后端 263 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、前端 17 通过、生产构建通过、独立临时数据库 HTTP 冒烟 15/15；云端单机 Compose 在隔离栈完成十项验收（独立 worker、API/worker 分离、审批幂等、审计、运维看板、数据库重启持久化、端口最小暴露），详见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果（2026-11-02，MCP 分支）：后端 272 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、MCP 专项 9 通过、MCP 真实 stdio 检查通过、前端 17 通过、生产构建通过。HTTP 冒烟 15/15 与云端单机 Compose 十项验收是上一轮既有结果，本轮未重新执行；详见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
 ```
-backend/app/         FastAPI、模型、利润计算、知识库、工具、LangGraph、LLM Provider、审批执行、审计
+backend/app/         FastAPI、模型、利润计算、知识库、工具、LangGraph、LLM Provider、MCP Server、审批执行、审计
 backend/tests/       单元、集成、工作流、并发、知识库、评测
 backend/evals/       LLM Agent 评测样本、RAG/回放评测、Runner 与报告
 backend/migrations/  Alembic 基线与增量迁移
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
-scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、真实 LLM 验证
-docs/                契约、架构、运行手册、云端部署、知识库、验证记录、截图
+scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、MCP/真实 LLM 验证
+docs/                契约、架构、运行手册、云端部署、知识库、MCP、验证记录、截图
 compose.yaml         PostgreSQL + 后端 + 前端
 compose.cloud.yaml   云端单机覆盖：独立 worker、一次性 init、HTTPS 入口
 scripts/cloud_prepare.py 生成非 Git 的云端密钥、htpasswd 与 TLS 材料
