@@ -2,6 +2,69 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+## 2026-11-02 PR #9 成本与调用口径收口（Claude Code）
+
+分支 `feat/final-agent-validation`，PR #9，基线 `7da915e`。本轮只修复 native Function Calling 的逐轮成本完整性与模型调用/Provider 请求计数口径，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史运行数据。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | **266 passed, 0 failed, 0 skipped**（114.35s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 同上，使用 `.venv311/Scripts/python.exe` | **266 passed, 0 failed, 0 skipped**（189.64s，1 个第三方 DeprecationWarning） |
+| 运维汇总定向回归 | `.venv/Scripts/python.exe -m pytest backend/tests/test_ops.py -q` | **17 passed**（8.01s） |
+| 前端单元/交互 | `npm --prefix frontend test -- --run` | **16 passed**（1 file，9.15s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | **PASS**；Vite 6.4.5，2252 modules，4.57s |
+| Playwright 浏览器 E2E | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e` | **7 passed**（21.7s）；独立临时库，`LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| 真实 LLM | 未调用 | **NOT RUN**；本轮没有真实调用授权，付费 token 0 |
+| GitHub Actions | 推送后由 `.github/workflows/ci.yml` 执行 | 推送后确认，不以本地结果代替 CI |
+
+本轮定向回归覆盖：native 两轮均有 Usage 且可定价时 `cost.status=complete`，总额为两轮独立估算之和；第一轮有 Usage、第二轮缺失时 `partial`、`amount_usd=null`，`known_subtotal_usd` 只含第一轮；一轮成功、一轮失败且失败轮缺 Usage 时同样为 `partial`；native 两轮但 `attempts=3` 时 `model_calls=2`、`provider_requests=3`、`provider_retries=1`；非 native 单次逻辑调用 `attempts=3` 时 `model_calls=1`、`provider_requests=3`；请求发出前即失败（`attempts=0`、无 Usage、无轮次）不计入模型调用与成本分母。`verify_llm` 成功事件与随后终止事件的去重测试已改为两轮 native 记录，确保不会把同一次运行重复计数。
+
+## 2026-11-02 PR #9 运维汇总 P2 修复复验（Claude Code）
+
+分支 `feat/final-agent-validation`，PR #9，基线 `e99a016`。本轮只修复 `GET /api/ops/summary` 的成本口径、审计历史去重与查询边界，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史失败数据。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12.8，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | **260 passed, 0 failed, 0 skipped**（105.95s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11.16，含 PostgreSQL） | 同上，使用 `.venv311/Scripts/python.exe` | **260 passed, 0 failed, 0 skipped**（175.21s，1 个第三方 DeprecationWarning） |
+| 运维汇总定向回归 | `.venv/Scripts/python.exe -m pytest backend/tests/test_ops.py -q` | **11 passed**（5.53s） |
+| SQLite 迁移 | `.venv/Scripts/python.exe -m pytest backend/tests/test_migrations.py -q` | **4 passed**（1.05s） |
+| PostgreSQL 迁移与租户幂等 | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests/test_postgres_migrations.py backend/tests/test_postgres_idempotency.py -q` | **3 passed**（3.40s），使用一次性 schema |
+| 前端单元/交互 | `npm --prefix frontend test` | **16 passed**（1 file，8.90s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | **PASS**；Vite 6.4.5，2252 modules，4.83s |
+| Playwright 浏览器 E2E | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e` | **7 passed**（22.5s）；独立临时库，`LLM_PROVIDER=disabled`、`LLM_API_KEY=` |
+| HTTP 冒烟 | 独立临时 SQLite + 8015 端口 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py --base-url http://127.0.0.1:8015` | **15/15 passed**，`failed=0` |
+| 空白字符 | `git diff --check` | 通过 |
+| 真实 LLM | 未调用 | **NOT RUN**；本轮没有真实调用授权，付费 token 0 |
+| GitHub Actions | 推送后由 `.github/workflows/ci.yml` 执行 | 推送后确认，不以本地结果代替 CI |
+
+本轮定向回归覆盖：无异常/数据不足/未配置模型不进入成本分母；一次可定价调用加一次未知价格调用时 `amount_usd=null` 且 `known_subtotal_usd` 单独展示；同一 Analysis 前两次失败、第三次成功时历史调用、Token 与成本不覆盖也不重复；成功调用缺少 Usage 时标记 `partial`；租户 A/B 的 LLM 审计不串读；250 条 Analysis 下统计正确且最近失败明细限制为 10 条。汇总改为 SQL 聚合与分批流式读取，窗口内审计事件按 `created_at <= end` 截断，旧数据仅在窗口内没有审计事件时回退读取 `Analysis.result.llm`。
+
+## 2026-11-02 最终功能收尾验收（feat/final-agent-validation）
+
+基线：`origin/master` 合并 PR #8 后的 `3876cc6`。本轮在独立分支执行；后端使用 `.venv`（Python 3.12.8）与 `.venv311`（Python 3.11.16，`backend/requirements.lock.txt`），PostgreSQL 使用本机 `profitops-pg16-test`（PostgreSQL 16，端口 55432，测试库 `profitops_test`）。除真实 DeepSeek 评测外，不读写 `data/profitops.db`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量（Python 3.12，含 PostgreSQL） | `PROFITOPS_TEST_POSTGRES_URL=... .venv/Scripts/python.exe -m pytest backend/tests -q` | **253 passed, 0 failed, 0 skipped**（94.59s，1 个第三方 DeprecationWarning） |
+| 后端全量（Python 3.11，含 PostgreSQL） | 同上，使用 `.venv311/Scripts/python.exe` | **253 passed, 0 failed, 0 skipped**（161.11s，1 个第三方 DeprecationWarning） |
+| SQLite / PostgreSQL 迁移 | `pytest backend/tests/test_migrations.py backend/tests/test_postgres_migrations.py -q` | **6 passed**（SQLite 4 + PostgreSQL 2，3.22s） |
+| Worker 重试 / fencing / 死信 | `pytest backend/tests/test_worker.py -q` | **22 passed**（12.35s） |
+| JWT / RBAC / 多租户 | `pytest backend/tests/test_auth_tenant.py -q` | **13 passed**（10.27s） |
+| 可观测性 / 限流 / 运维汇总 | `pytest backend/tests/test_observability.py backend/tests/test_ops.py -q` | **24 passed**（8.02s） |
+| 原生离线回归 | `PYTHONPATH=backend .venv/Scripts/python.exe backend/evals/runner.py native` | **PASS**：37 runs；正常 3/3、负向对照 34/34；task completion 1.0；safety 1.0；网络调用 0，付费 token 0 |
+| 真实 DeepSeek 评测 | `runner.py native --real --authorize-real-calls ... --max-calls 6`（分 3 段执行） | **执行完成**：12/12 次预算内调用；工具选择 6/6、参数 12/12、证据 2/2；任务完成 1/3；0 副作用；估算 US$0.009825。详见 `docs/AGENT_REAL_EVALUATION.md` |
+| BGE-M3 真实检索对比 | `PYTHONPATH=backend .venv/Scripts/python.exe backend/evals/rag_real.py --provider both --json docs/rag-real-embedding-2026-11-02.json` | **BLOCKED**：Ollama 未安装 `bge-m3`，真实 HTTP 404；hashing 基线 COMPLETED（42 查询，hit@1 97.22%、hit@3 100%）。详见 `docs/RAG_REAL_EMBEDDING_REPORT.md` |
+| 前端单元测试 | `npm --prefix frontend test` | **16 passed**（1 file，8.38s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | **PASS**；2252 modules，5.12s |
+| Playwright 浏览器 E2E | `PROFITOPS_E2E_DATABASE_URL=sqlite:///... npm --prefix frontend run test:e2e` | **7 passed**（17.5s）；独立临时库，`LLM_PROVIDER=disabled`、`LLM_API_KEY=`；含 Agent 运维页角色限制、真实聚合、Trace 跳转 |
+| HTTP 冒烟 | 独立临时 SQLite + 8010 端口 + `LLM_PROVIDER=disabled`：`python scripts/smoke.py` | **15/15 passed**，`failed=0` |
+| 后端 Docker 镜像 | `docker build -f backend/Dockerfile -t profitops-backend:acceptance .` | **PASS**；首次因 pip 索引响应截断失败，重试成功 |
+| 前端 Docker 镜像 | `docker build -f frontend/Dockerfile -t profitops-frontend:acceptance .` | **PASS** |
+| GitHub Actions | 推送后由 `.github/workflows/ci.yml` 执行 | **NOT RUN（本轮尚未推送）**；不把本地结果写成 CI 结果 |
+
+本轮 E2E 暴露并修复了两个测试基础设施问题：Playwright 同一 spec 的多个 worker 会并发执行 `beforeAll`，导致 fixture 租户唯一键竞争；共享数据库下测试依赖“最新分析”顺序。修复为 `fullyParallel: false`（同一 spec 内串行、不同 spec 仍并行）、fixture 插入竞争重试，以及按 fixture ID 显式选择失败分析。没有放宽生产逻辑或断言。
+
 ## 2026-11-02 最终验收收口（Claude Code）
 
 分支 `feat/platform-reliability`，基线 `dd104c2`，PR #8。本轮只补齐验收证据：浏览器 E2E、Python 3.11、历史库重复文档、真实 LLM 状态；不新增业务功能，不调用真实 LLM，不修改 `data/profitops.db`。

@@ -15,10 +15,13 @@ def reset_metrics():
 @pytest.fixture
 def client(tmp_path):
     # Never call a real provider from the default test fixture.
+    # The polling worker stays off so tests are deterministic, but the request
+    # path must still run the job inline: the fixture's assertions depend on a
+    # POST /api/analyses reaching waiting_approval before it returns.
     app = create_app(Settings(
         database_url=f"sqlite:///{tmp_path / 'test.db'}", auto_seed=True, llm_api_key="",
         analysis_worker_enabled=False, analysis_max_attempts=1,
-    ))
+    ), inline_jobs=True)
     with TestClient(app) as http:
         yield http
 

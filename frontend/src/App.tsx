@@ -1,21 +1,28 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown, CircleDollarSign, Clock3, Database, FileCheck2, Fingerprint, LayoutDashboard, LoaderCircle, Moon, Play, RefreshCw, Search, ShieldCheck, Sparkles, Sun, Terminal, TriangleAlert, X } from 'lucide-react'
 import { api, ApiError } from './api'
-import type { Analysis, Audit, Demo, Execution, Identity, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, Identity, JobStatus, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope } from './types'
 import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels, terminationLabels } from './format'
 import './styles.css'
 
 const TrendChart = lazy(() => import('./components/TrendChart').then(module => ({ default: module.TrendChart })))
 
-type Page = 'overview' | 'agent' | 'approvals' | 'knowledge' | 'audit'
+type Page = 'overview' | 'agent' | 'approvals' | 'knowledge' | 'audit' | 'ops'
+const jobStatusOrder: JobStatus[] = [
+  'queued', 'running', 'waiting_approval', 'completed', 'insufficient_data', 'failed',
+  'approved', 'rejected', 'executed', 'execution_failed',
+]
 const pages = [
   { id: 'overview' as const, label: '经营总览', icon: LayoutDashboard, detail: '把增长，变成利润。' },
   { id: 'agent' as const, label: 'Agent 工作台', icon: Sparkles, detail: '从经营信号，到有据可依的行动。' },
   { id: 'approvals' as const, label: '审批与执行', icon: FileCheck2, detail: '每一步行动，都由你掌控。' },
+  { id: 'ops' as const, label: 'Agent 运维', icon: Activity, detail: '任务、模型与成本的运行视图。' },
   { id: 'knowledge' as const, label: '运营知识库', icon: BookOpen, detail: '让建议有规则可依，让引用可追溯。' },
   { id: 'audit' as const, label: '审计日志', icon: Fingerprint, detail: '让每一次决策都有迹可循。' },
 ]
 const busyStatuses = ['queued', 'running']
+const usd = (value: number) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value)
+const countText = (value: number | null) => value == null ? '暂无数据' : value.toLocaleString('zh-CN')
 
 function Status({ value }: { value: string }) {
   return <span className={`status status-${value}`}><span aria-hidden="true">{['executed', 'completed', 'approved'].includes(value) ? '✓' : ['failed', 'execution_failed', 'rejected'].includes(value) ? '×' : '◷'}</span>{statusLabels[value] ?? value}</span>
@@ -35,6 +42,9 @@ export default function App() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [audits, setAudits] = useState<Audit[]>([])
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([])
+  const [ops, setOps] = useState<OpsSummary | null>(null)
+  const [opsHours, setOpsHours] = useState(24)
+  const [opsLoading, setOpsLoading] = useState(false)
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [knowledgeResults, setKnowledgeResults] = useState<KnowledgeSearch | null>(null)
   const [knowledgeDraft, setKnowledgeDraft] = useState({ title: '', source: 'manual://profitops/knowledge', version: 'v1', content: '' })
@@ -49,6 +59,7 @@ export default function App() {
   const [reason, setReason] = useState('已复核证据，批准受控模拟')
   const [dark, setDark] = useState(false)
   const loadSequence = useRef(0)
+  const opsSequence = useRef(0)
   const selected = recommendations.find(item => item.id === selectedId) ?? recommendations[0]
   const pending = recommendations.filter(item => item.status === 'pending_approval').length
   const isApprover = identity?.role === 'approver'
@@ -87,7 +98,26 @@ export default function App() {
     finally { if (sequence === loadSequence.current) setLoading(false) }
   }, [demo, identity, scope, auditFilter, showError])
 
+  const loadOps = useCallback(async () => {
+    if (!identity || identity.role !== 'approver') return
+    // A slower response for a previous window must never replace the window
+    // the operator has already switched to.
+    const sequence = ++opsSequence.current
+    setOpsLoading(true); setError('')
+    try {
+      const next = await api.ops(identity.token, opsHours)
+      if (sequence === opsSequence.current) setOps(next)
+    } catch (value) {
+      if (sequence === opsSequence.current) showError(value)
+    } finally {
+      if (sequence === opsSequence.current) setOpsLoading(false)
+    }
+  }, [identity, opsHours, showError])
+
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    if (page === 'ops' && isApprover) void loadOps()
+  }, [page, isApprover, loadOps])
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
   }, [dark])
@@ -129,6 +159,16 @@ export default function App() {
       const result = await api.retryAnalysis(identity.token, analysis.id)
       setAnalysis(result)
       setNotice('失败任务已重新排队，工作流会从新的一次尝试开始。')
+    })
+  }
+  function openAnalysis(id: string) {
+    if (!identity) return
+    void action('ops-trace', async () => {
+      const value = await api.analysis(identity.token, id)
+      setAnalysis(value)
+      if (value.recommendation_id) setSelectedId(value.recommendation_id)
+      setPage('agent')
+      setNotice(`已打开分析 ${id.slice(0, 8)} 的执行轨迹。`)
     })
   }
   function seed() {
@@ -209,7 +249,7 @@ export default function App() {
     <main>
       <header className="topbar"><div className="breadcrumb">工作空间 <span>/</span> <strong>{activePage.label}</strong></div><div className="topbar-actions"><span className="environment"><i />演示环境 · 仅模拟</span><label className="identity-select"><ShieldCheck size={14} /><select aria-label="演示身份" value={identity?.id ?? ''} onChange={event => { const next = demo?.identities.find(item => item.id === event.target.value); if (next) { setIdentity(next); setNotice(`已切换为${next.name}；权限由后端 token 校验`); setError('') } }}>{demo?.identities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></header>
       <div className="content">
-        <div className="page-title"><div><div className="eyebrow">PROFIT INTELLIGENCE</div><h1>{activePage.label}<span className="title-dot">.</span></h1><p>{activePage.detail}</p></div><div className="title-actions"><button className="button secondary" onClick={() => { setError(''); void refresh() }} disabled={loading || !!busy}><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新数据</button>{!['audit', 'knowledge'].includes(page) && renderButton()}</div></div>
+        <div className="page-title"><div><div className="eyebrow">PROFIT INTELLIGENCE</div><h1>{activePage.label}<span className="title-dot">.</span></h1><p>{activePage.detail}</p></div><div className="title-actions"><button className="button secondary" onClick={() => { setError(''); if (page === 'ops') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}><RefreshCw size={15} className={loading || opsLoading ? 'spin' : ''} />刷新数据</button>{!['audit', 'knowledge', 'ops'].includes(page) && renderButton()}</div></div>
         {error && <div className="alert error" role="alert"><TriangleAlert size={18} /><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}><X size={16} /></button></div>}
         {notice && <div className="alert notice" role="status"><CheckCircle2 size={18} /><span>{notice}</span><button className="icon-button" aria-label="关闭通知" onClick={() => setNotice('')}><X size={16} /></button></div>}
         {(page === 'overview' || page === 'agent') && <div className="filter-bar"><div><label>统计周期<select aria-label="统计周期" value={scope.days} onChange={event => setScope({ ...scope, days: Number(event.target.value) })}><option value={30}>最近 30 个数据日</option><option value={7}>最近 7 个数据日</option></select></label><label>店铺<select aria-label="店铺" value={scope.storeId} onChange={event => setScope({ ...scope, storeId: event.target.value })}><option value="">全部店铺</option>{demo?.stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label></div><span>{metrics ? `${metrics.period.start_date} — ${metrics.period.end_date} · UTC · USD` : '等待数据连接'}</span></div>}
@@ -234,6 +274,70 @@ export default function App() {
         {page === 'agent' && <div className="agent-layout"><section className="panel workflow-panel"><div className="panel-heading"><div><h2><Sparkles size={18} />Profit Agent</h2><p>LangGraph · {analysis?.result?.llm?.status === 'llm_success' ? `DeepSeek ${analysis.result?.llm?.model}` : demo?.llm?.configured ? `DeepSeek ${demo.llm.model} · 待调用` : '确定性规则引擎'}</p></div>{analysis && <Status value={analysis.status} />}</div>{!analysis ? <Empty title="开始一次利润诊断" text="Agent 会读取数据、计算利润、核对证据，并将建议交给你审批。">{renderButton('启动分析')}</Empty> : <><div className="run-meta"><span>RUN {analysis.id.slice(0, 8)}</span><span>尝试 {analysis.attempts}/{analysis.max_attempts}</span><span>{dateTime(analysis.created_at)}</span>{analysis.next_run_at && <span>下次重试 {dateTime(analysis.next_run_at)}</span>}</div><div className="workflow-steps">{analysis.steps.map((step, index) => <div className={`workflow-step step-${step.status}`} key={`${step.name}-${index}`}><div className="step-node">{step.status === 'completed' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : <LoaderCircle className="spin" size={14} />}</div><div className="step-body"><div><strong>{step.label}</strong><span>{step.duration_ms == null ? '运行中' : `${step.duration_ms.toFixed(1)} ms`}</span></div><p>{step.summary ?? '正在执行工具…'}</p><code>{step.name}</code></div></div>)}</div>{busyStatuses.includes(analysis.status) && <div className="running-hint"><LoaderCircle className="spin" size={15} />正在通过后端工作流处理…</div>}{analysis.error && <div className="alert error">{analysis.error.code}：{analysis.error.message}</div>}{analysis.status === 'failed' && <button className="button secondary" onClick={retryAnalysis} disabled={!!busy}>{busy === 'analysis-retry' ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新排队执行</button>}<div className="run-footer"><Fingerprint size={14} /><span>请求 ID：{analysis.request_id}</span></div></>}
           {analyses.length > 1 && <label className="history-picker">查看历史分析<select aria-label="历史分析" value={analysis?.id ?? ''} onChange={event => { const value = analyses.find(item => item.id === event.target.value); if (value) setAnalysis(value) }}>{analyses.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 8)} · {statusLabels[item.status]} · {dateTime(item.created_at)}</option>)}</select></label>}
         </section><div className="agent-result"><section className="panel"><div className="panel-heading"><div><h2>分析结论与依据</h2><p>计算结果绑定统计周期与数据来源</p></div><Terminal size={18} /></div>{analysis?.result ? <><div className="conclusion"><span className="small-label">AGENT FINDING</span><h3>{analysis.result.findings?.conclusion}</h3><p>当前：{analysis.result.metrics.period.start_date} — {analysis.result.metrics.period.end_date}<br />上一周期：{analysis.result.metrics.previous_period.start_date} — {analysis.result.metrics.previous_period.end_date}</p></div><div className="evidence-stats"><div><span>净利润变化</span><strong>{signedMoney(analysis.result.metrics.changes.net_profit.absolute)}</strong></div><div><span>数据覆盖</span><strong>{analysis.result.metrics.data_quality.observed_records} / {analysis.result.metrics.data_quality.expected_records}</strong></div></div><div className="evidence-list">{analysis.result.findings?.evidence.slice(0, 4).map(item => <div key={item.id}><span>{item.label}<small>{item.source}</small></span><strong>{signedMoney(item.contribution)}</strong></div>)}</div>{analysis.recommendation_id && <button className="button primary full" onClick={() => { setSelectedId(analysis.recommendation_id!); setPage('approvals') }}>查看经营建议<ArrowRight size={16} /></button>}</> : <Empty title="等待分析结果" text="完成计算与证据核验后，将在这里展示结论。" />}</section><LLMPanel llm={analysis?.result?.llm} config={demo?.llm} /><KnowledgePanel knowledge={analysis?.result?.knowledge} /><AgentTrace llm={analysis?.result?.llm} /><section className="explain-card"><ShieldCheck size={19} /><div><h3>让数据决定结论，让人决定行动</h3><p>不完整的数据会暂停建议生成。建议必须经人工审批；模拟只产生数据库预览记录，真实广告和资金均不变。</p><span>当前引擎：规则与本地工具 · 无模型调用</span></div></section></div></div>}
+
+        {page === 'ops' && <div className="ops-page">
+          {!isApprover ? <Empty title="需要审批负责人权限" text="Agent 运维视图包含跨任务的失败详情与模型成本，仅审批负责人可查看。请使用右上角切换为审批负责人。" /> : <>
+            <div className="ops-toolbar"><div><label>统计窗口<select aria-label="运维统计窗口" value={opsHours} onChange={event => setOpsHours(Number(event.target.value))}><option value={24}>最近 24 小时</option><option value={72}>最近 3 天</option><option value={168}>最近 7 天</option></select></label></div><span>{ops ? `${ops.window.start} — ${ops.window.end} · UTC · 持久化记录` : '等待持久化记录'}</span></div>
+            {opsLoading && !ops && <div className="loading" role="status"><LoaderCircle className="spin" size={22} />正在聚合任务、模型轨迹与审计记录…</div>}
+            {!opsLoading && !ops && <Empty title="暂无运维数据" text="当前窗口没有可聚合的任务记录。启动一次分析后，任务、工具调用与成本会显示在这里。" />}
+            {ops && <>
+              <div className="ops-kpi-grid">
+                <section className="ops-kpi"><span>任务总数</span><strong>{ops.jobs.total}</strong><p>排队 {ops.jobs.by_status.queued ?? 0} · 执行中 {ops.jobs.by_status.running ?? 0} · 待审批 {ops.jobs.by_status.waiting_approval ?? 0}</p></section>
+                <section className="ops-kpi"><span>失败任务</span><strong className={ops.jobs.by_status.failed ? 'negative' : ''}>{ops.jobs.by_status.failed ?? 0}</strong><p>死信 {ops.jobs.dead_letter} · 重试 {ops.jobs.retry_count} 次</p></section>
+                <section className="ops-kpi"><span>LLM 运行</span><strong>{ops.llm.runs}</strong><p>模型调用 {ops.llm.model_calls} · Provider 请求 {ops.llm.provider_requests}{ops.llm.provider_retries ? `（内部重试 ${ops.llm.provider_retries}）` : ''} · 无模型调用 {ops.llm.no_model_call_runs} · 成功 {ops.llm.by_status.llm_success ?? 0} · 降级 {ops.llm.by_status.deterministic_fallback ?? 0} · 失败 {ops.llm.by_status.llm_failed ?? 0}</p></section>
+                <section className="ops-kpi"><span>估算成本</span><strong>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '部分未知' : '暂无数据'}</strong><p>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · ${ops.cost.pricing_version}` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格${ops.cost.known_subtotal_usd != null ? ` · 已知小计 ${usd(ops.cost.known_subtotal_usd)}` : ''}` : '没有可定价的模型调用'}</p></section>
+              </div>
+              <div className="ops-grid">
+                <section className="panel ops-panel">
+                  <div className="panel-heading"><div><h2>任务队列</h2><p>按窗口内创建的任务聚合</p></div><span className="tiny-tag">{ops.window.hours}H</span></div>
+                  <div className="ops-rows">
+                    {jobStatusOrder.map(status => <div className="ops-row" key={status}><span>{statusLabels[status] ?? status}</span><strong>{ops.jobs.by_status[status] ?? 0}</strong></div>)}
+                    <div className="ops-row emphasis"><span>死信任务</span><strong>{ops.jobs.dead_letter}</strong></div>
+                    <div className="ops-row"><span>重试次数（按 attempts）</span><strong>{ops.jobs.retry_count}</strong></div>
+                    <div className="ops-row"><span>重试调度事件</span><strong>{ops.jobs.retry_scheduled_events}</strong></div>
+                  </div>
+                </section>
+                <section className="panel ops-panel">
+                  <div className="panel-heading"><div><h2>模型与工具</h2><p>来自已持久化的 LLM 运行与工具轨迹</p></div><Terminal size={18} /></div>
+                  <div className="ops-rows">
+                    {Object.entries(ops.llm.by_status).map(([status, count]) => <div className="ops-row" key={status}><span>{llmStatusLabels[status] ?? status}</span><strong>{count}</strong></div>)}
+                    <div className="ops-row"><span>原生工具运行</span><strong>{ops.llm.native_tool_runs}</strong></div>
+                    <div className="ops-row"><span>工具调用 / 失败</span><strong>{ops.tools.calls} / {ops.tools.failed_calls}</strong></div>
+                    <div className="ops-row"><span>工具轮次</span><strong>{ops.tools.rounds}</strong></div>
+                  </div>
+                  {ops.tools.by_name.length > 0 && <div className="ops-chips">{ops.tools.by_name.map(item => <span key={item.name}><code>{item.name}</code>{item.calls} 次{item.failed ? ` · ${item.failed} 失败` : ''}</span>)}</div>}
+                  {ops.llm.termination_reasons.length > 0 && <p className="ops-note">终止原因：{ops.llm.termination_reasons.map(item => `${terminationLabels[item.reason] ?? item.reason} ×${item.count}`).join('；')}</p>}
+                </section>
+                <section className="panel ops-panel">
+                  <div className="panel-heading"><div><h2>Token 与成本</h2><p>缺失用量或价格时显示未知，不按 0 计</p></div><CircleDollarSign size={18} /></div>
+                  <div className="ops-token-grid">
+                    <div><span>输入 Token</span><strong>{countText(ops.tokens.prompt)}</strong></div>
+                    <div><span>输出 Token</span><strong>{countText(ops.tokens.completion)}</strong></div>
+                    <div><span>总 Token</span><strong>{countText(ops.tokens.total)}</strong></div>
+                    <div><span>缓存命中</span><strong>{countText(ops.tokens.cached)}</strong></div>
+                  </div>
+                  <p className="ops-note">{ops.tokens.runs_with_usage} 次运行有 Usage{ops.tokens.runs_without_usage ? `，${ops.tokens.runs_without_usage} 次缺失` : ''}。</p>
+                  <div className={`ops-cost ${ops.cost.status}`}><span>估算成本 · {ops.cost.currency}</span><strong>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '未知' : '暂无数据'}</strong><p>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · 单价版本 ${ops.cost.pricing_version} · 公开列表价估算，非账单` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格，未按 0 计。${ops.cost.known_subtotal_usd != null ? ` 已知小计 ${usd(ops.cost.known_subtotal_usd)}，仅作诊断，不是总成本。` : ''}` : '没有可定价的模型调用记录。'}</p></div>
+                </section>
+                <section className="panel ops-panel">
+                  <div className="panel-heading"><div><h2>错误与人工环节</h2><p>错误码来自失败任务；审批与执行展示当前状态</p></div><TriangleAlert size={18} /></div>
+                  {!ops.jobs.error_codes.length ? <p className="ops-note">窗口内没有失败错误码。</p> : <div className="ops-chips">{ops.jobs.error_codes.map(item => <span key={item.code}><code>{item.code}</code>{item.count} 次</span>)}</div>}
+                  <div className="ops-rows">
+                    <div className="ops-row"><span>待审批建议</span><strong>{ops.approvals.by_status.pending_approval ?? 0}</strong></div>
+                    <div className="ops-row"><span>已批准建议</span><strong>{ops.approvals.by_status.approved ?? 0}</strong></div>
+                    <div className="ops-row"><span>已执行建议</span><strong>{ops.approvals.by_status.executed ?? 0}</strong></div>
+                    <div className="ops-row"><span>模拟执行记录</span><strong>{ops.executions.total}</strong></div>
+                  </div>
+                </section>
+              </div>
+              <section className="panel ops-failures">
+                <div className="panel-heading"><div><h2>最近失败任务</h2><p>点击查看该分析已保存的执行轨迹</p></div><span className="tiny-tag">{ops.recent_failures.length}</span></div>
+                {!ops.recent_failures.length ? <Empty title="暂无失败任务" text="当前窗口没有失败记录。任务失败或进入死信后会显示在这里。" /> : <div className="table-wrap"><table><thead><tr><th>任务 / 请求 ID</th><th>错误</th><th>尝试</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{ops.recent_failures.map(item => <tr key={item.id}><td><strong>{item.id.slice(0, 8)}</strong><small className="mono">{item.request_id}</small></td><td>{item.dead_letter && <span className="status status-failed">死信</span>}<small>{item.error_code ?? 'unknown'}：{item.error_message ?? '无错误详情'}</small></td><td>{item.attempts} / {item.max_attempts}</td><td>{dateTime(item.updated_at)}</td><td><button className="text-button" onClick={() => openAnalysis(item.id)} disabled={!!busy}>查看 Trace</button></td></tr>)}</tbody></table></div>}
+              </section>
+              <div className="accounting-note"><Database size={14} /><span>{ops.source.note} {ops.notes.join(' ')}</span></div>
+            </>}
+          </>}
+        </div>}
 
         {page === 'approvals' && <div className="approval-layout"><section className="panel recommendation-list"><div className="panel-heading"><div><h2>经营建议</h2><p>{pending} 项等待人工复核</p></div><span className="count-circle">{recommendations.length}</span></div>{!recommendations.length ? <Empty title="还没有待处理建议" text="先启动 Profit Agent，异常分析通过证据核验后会生成建议。" /> : recommendations.map(item => <button key={item.id} className={`recommendation-item ${selected?.id === item.id ? 'selected' : ''}`} onClick={() => { setSelectedId(item.id); setExecution(null); setNotice('') }}><Status value={item.status} /><strong>{item.title}</strong><p>{item.body.recommendation}</p><small>{dateTime(item.created_at)}</small></button>)}</section>{selected ? <section className="panel recommendation-detail"><div className="panel-heading"><div><span className="small-label">RECOMMENDATION / {selected.id.slice(0, 8)}</span><h2>{selected.title}</h2></div><Status value={selected.status} /></div><div className="detail-section"><h3>问题与建议</h3><p>{selected.body.problem}</p><div className="recommendation-callout"><Sparkles size={19} /><strong>{selected.body.recommendation}</strong></div></div><div className="detail-section"><h3>数据证据 <span className="tiny-tag">可核对</span></h3><p className="muted">{selected.body.period.start_date} — {selected.body.period.end_date} 对比 {selected.body.previous_period.start_date} — {selected.body.previous_period.end_date} · {selected.body.store_id ?? '全部店铺'} · USD</p><div className="table-wrap"><table><thead><tr><th>指标 / 数据来源</th><th>上一周期</th><th>当前周期</th><th>利润贡献</th></tr></thead><tbody>{selected.body.evidence.map(item => <tr key={item.id}><td>{item.label}<small>{item.source}</small></td><td>{money(item.previous)}</td><td>{money(item.current)}</td><td>{signedMoney(item.contribution)}</td></tr>)}</tbody></table></div></div><KnowledgePanel knowledge={selected.body.knowledge} showCited />{selected.body.llm && <div className="detail-section"><h3>LLM 根因分析 <span className="tiny-tag">{llmStatusLabels[selected.body.llm.status] ?? selected.body.llm.status}</span></h3>{selected.body.llm.output ? <><p>{selected.body.llm.output.summary}</p><div className="llm-refs">{selected.body.llm.output.evidence_references.map(id => <code key={id}>{id}</code>)}</div>{(selected.body.llm.output.knowledge_references?.length ?? 0) > 0 && <div className="llm-refs knowledge-refs">{selected.body.llm.output.knowledge_references!.map(id => <code key={id}>{id}</code>)}</div>}<ul className="llm-cause-list">{selected.body.llm.output.root_causes.map(cause => <li key={cause.cause}><strong>{cause.cause}</strong><span>{cause.reasoning}</span></li>)}</ul></> : <p className="muted">本次建议由确定性规则生成，LLM 未参与（{llmReasonLabels[selected.body.llm.reason ?? ''] ?? selected.body.llm.reason ?? '未调用'}）。</p>}</div>}<div className="impact-box"><div><span>条件性利润改善情景</span><strong>{money(selected.body.expected_impact.profit_improvement_min)} — {money(selected.body.expected_impact.profit_improvement_max)}</strong><small>未来 {selected.body.expected_impact.horizon_days} 天 · 非实际收益或保证值</small></div><p>{selected.body.expected_impact.explanation}</p></div><div className="detail-section"><h3>待执行的模拟动作 <span className="tiny-tag">SIMULATION ONLY</span></h3>{selected.action.type === 'adjust_ad_budget' ? <div className="budget-preview"><div><span>参考日预算</span><strong>{money(selected.action.baseline_daily_budget)}</strong></div><ArrowRight size={18} /><div><span>模拟新预算</span><strong>{money(selected.action.proposed_daily_budget)}</strong></div></div> : <p>为 {selected.action.sku} 创建成本核查任务预览。</p>}<p className="muted">目标 SKU：{selected.action.sku}。该动作只写入模拟记录，不会调用广告、采购或支付系统。</p></div><div className="detail-columns"><div><h3><TriangleAlert size={16} />风险与假设</h3><ul>{[...selected.body.risks, ...selected.body.assumptions].map(value => <li key={value}>{value}</li>)}</ul></div><div><h3><Database size={16} />待补充信息</h3><ul>{selected.body.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div></div><div className="approval-actions"><div className="approval-title"><ShieldCheck size={18} /><strong>人工审批与模拟执行</strong><span className="tiny-tag">SIMULATION ONLY</span></div>{!isApprover && <p className="muted">当前为经营分析师。请在右上角切换“审批负责人”进行审批与模拟执行。</p>}{selected.status === 'pending_approval' && isApprover && <><label className="reason-label">审批意见<textarea aria-label="审批意见" value={reason} onChange={event => setReason(event.target.value)} rows={2} /></label><div className="action-row"><button className="button danger" onClick={() => decide('reject')} disabled={!!busy || reason.trim().length < 2}><X size={15} />拒绝建议</button><button className="button primary" onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2}><Check size={15} />批准建议</button></div></>}{selected.approval_reason && <p className="decision-note">审批意见：{selected.approval_reason}</p>}{isApprover && ['approved', 'executed', 'execution_failed'].includes(selected.status) && <button className="button primary" onClick={execute} disabled={!!busy}>{busy === 'execute' ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{selected.status === 'approved' ? '模拟执行已批准动作' : '再次请求 · 验证幂等'}</button>}<div className="state-flow">{['pending_approval', 'approved', 'executing', 'executed'].map((value, index) => <span key={value} className={selected.status === value ? 'current' : ''}>{index > 0 && <ArrowRight size={12} />}{statusLabels[value]}</span>)}</div></div>{(selected.execution || execution?.recommendation_id === selected.id) && <ExecutionResult result={execution?.recommendation_id === selected.id ? execution : selected.execution!} />}</section> : <section className="panel"><Empty title="选择一条建议" text="建议会展示统计范围、证据、影响情景与审批状态。" /></section>}</div>}
 

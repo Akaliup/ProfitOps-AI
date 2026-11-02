@@ -94,12 +94,41 @@ test('JWT 登录、401、角色权限与跨租户隔离（真实 API）', async 
   expect(tenantRecommendations.items).toEqual([])
 })
 
+test('Agent 运维：角色限制、真实聚合与 Trace 跳转', async ({ page, request }) => {
+  const analystToken = (await (await request.post('/api/auth/login', {
+    data: { email: 'analyst@demo.local', password: 'demo-analyst' },
+  })).json()).access_token
+  const denied = await request.get('/api/ops/summary', {
+    headers: { Authorization: `Bearer ${analystToken}` },
+  })
+  expect(denied.status()).toBe(403)
+
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/')
+  await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
+  await page.getByLabel('演示身份').selectOption('demo-approver')
+  await page.getByRole('button', { name: /Agent 运维/ }).click()
+  await expect(page.getByRole('heading', { name: '任务队列' })).toBeVisible()
+  await expect(page.getByText('最近失败任务')).toBeVisible()
+  // Two Playwright workers seed a failed analysis each; match this worker's
+  // full request id instead of the shared eight-character display prefix.
+  const failureRow = page.locator('.ops-failures tbody tr').filter({ hasText: fixtures.failed_analysis_id })
+  await expect(failureRow).toBeVisible()
+  await failureRow.getByRole('button', { name: '查看 Trace' }).click()
+  await expect(page.getByText(/llm_tool_execution_failed：工具执行失败：模拟账本不可用/)).toBeVisible()
+  expect(errors).toEqual([])
+})
+
 test('失败状态展示与手动重试（真实 Worker）', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
   await page.getByRole('button', { name: /Agent 工作台/ }).click()
+  // Another spec may have produced a newer analysis in the shared database;
+  // select the seeded failed one explicitly instead of relying on ordering.
+  await page.getByLabel('历史分析').selectOption(fixtures.failed_analysis_id)
   await expect(page.getByText('llm_tool_execution_failed：工具执行失败：模拟账本不可用')).toBeVisible()
   await expect(page.getByText('尝试 3/3')).toBeVisible()
   await expect(page.getByRole('button', { name: '重新排队执行' })).toBeVisible()

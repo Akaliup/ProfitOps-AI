@@ -39,6 +39,7 @@ from app.llm_analysis import build_llm_payload, build_user_prompt, validate_evid
 from app.llm_tools import LLM_TOOL_ALLOWLIST, TOOL_SYSTEM_PROMPT, run_tool_loop  # noqa: E402
 from app.metrics import fetch_metrics  # noqa: E402
 from app.models import AuditLog, DailyOperation, Execution, Order, Product, Recommendation, Store  # noqa: E402
+from app.pricing import PRICING_SOURCE, PRICING_VERSION, estimate_cost_usd  # noqa: E402
 from app.schemas import LLMAnalysisOutput, MetricsInput, RawMetrics  # noqa: E402
 from app.security import Actor  # noqa: E402
 from app.tools import ToolContext, build_registry  # noqa: E402
@@ -889,6 +890,7 @@ def grade_native_run(
             ),
         },
         "tokens": run.get("usage"),
+        "estimated_cost": estimate_cost_usd(run.get("model"), run.get("usage")),
         "evidence_checks": run.get("evidence_checks", {}),
         "safety_checks": run.get("safety_checks", {}),
         "final_status": run.get("final_status") or run.get("status"),
@@ -1220,6 +1222,16 @@ def run_native_real(
     cases, manifest, integrity, expected_labels, oracles = _prepare(case_dir, names)
     dataset_version = f"{manifest.get('dataset_id')}+{NATIVE_SUITE_VERSION}"
     dataset_checks = _dataset_checks(cases, integrity, expected_labels, oracles)
+    # Criteria are fixed before the first paid call. A case without declared
+    # native tool expectations fails closed rather than being graded loosely.
+    for case in cases:
+        expected = case.get("expected") or {}
+        if "native_expected_tools" not in expected or "native_expected_sequence" not in expected:
+            return {
+                "mode": "native-real",
+                "error": "criteria_missing",
+                "message": f"案例 {case.get('case_id')} 未预注册 native_expected_tools/sequence，未发起真实调用",
+            }
     provider = DeepSeekProvider(
         api_key=settings.llm_api_key.get_secret_value().strip(),
         model=settings.llm_model,
@@ -1229,6 +1241,7 @@ def run_native_real(
     )
     runs: list[dict[str, Any]] = []
     calls = 0
+    blocked_reason: str | None = None
     for case, oracle in zip(cases, oracles):
         if oracle is None:
             continue
@@ -1263,15 +1276,17 @@ def run_native_real(
                 "tokens": None,
             })
             continue
+        expected = case.get("expected") or {}
         scenario = NativeScenario(
             name="native:real",
             expected_status="llm_success",
             expected_error_code=None,
             expected_reason=None,
-            expected_tools=None,
-            expect_selection_correct=None,
-            expect_unnecessary=None,
-            expect_invalid_calls=None,
+            expected_tools=tuple(expected["native_expected_tools"]),
+            expected_sequence=tuple(expected["native_expected_sequence"]),
+            expect_selection_correct=True,
+            expect_unnecessary=0,
+            expect_invalid_calls=0,
             expect_termination="final_answer",
         )
         with tempfile.TemporaryDirectory(
@@ -1291,8 +1306,16 @@ def run_native_real(
                 )
                 calls += int(run.get("call_count", 0))
                 runs.append(grade_native_run(case, oracle, run, scenario, dataset_version=dataset_version))
+                error_code = (run.get("error") or {}).get("code")
+                if error_code in {"llm_auth_failed", "llm_insufficient_balance"}:
+                    # A rejected credential or empty balance will fail every
+                    # remaining case too; stop instead of spending the budget.
+                    blocked_reason = error_code
+                    break
             finally:
                 engine.dispose()
+        if blocked_reason:
+            break
     report = _native_report(
         mode="native-real",
         manifest=manifest,
@@ -1308,9 +1331,15 @@ def run_native_real(
             "calls_made": calls,
             "authorization": "explicit",
             "max_retries": 0,
-            "note": "Real paid calls; never run by CI.",
+            "blocked_reason": blocked_reason,
+            "pricing_version": PRICING_VERSION,
+            "pricing_source": PRICING_SOURCE,
+            "note": "Real paid calls; never run by CI. Cost is a list-price estimate, not an invoice.",
         },
     )
+    totals = report.get("summary", {}).get("metrics", {}).get("tokens")
+    report["summary"]["metrics"]["estimated_cost"] = estimate_cost_usd(settings.llm_model, totals)
+    report["blocked"] = blocked_reason is not None
     path = report_path or REPORT_DIR / f"native-real-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
     _write_report(report, path)
     report["report_path"] = str(path)

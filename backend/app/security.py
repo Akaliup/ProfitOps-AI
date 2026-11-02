@@ -142,6 +142,25 @@ def _bearer_token(request: Request) -> str | None:
     return authorization[7:] if authorization.startswith("Bearer ") else None
 
 
+def rate_limit_identity(token: str | None, settings) -> str | None:
+    """Return a stable identity for rate limiting, or ``None`` if anonymous.
+
+    Only credentials this service would actually accept may mint a separate
+    bucket. Arbitrary bearer values therefore cannot rotate around the base
+    limit; they fall back to the shared anonymous bucket. The returned value
+    is hashed by the limiter and is never logged or persisted.
+    """
+    if token is None:
+        return None
+    if settings.demo_mode and token in (settings.analyst_token, settings.approver_token):
+        return token
+    try:
+        payload = decode_access_token(token, settings)
+    except DomainError:
+        return None
+    return f"{payload['tenant_id']}:{payload['sub']}"
+
+
 def get_actor(request: Request) -> Actor:
     settings = request.app.state.settings
     token = _bearer_token(request)

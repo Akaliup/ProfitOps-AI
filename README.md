@@ -138,6 +138,17 @@ docker compose logs --tail=50 backend
 docker compose down
 ```
 
+### 云端单机 Compose（准备）
+
+`compose.cloud.yaml` 在基线之上关闭 API 内 worker 和 BackgroundTasks，新增独立 `worker` 与一次性 `init`（Alembic + 种子），只发布 frontend 的 HTTPS 端口；backend、worker、db 不映射宿主机端口。`scripts/cloud_prepare.py` 生成不进入 Git 的随机数据库密码、JWT 密钥、演示 token、Basic Auth 口令和 TLS 材料。
+
+```bash
+python scripts/cloud_prepare.py --env-file .env.cloud --auth-dir deploy/auth --tls-dir deploy/tls --domain <domain> --https-bind 0.0.0.0 --https-port 443 --tls-mode existing
+docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud up -d --build
+```
+
+Windows 11 SSH 部署、首次初始化/迁移、备份恢复、故障排查、访问控制与十项本地验收记录见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。本轮没有云服务器凭据，未实际部署公网；本地隔离 Compose 栈已验证，云端步骤仍需在目标主机复验。
+
 ### 可观测性与运行保护
 
 - `GET /metrics` 输出 Prometheus 文本：HTTP 请求计数/耗时、分析任务事件与队列深度、工具调用、LLM 调用与熔断状态、限流命中。
@@ -237,7 +248,7 @@ npm --prefix frontend run build
 .venv/Scripts/python.exe scripts/browser_test.py   # 安装项目本地 Chromium 后跑真实浏览器验收
 ```
 
-当前实测结果（2026-11-01）：后端 204 通过、4 跳过（跳过项为本地未安装 Alembic 1 项、未配置 PostgreSQL 测试库 3 项）、前端 15 通过、生产构建通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；本次变更使用独立临时数据库完成 HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Alembic upgrade/downgrade 本地未验证（依赖未安装），由 CI 执行；本次未重新运行 Playwright 浏览器 E2E。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+当前实测结果（2026-11-02）：后端 263 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、前端 17 通过、生产构建通过、独立临时数据库 HTTP 冒烟 15/15；云端单机 Compose 在隔离栈完成十项验收（独立 worker、API/worker 分离、审批幂等、审计、运维看板、数据库重启持久化、端口最小暴露），详见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
 
 ## 项目结构
 
@@ -249,15 +260,17 @@ backend/migrations/  Alembic 基线与增量迁移
 frontend/src/        React 工作台、API 类型、交互测试
 frontend/e2e/        Playwright 真实浏览器验收
 scripts/             一键启动、迁移、HTTP 冒烟、浏览器测试、真实 LLM 验证
-docs/                契约、架构、运行手册、知识库、验证记录、截图
+docs/                契约、架构、运行手册、云端部署、知识库、验证记录、截图
 compose.yaml         PostgreSQL + 后端 + 前端
+compose.cloud.yaml   云端单机覆盖：独立 worker、一次性 init、HTTPS 入口
+scripts/cloud_prepare.py 生成非 Git 的云端密钥、htpasswd 与 TLS 材料
 AGENTS.md            开发约定
 TASKS.md             交付与后续任务
 ```
 
 ## 已知限制
 
-- 认证是可运行的自建账号 + JWT + 租户隔离，但不是完整生产 IAM：没有 OIDC/SSO、密码重置、MFA、密钥轮换和租户管理后台；限流桶和指标是进程内状态，多副本部署需要共享存储。React 演示工作台仍使用 `/api/demo` 返回的固定 demo token 切换身份；JWT 登录 API 已实现并有后端测试，但演示前端未接入登录页，非 demo 模式需要登录客户端。
+- 认证是可运行的自建账号 + JWT + 租户隔离，但不是完整生产 IAM：没有 OIDC/SSO、密码重置、MFA、密钥轮换和租户管理后台；限流桶和指标是进程内状态，多副本部署需要共享存储。本地演示工作台使用 `/api/demo` 返回的 demo token 切换身份；云端覆盖把该接口放在 Nginx Basic Auth 之后，token 由不进入 Git 的随机配置生成，但仍不是正式认证。JWT 登录 API 已实现并有后端测试，演示前端未接入登录页，非 demo 模式需要登录客户端。
 - LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
 - 原生 Function Calling 已用 3 次真实脚本运行验收；第 3 次完整成功，但样本很小，不能据此声明真实调用成功率或多轮稳定性。
 - RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、8 个查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；知识库规模增大后需要换成真实 embedding + 向量索引。
@@ -266,18 +279,19 @@ TASKS.md             交付与后续任务
 - 模拟执行只写数据库预览，不改变任何真实平台。
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
 - 已加入 Alembic 基线和迁移入口；旧库仍依赖启动时的兼容迁移补充租户/任务字段，后续 schema 变更必须新增显式 revision。Alembic 未安装时相关测试会跳过，CI 会安装并执行 upgrade/downgrade。
-- Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；其他机器仍需按 `docs/TEST_REPORT.md` 复验。
+- Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；云端单机覆盖也在隔离栈完成十项验收（见 `docs/CLOUD_DEPLOYMENT.md`）。其他机器和真实云服务器仍需按文档复验。
 - 实际 MCP Server 未实现，因此不声称支持 MCP。
 
-## 交接与面试材料
+## 交付与验收材料
 
 - [docs/HANDOFF.md](docs/HANDOFF.md)：接管报告、实际验证结果、未完成项与下一步顺序。
-- [docs/INTERVIEW.md](docs/INTERVIEW.md)：3 分钟演示脚本、架构讲解、高频追问与回答要点。
+- [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)：云端单机 Compose、初始化/迁移、备份恢复、故障排查与访问控制。
+- [docs/FINAL_DEMO_ACCEPTANCE.md](docs/FINAL_DEMO_ACCEPTANCE.md)：最终端到端模拟验收报告与修复复验记录。
 - [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。
 - [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)：RAG 数据模型、切分、embedding、混合检索、引用校验、API 与限制。
 - [docs/EVALUATION.md](docs/EVALUATION.md)：Phase 2B Agent 评测、Phase 2D 原生工具评测与 RAG 检索评测记录。
 
-## 面试讲解建议
+## 演示与讲解建议
 
 重点讲四件事：**业务闭环**（数据 → 利润桥 → 证据校验 → 知识检索 → 人工审批 → 幂等模拟 → 审计）、**可信 Agent 设计**（确定性计算、证据绑定、数据不足不生成建议、持久化暂停点、失败可见）、**可信 RAG**（混合检索、`no_answer` 拒答、chunk 引用校验、知识内容按不可信数据处理）、**服务端安全**（角色不信任前端、条件状态更新、唯一约束与事务、请求 ID）。可以打开利润归因核对 8 项贡献之和、故意用分析师 token 调批准接口、连续两次执行观察同一执行 ID，作为现场可验证的证据。
 

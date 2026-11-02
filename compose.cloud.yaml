@@ -1,0 +1,123 @@
+# Single-host cloud overlay. Use with the base compose file:
+#
+#   docker compose -f compose.yaml -f compose.cloud.yaml --env-file .env.cloud up -d --build
+#
+# The overlay removes the development API/frontend port bindings, adds a
+# one-shot Alembic/seed service, runs the durable worker as its own process,
+# and publishes only the HTTPS frontend port. Database and API stay on the
+# private Compose network.
+name: profitops-cloud
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-environment: &backend-environment
+  PROFITOPS_DATABASE_URL: "postgresql+psycopg://${PROFITOPS_POSTGRES_USER:-profitops}:${PROFITOPS_POSTGRES_PASSWORD:?set PROFITOPS_POSTGRES_PASSWORD in .env.cloud}@db:5432/${PROFITOPS_POSTGRES_DB:-profitops}"
+  PROFITOPS_DEMO_MODE: "true"
+  PROFITOPS_AUTO_SEED: "false"
+  PROFITOPS_ANALYSIS_WORKER_ENABLED: "false"
+  PROFITOPS_ANALYSIS_WORKER_POLL_SECONDS: "1"
+  PROFITOPS_ANALYSIS_MAX_ATTEMPTS: "3"
+  PROFITOPS_ANALYSIS_RETRY_BACKOFF_SECONDS: "2"
+  PROFITOPS_ANALYSIS_LEASE_SECONDS: "60"
+  PROFITOPS_AUTH_SECRET: "${PROFITOPS_AUTH_SECRET:?set PROFITOPS_AUTH_SECRET in .env.cloud}"
+  PROFITOPS_ANALYST_TOKEN: "${PROFITOPS_ANALYST_TOKEN:?set PROFITOPS_ANALYST_TOKEN in .env.cloud}"
+  PROFITOPS_APPROVER_TOKEN: "${PROFITOPS_APPROVER_TOKEN:?set PROFITOPS_APPROVER_TOKEN in .env.cloud}"
+  PROFITOPS_DEMO_ANALYST_PASSWORD: "${PROFITOPS_DEMO_ANALYST_PASSWORD:?set PROFITOPS_DEMO_ANALYST_PASSWORD in .env.cloud}"
+  PROFITOPS_DEMO_APPROVER_PASSWORD: "${PROFITOPS_DEMO_APPROVER_PASSWORD:?set PROFITOPS_DEMO_APPROVER_PASSWORD in .env.cloud}"
+  PROFITOPS_KNOWLEDGE_EMBEDDING_PROVIDER: "hashing"
+  LLM_PROVIDER: "disabled"
+  LLM_API_KEY: ""
+  LLM_FALLBACK_POLICY: "rules"
+  PROFITOPS_METRICS_ENABLED: "true"
+  PROFITOPS_RATE_LIMIT_ENABLED: "true"
+
+x-backend-runtime: &backend-runtime
+  image: profitops-backend:cloud
+  restart: unless-stopped
+  logging: *default-logging
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: "${PROFITOPS_POSTGRES_DB:-profitops}"
+      POSTGRES_USER: "${PROFITOPS_POSTGRES_USER:-profitops}"
+      POSTGRES_PASSWORD: "${PROFITOPS_POSTGRES_PASSWORD:?set PROFITOPS_POSTGRES_PASSWORD in .env.cloud}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PROFITOPS_POSTGRES_USER:-profitops} -d ${PROFITOPS_POSTGRES_DB:-profitops}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Runs once per `up`. Backend and worker wait for it to finish, so neither
+  # can race the first schema creation or the demo seed.
+  init:
+    <<: *backend-runtime
+    command: ["sh", "-c", "alembic -c alembic.ini upgrade head && python -m app.init"]
+    environment:
+      <<: *backend-environment
+      PROFITOPS_AUTO_SEED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    logging: *default-logging
+
+  backend:
+    <<: *backend-runtime
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      <<: *backend-environment
+    ports: !reset []
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    logging: *default-logging
+
+  worker:
+    <<: *backend-runtime
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    ports: !override
+      - "${PROFITOPS_HTTPS_BIND:-0.0.0.0}:${PROFITOPS_HTTPS_PORT:-443}:443"
+    volumes:
+      - "./frontend/nginx.cloud.conf:/etc/nginx/conf.d/default.conf:ro"
+      - "${PROFITOPS_TLS_DIR:-./deploy/tls}:/etc/nginx/tls:ro"
+      - "${PROFITOPS_AUTH_DIR:-./deploy/auth}:/etc/nginx/auth:ro"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

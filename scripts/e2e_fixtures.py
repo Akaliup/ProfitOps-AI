@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,48 +41,57 @@ def seed(database: Path, output: Path) -> dict:
     failed_id = f"e2e-failed-{uuid4().hex[:12]}"
     engine = create_engine(f"sqlite:///{database}")
     try:
-        with Session(engine) as session:
-            if session.get(Tenant, TENANT_B) is None:
-                session.add(Tenant(id=TENANT_B, name="E2E 隔离租户"))
-            user = session.scalar(select(User).where(
-                User.tenant_id == TENANT_B, User.email == TENANT_B_EMAIL,
-            ))
-            if user is None:
-                session.add(User(
-                    tenant_id=TENANT_B, email=TENANT_B_EMAIL, display_name="租户 B 分析师",
-                    role="analyst", password_hash=hash_password(TENANT_B_PASSWORD),
-                ))
-            if session.get(Analysis, TENANT_B_ANALYSIS_ID) is None:
-                session.add(Analysis(
-                    id=TENANT_B_ANALYSIS_ID, tenant_id=TENANT_B,
-                    idempotency_key="tenant-b-failed", request=PERIOD,
-                    actor="tenant-b-analyst", request_id="tenant-b-request",
-                    status="failed", steps=[], snapshot={},
-                    error={"code": "insufficient_data", "message": "租户 B 无经营数据"},
-                    attempts=1, max_attempts=3, created_at=now, updated_at=now,
-                ))
-            session.add(Analysis(
-                id=failed_id, tenant_id="demo", idempotency_key=f"e2e-failed-{failed_id}",
-                request=PERIOD, actor="demo-analyst", request_id=f"e2e-request-{failed_id}",
-                status="failed",
-                steps=[
-                    {
-                        "name": "receive_request", "label": "接收请求", "status": "completed",
-                        "started_at": now.isoformat(), "request_id": f"e2e-request-{failed_id}",
-                        "phase": "analysis", "duration_ms": 1.2, "summary": "请求已接收",
-                    },
-                    {
-                        "name": "llm_root_cause_analysis", "label": "DeepSeek 根因分析",
-                        "status": "failed", "started_at": now.isoformat(),
-                        "request_id": f"e2e-request-{failed_id}", "phase": "analysis",
-                        "duration_ms": 800.0, "summary": "工具执行失败",
-                    },
-                ],
-                snapshot={},
-                error={"code": "llm_tool_execution_failed", "message": "工具执行失败：模拟账本不可用"},
-                attempts=3, max_attempts=3, created_at=now, updated_at=now,
-            ))
-            session.commit()
+        # Playwright runs one beforeAll per worker, so two workers can seed the
+        # same disposable database at once. The loser of the tenant insert
+        # retries and then sees the committed rows from the winner.
+        for attempt in range(2):
+            try:
+                with Session(engine) as session:
+                    if session.get(Tenant, TENANT_B) is None:
+                        session.add(Tenant(id=TENANT_B, name="E2E 隔离租户"))
+                    user = session.scalar(select(User).where(
+                        User.tenant_id == TENANT_B, User.email == TENANT_B_EMAIL,
+                    ))
+                    if user is None:
+                        session.add(User(
+                            tenant_id=TENANT_B, email=TENANT_B_EMAIL, display_name="租户 B 分析师",
+                            role="analyst", password_hash=hash_password(TENANT_B_PASSWORD),
+                        ))
+                    if session.get(Analysis, TENANT_B_ANALYSIS_ID) is None:
+                        session.add(Analysis(
+                            id=TENANT_B_ANALYSIS_ID, tenant_id=TENANT_B,
+                            idempotency_key="tenant-b-failed", request=PERIOD,
+                            actor="tenant-b-analyst", request_id="tenant-b-request",
+                            status="failed", steps=[], snapshot={},
+                            error={"code": "insufficient_data", "message": "租户 B 无经营数据"},
+                            attempts=1, max_attempts=3, created_at=now, updated_at=now,
+                        ))
+                    session.add(Analysis(
+                        id=failed_id, tenant_id="demo", idempotency_key=f"e2e-failed-{failed_id}",
+                        request=PERIOD, actor="demo-analyst", request_id=f"e2e-request-{failed_id}",
+                        status="failed",
+                        steps=[
+                            {
+                                "name": "receive_request", "label": "接收请求", "status": "completed",
+                                "started_at": now.isoformat(), "request_id": f"e2e-request-{failed_id}",
+                                "phase": "analysis", "duration_ms": 1.2, "summary": "请求已接收",
+                            },
+                            {
+                                "name": "llm_root_cause_analysis", "label": "DeepSeek 根因分析",
+                                "status": "failed", "started_at": now.isoformat(),
+                                "request_id": f"e2e-request-{failed_id}", "phase": "analysis",
+                                "duration_ms": 800.0, "summary": "工具执行失败",
+                            },
+                        ],
+                        snapshot={},
+                        error={"code": "llm_tool_execution_failed", "message": "工具执行失败：模拟账本不可用"},
+                        attempts=3, max_attempts=3, created_at=now, updated_at=now,
+                    ))
+                    session.commit()
+                break
+            except IntegrityError:
+                if attempt == 1:
+                    raise
     finally:
         engine.dispose()
     payload = {

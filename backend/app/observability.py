@@ -186,7 +186,7 @@ class TokenBucketLimiter:
     def __init__(self, max_buckets: int = 8192) -> None:
         self._lock = threading.Lock()
         self._buckets: dict[str, _Bucket] = {}
-        self._max_buckets = max_buckets
+        self._max_buckets = max(1, max_buckets)
 
     def allow(
         self,
@@ -203,9 +203,9 @@ class TokenBucketLimiter:
         with self._lock:
             bucket = self._buckets.get(key)
             if bucket is None:
+                self._make_room(now)
                 bucket = _Bucket(float(capacity), now)
                 self._buckets[key] = bucket
-                self._prune(now)
             else:
                 elapsed = max(0.0, now - bucket.updated)
                 bucket.tokens = min(float(capacity), bucket.tokens + elapsed * rate)
@@ -215,12 +215,22 @@ class TokenBucketLimiter:
                 return True, 0.0
             return False, (1.0 - bucket.tokens) / rate
 
-    def _prune(self, now: float) -> None:
-        if len(self._buckets) <= self._max_buckets:
+    def _make_room(self, now: float) -> None:
+        """Keep ``_max_buckets`` a hard bound, even during a key burst.
+
+        Stale buckets are discarded first. If the burst is still filling the
+        table, the least-recently-used bucket is evicted before the new key is
+        inserted. Without this second step a burst of unique keys inside the
+        one-hour stale window would grow the dictionary without limit.
+        """
+        if len(self._buckets) < self._max_buckets:
             return
         stale = [key for key, bucket in self._buckets.items() if now - bucket.updated > 3600]
         for key in stale:
             self._buckets.pop(key, None)
+        while len(self._buckets) >= self._max_buckets:
+            oldest = min(self._buckets, key=lambda key: self._buckets[key].updated)
+            self._buckets.pop(oldest, None)
 
 
 def rate_limit_scope(path: str, method: str) -> str:

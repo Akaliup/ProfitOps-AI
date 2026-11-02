@@ -1,4 +1,4 @@
-import type { Analysis, Audit, Demo, Execution, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public requestId: string, public status: number, public payload?: unknown) { super(message) }
@@ -34,6 +34,7 @@ export const api = {
   retryAnalysis: (token: string, id: string) => request<Analysis>(`/api/analyses/${id}/retry`, token, { method: 'POST' }),
   recommendations: (token: string) => request<{ items: Recommendation[] }>('/api/recommendations', token),
   audits: (token: string, requestId = '') => request<{ items: Audit[] }>(`/api/audit-logs?limit=100${requestId ? `&request_id=${encodeURIComponent(requestId)}` : ''}`, token),
+  ops: (token: string, windowHours = 24) => request<OpsSummary>(`/api/ops/summary?window_hours=${windowHours}`, token),
   start: (token: string, demo: Demo, scope: Scope) => request<Analysis>('/api/analyses', token, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(scopeBody(demo, scope)) }),
   decision: (token: string, id: string, kind: 'approve' | 'reject', reason: string) => request<Recommendation>(`/api/recommendations/${id}/${kind}`, token, { method: 'POST', body: JSON.stringify({ reason }) }),
   execute: (token: string, id: string) => request<Execution>(`/api/recommendations/${id}/execute`, token, { method: 'POST', headers: { 'Idempotency-Key': `web-execute-${id}` } }),

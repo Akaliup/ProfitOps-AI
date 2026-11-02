@@ -8,6 +8,8 @@
 
 本报告只陈述实际执行过的运行。FakeProvider 结果与真实 DeepSeek 结果分开记录；没有把规则或 mock 结果冒充真实模型输出，也没有声称 LLM Judge 准确率。
 
+> 2026-11-02 更新：新增真实原生工具评测 12 次调用（见 D5）和 42 条固定查询的 RAG 真实 embedding 对比（见 R7）。BGE-M3 因本机模型不可用标记 BLOCKED，没有用其他模型替代。
+
 > Phase 2C 原生 Function Calling 未纳入本报告的评测口径。2026-11-01 另执行了 3 次真实脚本运行用于协议验收：第 1 次第 2 轮网络错误降级，第 3 次完整成功（2 个只读工具调用、`final_answer`、`all_references_valid=true`），记录见 `docs/LLM_LIVE_CHECK.md`。这不是评测集运行，不能据此声称工具调用准确率或真实多轮稳定性。
 
 ## RAG 检索评测（2026-11-01）
@@ -77,6 +79,17 @@
 .venv/Scripts/python.exe backend/evals/rag.py
 # 报告：backend/evals/reports/rag-latest.json
 ```
+
+### R7. 真实 embedding 对比（2026-11-02）
+
+新增固定查询集 `backend/evals/rag_queries.json`：6 篇合成 SOP、42 条查询（36 可回答 + 6 不可回答），标签在生成向量前固定。`backend/evals/rag_real.py` 对每个 Provider 使用独立临时 SQLite，复用生产 `seed_knowledge` / `search_knowledge`，相同 `top_k=3`、`candidate_k=20`、`min_score=0.15`。
+
+| Provider | 状态 | hit@1 | hit@3 | MRR | no-answer | citation | P50 检索 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Hashing（真实离线） | COMPLETED | 97.22% | 100% | 0.9815 | 100% | 100% | 6.805 ms |
+| BGE-M3（Ollama） | **BLOCKED** | — | — | — | — | — | — |
+
+BGE-M3 阻塞原因是本机 Ollama 未安装该模型，`/v1/embeddings` 返回真实 HTTP 404；`ollama pull bge-m3` 因重定向到非公网地址失败。没有用随机向量、mock 或 `qwen3-embedding:0.6b` 冒充 BGE-M3。Hashing 的唯一失败是 `quality-03` top-1 未中（正确文档第 3 名），未调参。完整报告见 `docs/RAG_REAL_EMBEDDING_REPORT.md` 与 `docs/rag-real-embedding-2026-11-02.json`。
 
 ## 离线 LLM 回放评测（2026-11-01）
 
@@ -158,7 +171,7 @@
 .venv/Scripts/python.exe backend/evals/runner.py native
 ```
 
-报告：`data/eval-tmp/native-failclosed.json`（临时目录，未提交）
+报告：`backend/evals/reports/native-20261102-014455.json`（本地报告，默认不提交）
 
 | 指标 | 结果 |
 |---|---:|
@@ -174,7 +187,7 @@
 | `unnecessary_tool_calls` | 3（每个异常案例 1 次，来自 `native:unnecessary_tool`） |
 | `invalid_tool_calls` | 24 |
 | 模拟 tokens | prompt 68400 / completion 8760 / total 77160 |
-| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.2 ms、最大 55.123 ms、平均 14.462 ms |
+| 模拟延迟 | 36 次有调用运行；脚本化模拟值随运行波动，最新一次最小 1.338 ms、最大 60.475 ms、平均 14.232 ms |
 
 状态分布：`llm_success=6`、`deterministic_fallback=30`、`not_requested=1`。`provider_type=fake_tools`，真实网络调用 **0** 次，付费 token **0**。这些数字是脚本化 Provider 在 4 个合成案例上的门禁结果，**不是真实模型工具选择准确率，也不是真实延迟或成本**。
 
@@ -182,19 +195,24 @@
 
 数据集门禁为 fail-closed：任一 selected case 的 `integrity` 或 `expected_labels` 检查失败、oracle 缺失、没有选中案例或没有有效案例时，`dataset_checks.passed=false`，CLI 退出码为 1。报告 `dataset_checks.failed_cases` 记录 `case_id`、失败阶段（`integrity` / `expected_labels` / `oracle`）和具体失败检查项；不会通过跳过 `oracle=None` 的案例或零运行报告返回成功。CLI 还要求至少存在正常场景且全部通过；若所选案例包含负向对照，负向对照也必须全部被完整识别。
 
-### D5. 真实模型入口（未执行）
+### D5. 真实模型执行（2026-11-02）
 
 真实入口：
 
 ```bash
-.venv/Scripts/python.exe backend/evals/runner.py native --real \
+PYTHONPATH=backend .venv/Scripts/python.exe backend/evals/runner.py native --real \
   --authorize-real-calls I_UNDERSTAND_THIS_SPENDS_TOKENS --max-calls 6
 ```
 
 - 必须同时提供显式授权字符串和正整数 `--max-calls`；缺任一项返回退出码 2，不发起任何调用。
 - 使用真实 `DeepSeekProvider` 和生产工具循环，`max_retries=0`；按剩余预算限制每案例轮数，预算不足时记录 `budget_exhausted`。
 - 默认 `native`（不带 `--real`）只使用 FakeToolProvider，不读取网络，不消耗付费 token；CI 只运行默认模式。
-- **本阶段没有执行真实 `native --real` 调用**，因此不报告真实工具调用准确率、真实多轮稳定性、真实 token 或延迟。该项为“未验证”。
+- **2026-11-02 已执行真实调用，总预算 12 次，实际 12 次（6 + 4 + 2），没有超额。**
+  - 工具选择/顺序 6/6 正确，12/12 工具调用参数合法，无效/多余调用 0。
+  - 正常案例任务完成 1/3：广告通过；履约最终复跑因 `action_type_consistency` 内容门禁失败；退款两次均在第 2 轮 `RemoteProtocolError`，预算耗尽后无最终内容。
+  - 有最终内容的 2 次运行证据引用全部有效；审批/执行/建议/外部业务/数据库写入均为 0。
+  - 总 tokens：31,246 prompt / 4,672 completion / 35,918 total（cached 17,536）；公开峰值单价估算 US$0.009825。
+  - 完整逐轮数据、失败原样和脱敏 JSON 见 `docs/AGENT_REAL_EVALUATION.md` 与 `docs/agent-real-evaluation-2026-11-02.json`。
 
 ### D6. 与 Phase 2B 的边界
 
@@ -203,9 +221,9 @@
 | 模型路径 | 单次 `generate_json` | 原生 `chat` + 有界工具循环 |
 | 评测重点 | 最终 JSON、证据、金额、动作一致性 | 工具选择、参数、顺序、重复、轮次、失败降级、轨迹 |
 | 离线 Provider | `FakeProvider` | `FakeToolProvider` |
-| 真实调用 | 22 次（历史，见第 6 节） | 0 次（入口已实现，未授权执行） |
+| 真实调用 | 22 次（历史，见第 6 节） | 12 次（2026-11-02，预算上限 12） |
 | 数据来源 | 4 个合成案例 | 同一批 4 个合成案例，物化到独立临时 SQLite 账本 |
-| 报告 | `backend/evals/reports/offline-*.json`、`real-*.json` | `backend/evals/reports/native-*.json`（默认不提交） |
+| 报告 | `backend/evals/reports/offline-*.json`、`real-*.json` | `backend/evals/reports/native-*.json`（本地不提交）；脱敏报告 `docs/agent-real-evaluation-2026-11-02.json` |
 
 ## 1. 交付内容
 
