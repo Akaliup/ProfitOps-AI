@@ -101,7 +101,23 @@ curl -X POST http://127.0.0.1:8010/api/analyses/<id>/retry \
   -H "Authorization: Bearer demo-analyst"
 ```
 
-只有 `failed` 行可以重试；重试用单条 `status='failed'` 条件 UPDATE 完成，并发重试只有一个成功，running/completed 不会被改回 queued，其余请求返回 409 `analysis_not_retryable`。worker 线程默认随 API 进程启动；设置 `PROFITOPS_ANALYSIS_WORKER_ENABLED=false` 可关闭，但此时必须另行运行 worker，否则任务会停在 queued。
+只有 `failed` 行可以重试；重试用单条 `status='failed'` 条件 UPDATE 完成，并发重试只有一个成功，running/completed 不会被改回 queued，其余请求返回 409 `analysis_not_retryable`。
+
+worker 线程默认随 API 进程启动。设置 `PROFITOPS_ANALYSIS_WORKER_ENABLED=false` 会同时关闭 API 进程内的轮询线程和请求级 BackgroundTasks：API 只写 `queued` 行，不再自己执行任务。独立 worker 使用同一数据库和同一套环境变量，在项目根目录启动（这样会读取根 `.env`）：
+
+```bash
+cd E:/ProfitOps-AI
+PYTHONPATH=backend .venv/Scripts/python.exe -m app.worker
+```
+
+一次性排空一个任务（适合排障或定时任务）：
+
+```bash
+cd E:/ProfitOps-AI
+PYTHONPATH=backend .venv/Scripts/python.exe -m app.worker --once
+```
+
+`--poll-seconds` 可临时覆盖 `PROFITOPS_ANALYSIS_WORKER_POLL_SECONDS`。worker 启动时会初始化数据库并回收过期租约；停止用 Ctrl+C。API 与 worker 必须指向同一个 `PROFITOPS_DATABASE_URL`，否则任务不会被处理；从其他目录运行 worker 时需显式导出环境变量，不能依赖根 `.env`。SQLite 只适合单机演示；多副本部署应使用 PostgreSQL，并让每个 API 进程都设置 `PROFITOPS_ANALYSIS_WORKER_ENABLED=false`，由独立 worker 进程消费队列。
 
 ## 5. LLM 与熔断
 
@@ -144,7 +160,7 @@ CI 使用空 `LLM_API_KEY` 和临时测试数据库；真实 LLM 调用必须单
 
 ## 8. 已知限制
 
-- 限流桶、worker 线程和指标注册表都是进程内状态；多副本部署需要共享限流、独立 worker 和指标聚合。
+- 限流桶和指标注册表都是进程内状态；多副本部署需要共享限流与指标聚合。独立 worker 已提供 CLI，但多副本 worker 的并发与指标聚合仍需部署侧验证。
 - 没有 OIDC/SSO、密码重置、MFA、密钥轮换、租户管理后台和审计留存策略。
 - 没有分布式追踪/OpenTelemetry；日志目前只输出到进程 stdout。
 - Alembic 基线只覆盖当前 schema；后续变更必须新增显式 revision，不能修改已应用的基线。

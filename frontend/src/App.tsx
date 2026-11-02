@@ -1,13 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown, CircleDollarSign, Clock3, Database, FileCheck2, Fingerprint, LayoutDashboard, LoaderCircle, Moon, Play, RefreshCw, Search, ShieldCheck, Sparkles, Sun, Terminal, TriangleAlert, X } from 'lucide-react'
 import { api, ApiError } from './api'
-import type { Analysis, Audit, Demo, Execution, Identity, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, Identity, JobStatus, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope } from './types'
 import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels, terminationLabels } from './format'
 import './styles.css'
 
 const TrendChart = lazy(() => import('./components/TrendChart').then(module => ({ default: module.TrendChart })))
 
 type Page = 'overview' | 'agent' | 'approvals' | 'knowledge' | 'audit' | 'ops'
+const jobStatusOrder: JobStatus[] = [
+  'queued', 'running', 'waiting_approval', 'completed', 'insufficient_data', 'failed',
+  'approved', 'rejected', 'executed', 'execution_failed',
+]
 const pages = [
   { id: 'overview' as const, label: '经营总览', icon: LayoutDashboard, detail: '把增长，变成利润。' },
   { id: 'agent' as const, label: 'Agent 工作台', icon: Sparkles, detail: '从经营信号，到有据可依的行动。' },
@@ -55,6 +59,7 @@ export default function App() {
   const [reason, setReason] = useState('已复核证据，批准受控模拟')
   const [dark, setDark] = useState(false)
   const loadSequence = useRef(0)
+  const opsSequence = useRef(0)
   const selected = recommendations.find(item => item.id === selectedId) ?? recommendations[0]
   const pending = recommendations.filter(item => item.status === 'pending_approval').length
   const isApprover = identity?.role === 'approver'
@@ -95,10 +100,18 @@ export default function App() {
 
   const loadOps = useCallback(async () => {
     if (!identity || identity.role !== 'approver') return
+    // A slower response for a previous window must never replace the window
+    // the operator has already switched to.
+    const sequence = ++opsSequence.current
     setOpsLoading(true); setError('')
-    try { setOps(await api.ops(identity.token, opsHours)) }
-    catch (value) { showError(value) }
-    finally { setOpsLoading(false) }
+    try {
+      const next = await api.ops(identity.token, opsHours)
+      if (sequence === opsSequence.current) setOps(next)
+    } catch (value) {
+      if (sequence === opsSequence.current) showError(value)
+    } finally {
+      if (sequence === opsSequence.current) setOpsLoading(false)
+    }
   }, [identity, opsHours, showError])
 
   useEffect(() => { void refresh() }, [refresh])
@@ -278,7 +291,7 @@ export default function App() {
                 <section className="panel ops-panel">
                   <div className="panel-heading"><div><h2>任务队列</h2><p>按窗口内创建的任务聚合</p></div><span className="tiny-tag">{ops.window.hours}H</span></div>
                   <div className="ops-rows">
-                    {['queued', 'running', 'waiting_approval', 'completed', 'insufficient_data', 'failed'].map(status => <div className="ops-row" key={status}><span>{statusLabels[status] ?? status}</span><strong>{ops.jobs.by_status[status] ?? 0}</strong></div>)}
+                    {jobStatusOrder.map(status => <div className="ops-row" key={status}><span>{statusLabels[status] ?? status}</span><strong>{ops.jobs.by_status[status] ?? 0}</strong></div>)}
                     <div className="ops-row emphasis"><span>死信任务</span><strong>{ops.jobs.dead_letter}</strong></div>
                     <div className="ops-row"><span>重试次数（按 attempts）</span><strong>{ops.jobs.retry_count}</strong></div>
                     <div className="ops-row"><span>重试调度事件</span><strong>{ops.jobs.retry_scheduled_events}</strong></div>

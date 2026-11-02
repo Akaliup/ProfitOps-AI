@@ -115,12 +115,16 @@ export interface Audit {
   request_id: string; outcome: string; details: Record<string, unknown>; created_at: string;
 }
 export interface Scope { days: number; storeId: string }
+export type JobStatus =
+  | 'queued' | 'running' | 'waiting_approval' | 'completed' | 'insufficient_data' | 'failed'
+  | 'approved' | 'rejected' | 'executed' | 'execution_failed';
+
 export interface OpsSummary {
   tenant_id: string; generated_at: string;
   window: { hours: number; start: string; end: string; timezone: string };
   source: { kind: string; tables: string[]; note: string };
   jobs: {
-    total: number; by_status: Record<string, number>; retry_count: number;
+    total: number; by_status: Record<JobStatus, number>; retry_count: number;
     retry_scheduled_events: number; dead_letter: number; dead_letter_events: number;
     error_codes: { code: string; count: number }[];
   };

@@ -3,8 +3,11 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select
 
+from app.config import Settings
+from app.db import build_engine, initialize_database, make_session_factory
 from app.models import Analysis, AuditLog, Recommendation, lease_is_live, utcnow
 from app import main as main_module
 from app import worker, workflow
@@ -753,3 +756,83 @@ def test_recovery_applies_retry_and_dead_letter_rules_to_failed_rows(client):
             AuditLog.object_id.in_(["exhausted", "deterministic"]),
         )).all()
         assert len(dead_letters) == 2
+
+
+def test_disabled_worker_leaves_post_and_retry_queued(tmp_path):
+    """Disabling the in-process worker must also disable request BackgroundTasks."""
+    app = main_module.create_app(Settings(
+        database_url=f"sqlite:///{tmp_path / 'disabled.db'}",
+        auto_seed=True,
+        llm_api_key="",
+        analysis_worker_enabled=False,
+        analysis_max_attempts=1,
+    ))
+    assert app.state.inline_jobs is False
+    headers = {"Authorization": "Bearer demo-analyst"}
+    with TestClient(app) as http:
+        created = http.post("/api/analyses", headers=headers, json={})
+        assert created.status_code == 202
+        detail = http.get(f"/api/analyses/{created.json()['id']}", headers=headers).json()
+        assert detail["status"] == "queued", detail
+        assert detail["steps"] == []
+        assert detail["recommendation_id"] is None
+
+        with app.state.factory.begin() as session:
+            session.add(Analysis(
+                id="retry-disabled", idempotency_key="retry-disabled", request={},
+                actor="demo-analyst", request_id="retry-disabled", status="failed",
+                attempts=1, max_attempts=1,
+                error={"code": "source_failed", "message": "forced"},
+            ))
+        retried = http.post("/api/analyses/retry-disabled/retry", headers=headers)
+        assert retried.status_code == 202
+        body = http.get("/api/analyses/retry-disabled", headers=headers).json()
+        assert body["status"] == "queued", body
+        assert body["steps"] == []
+        assert body["recommendation_id"] is None
+
+
+def test_worker_cli_once_claims_and_finalizes_one_job(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    url = f"sqlite:///{tmp_path / 'cli.db'}"
+    monkeypatch.setenv("PROFITOPS_DATABASE_URL", url)
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("PROFITOPS_LLM_API_KEY", "")
+    monkeypatch.setattr(worker, "build_llm_provider", lambda settings: None)
+
+    engine = build_engine(url)
+    initialize_database(engine)
+    factory = make_session_factory(engine)
+    with factory.begin() as session:
+        session.add(Analysis(
+            id="cli-job", idempotency_key="cli-job", request={},
+            actor="demo-analyst", request_id="cli-test", status="queued",
+            max_attempts=3,
+        ))
+    engine.dispose()
+
+    calls = []
+
+    def fake_run(factory, registry, analysis_id, settings, llm, claimed=False, **kwargs):
+        calls.append((analysis_id, claimed, kwargs.get("worker_id"), kwargs.get("expected_attempt")))
+        with factory.begin() as session:
+            row = session.get(Analysis, analysis_id)
+            row.status = "completed"
+            row.result = {"engine": "cli-test"}
+
+    monkeypatch.setattr(worker, "run_analysis", fake_run)
+
+    assert worker.main(["--once"]) == 0
+    output = capsys.readouterr().out
+    assert "processed 1 job(s)" in output
+    assert calls and calls[0][0] == "cli-job" and calls[0][1] is True
+
+    engine = build_engine(url)
+    factory = make_session_factory(engine)
+    with factory() as session:
+        row = session.get(Analysis, "cli-job")
+        assert row.status == "completed"
+        assert row.attempts == 1
+        assert row.worker_id is None and row.lease_until is None
+        assert row.result == {"engine": "cli-test"}
+    engine.dispose()

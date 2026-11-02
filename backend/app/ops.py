@@ -19,7 +19,12 @@ from .models import Analysis, AuditLog, Execution, Recommendation, utcnow
 from .pricing import PRICING_SOURCE, PRICING_VERSION, estimate_cost_usd
 from .views import iso_utc
 
-JOB_STATUSES = ("queued", "running", "waiting_approval", "completed", "insufficient_data", "failed")
+JOB_STATUSES = (
+    "queued", "running", "waiting_approval", "completed", "insufficient_data", "failed",
+    # Post-approval analysis states are still analysis rows; omitting them made
+    # by_status disagree with jobs.total whenever a recommendation was acted on.
+    "approved", "rejected", "executed", "execution_failed",
+)
 LLM_STATUSES = ("llm_success", "deterministic_fallback", "llm_failed", "not_requested")
 LLM_AUDIT_ACTIONS = ("analysis.llm_succeeded", "analysis.llm_fallback", "analysis.llm_failed")
 RETRY_AUDIT_ACTIONS = ("analysis.retry_scheduled",)
@@ -437,7 +442,12 @@ def build_ops_summary(
         },
         "jobs": {
             "total": total_jobs,
-            "by_status": {status: status_counts.get(status, 0) for status in JOB_STATUSES},
+            # Unknown future statuses are included as observed so the
+            # distribution always sums to total_jobs.
+            "by_status": {
+                status: status_counts.get(status, 0)
+                for status in (*JOB_STATUSES, *sorted(set(status_counts) - set(JOB_STATUSES)))
+            },
             "retry_count": retry_count,
             "retry_scheduled_events": retry_events,
             "dead_letter": dead_letter_count,
@@ -493,6 +503,7 @@ def build_ops_summary(
         "pricing": {"version": PRICING_VERSION, "source": PRICING_SOURCE},
         "notes": [
             "Window filters analysis jobs and LLM audit events by created_at; approvals and executions show current state.",
+            "jobs.by_status includes every analysis state, including approved/rejected/executed/execution_failed, and sums to jobs.total.",
             "LLM history comes from audit events; result.llm is used only when an analysis has no LLM audit event in the window.",
             "model_calls counts logical provider calls (native tool rounds or one non-native call); provider_requests includes internal retries.",
             "Runs with no model call are counted separately and excluded from usage/cost denominators.",

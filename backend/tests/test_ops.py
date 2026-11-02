@@ -194,7 +194,9 @@ def test_ops_aggregates_persisted_jobs_tools_tokens_and_cost(client, approver):
     assert jobs["by_status"] == {
         "queued": 1, "running": 0, "waiting_approval": 0,
         "completed": 1, "insufficient_data": 0, "failed": 1,
+        "approved": 0, "rejected": 0, "executed": 0, "execution_failed": 0,
     }
+    assert sum(jobs["by_status"].values()) == jobs["total"]
     assert jobs["retry_count"] == 3
     assert jobs["dead_letter"] == 1
     assert jobs["error_codes"] == [{"code": "llm_network_error", "count": 1}]
@@ -234,6 +236,22 @@ def test_ops_aggregates_persisted_jobs_tools_tokens_and_cost(client, approver):
     payload = json.dumps(body)
     assert "not-returned" not in payload
     assert "system_prompt" not in payload
+
+
+def test_ops_by_status_includes_post_approval_states(client, approver):
+    add_analysis(client, "job-approved", status="approved")
+    add_analysis(client, "job-rejected", status="rejected")
+    add_analysis(client, "job-executed", status="executed")
+    add_analysis(client, "job-execution-failed", status="execution_failed")
+
+    body = client.get("/api/ops/summary", headers=approver).json()
+    jobs = body["jobs"]
+    assert jobs["total"] == 4
+    assert jobs["by_status"]["approved"] == 1
+    assert jobs["by_status"]["rejected"] == 1
+    assert jobs["by_status"]["executed"] == 1
+    assert jobs["by_status"]["execution_failed"] == 1
+    assert sum(jobs["by_status"].values()) == jobs["total"]
 
 
 def test_ops_missing_usage_or_price_is_unknown_not_zero(client, approver):
@@ -310,7 +328,9 @@ def test_ops_no_model_call_runs_do_not_affect_cost(client, approver):
     assert body["jobs"]["by_status"] == {
         "queued": 1, "running": 0, "waiting_approval": 0,
         "completed": 2, "insufficient_data": 1, "failed": 0,
+        "approved": 0, "rejected": 0, "executed": 0, "execution_failed": 0,
     }
+    assert sum(body["jobs"]["by_status"].values()) == body["jobs"]["total"]
     assert body["llm"]["runs"] == 3
     assert body["llm"]["model_calls"] == 0
     assert body["llm"]["no_model_call_runs"] == 3

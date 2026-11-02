@@ -8,6 +8,7 @@ marked as dead letters. Only the simulation workflow is executed here.
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import socket
@@ -19,11 +20,14 @@ from sqlalchemy import func, or_, select, update
 
 from .audit import record
 from .config import Settings
-from .db import begin_write
+from .db import begin_write, build_engine, initialize_database, make_session_factory
 from .errors import LeaseLost
+from .knowledge import build_embedding_provider
+from .llm import build_llm_provider
 from .models import Analysis, lease_is_live, utcnow
 from .observability import METRICS
-from .workflow import run_analysis
+from .tools import build_registry
+from .workflow import recover_interrupted, run_analysis
 
 logger = logging.getLogger("profitops.worker")
 
@@ -635,10 +639,71 @@ class AnalysisWorker:
             worker_id=self.worker_id, limit=1,
         )
 
-    def _loop(self):
+    def run_forever(self) -> None:
+        """Poll the durable queue until ``stop`` is called or the process exits."""
         while not self._stop.is_set():
             try:
                 self.run_once()
             except Exception:
                 logger.exception("analysis_worker_loop_failed")
             self._stop.wait(self.settings.analysis_worker_poll_seconds)
+
+    def _loop(self):
+        self.run_forever()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the analysis worker as a standalone process.
+
+    Deployments that set ``PROFITOPS_ANALYSIS_WORKER_ENABLED=false`` use this
+    entry point so the API processes never claim jobs themselves.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m app.worker",
+        description="Run the ProfitOps durable analysis worker.",
+    )
+    parser.add_argument(
+        "--once", action="store_true",
+        help="Requeue expired leases, process at most one job, then exit.",
+    )
+    parser.add_argument(
+        "--poll-seconds", type=float, default=None,
+        help="Override PROFITOPS_ANALYSIS_WORKER_POLL_SECONDS.",
+    )
+    args = parser.parse_args(argv)
+
+    settings = Settings()
+    if args.poll_seconds is not None:
+        if not 0 < args.poll_seconds <= 60:
+            parser.error("--poll-seconds must be greater than 0 and at most 60")
+        settings.analysis_worker_poll_seconds = args.poll_seconds
+
+    engine = build_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    try:
+        initialize_database(engine)
+        embeddings = build_embedding_provider(settings)
+        registry = build_registry(embeddings, settings)
+        llm = build_llm_provider(settings)
+        recover_interrupted(factory, engine, settings)
+        worker = AnalysisWorker(factory, engine, registry, settings, llm)
+        if args.once:
+            processed = worker.run_once()
+            print(f"worker {worker.worker_id} processed {processed} job(s)", flush=True)
+            return 0
+        print(
+            f"worker {worker.worker_id} polling every "
+            f"{settings.analysis_worker_poll_seconds}s; Ctrl+C to stop",
+            flush=True,
+        )
+        try:
+            worker.run_forever()
+        except KeyboardInterrupt:
+            print(f"worker {worker.worker_id} stopped", flush=True)
+        return 0
+    finally:
+        engine.dispose()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

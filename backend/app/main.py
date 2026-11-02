@@ -74,8 +74,13 @@ def validate_key(key: str | None, required=False):
     return key
 
 
-def create_app(settings: Settings | None = None):
+def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = None):
     settings = settings or get_settings()
+    # The in-process worker loop and the request-scoped BackgroundTasks are two
+    # delivery paths for the same durable queue. Disabling the worker must
+    # disable both; otherwise an API process keeps executing jobs while an
+    # operator believes all work is delegated to a separate worker.
+    inline_jobs = settings.analysis_worker_enabled if inline_jobs is None else inline_jobs
     engine = build_engine(settings.database_url)
     factory = make_session_factory(engine)
     embeddings = build_embedding_provider(settings)
@@ -123,6 +128,7 @@ def create_app(settings: Settings | None = None):
     )
     app.state.settings, app.state.engine, app.state.factory, app.state.registry = settings, engine, factory, registry
     app.state.llm, app.state.embeddings = llm, embeddings
+    app.state.inline_jobs = inline_jobs
     limiter = TokenBucketLimiter()
     app.state.rate_limiter = limiter
 
@@ -416,7 +422,8 @@ def create_app(settings: Settings | None = None):
                 if row.request != scope or row.actor != actor.id:
                     raise DomainError("idempotency_conflict", "该请求键已绑定不同的分析或身份", 409)
                 return analysis_view(row, replayed=True)
-        background_tasks.add_task(process_analysis_job, factory, engine, registry, response["id"], settings, app.state.llm)
+        if inline_jobs:
+            background_tasks.add_task(process_analysis_job, factory, engine, registry, response["id"], settings, app.state.llm)
         return response
 
     @app.get("/api/analyses", tags=["agent"])
@@ -492,7 +499,8 @@ def create_app(settings: Settings | None = None):
                 request.state.request_id, "success",
                 {"previous_attempts": row.attempts, "max_attempts": row.max_attempts},
             )
-        background_tasks.add_task(process_analysis_job, factory, engine, registry, analysis_id, settings, app.state.llm)
+        if inline_jobs:
+            background_tasks.add_task(process_analysis_job, factory, engine, registry, analysis_id, settings, app.state.llm)
         return response
 
     @app.get("/api/recommendations", tags=["recommendations"])

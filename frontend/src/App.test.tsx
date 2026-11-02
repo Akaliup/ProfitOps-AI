@@ -14,13 +14,18 @@ let apiFailure: boolean
 let empty: boolean
 let documents = [structuredClone(knowledgeDocument)]
 let noKnowledgeAnswer: boolean
+let opsDelays: Record<number, number> = {}
 
 const opsSummary: OpsSummary = {
   tenant_id: 'demo', generated_at: '2026-11-02T00:00:00Z',
   window: { hours: 24, start: '2026-11-01T00:00:00Z', end: '2026-11-02T00:00:00Z', timezone: 'UTC' },
   source: { kind: 'database', tables: ['analyses'], note: '数据来自持久化记录。' },
   jobs: {
-    total: 4, by_status: { queued: 1, running: 0, waiting_approval: 0, completed: 1, insufficient_data: 0, failed: 2 },
+    total: 5,
+    by_status: {
+      queued: 1, running: 0, waiting_approval: 0, completed: 1, insufficient_data: 0, failed: 2,
+      approved: 0, rejected: 0, executed: 1, execution_failed: 0,
+    },
     retry_count: 3, retry_scheduled_events: 1, dead_letter: 1, dead_letter_events: 1,
     error_codes: [{ code: 'llm_network_error', count: 2 }],
   },
@@ -49,7 +54,7 @@ const opsSummary: OpsSummary = {
 
 beforeEach(() => {
   rows = []; history = []; executeCount = 0; lastActor = ''; apiFailure = false; empty = false
-  documents = [structuredClone(knowledgeDocument)]; noKnowledgeAnswer = false
+  documents = [structuredClone(knowledgeDocument)]; noKnowledgeAnswer = false; opsDelays = {}
   vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
     const headers = new Headers(options?.headers)
     const actor = headers.get('Authorization') ?? ''
@@ -63,7 +68,12 @@ beforeEach(() => {
     if (path === '/api/analyses') return respond({ items: history })
     if (path === '/api/analyses/analysis-1') return respond(analysis)
     if (path === '/api/analyses/analysis-failed-1') return respond({ ...analysis, id: 'analysis-failed-1' })
-    if (path.startsWith('/api/ops/summary')) return respond(opsSummary)
+    if (path.startsWith('/api/ops/summary')) {
+      const hours = Number(new URL(path, 'http://localhost').searchParams.get('window_hours') ?? 24)
+      const delay = opsDelays[hours] ?? 0
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      return respond({ ...opsSummary, window: { ...opsSummary.window, hours } })
+    }
     if (path === '/api/recommendations') return respond({ items: rows })
     if (path === '/api/knowledge/documents' && options?.method === 'POST') {
       const body = JSON.parse(String(options.body))
@@ -355,10 +365,33 @@ describe('ProfitOps workspace', () => {
     expect(screen.getAllByText(/已知小计/).length).toBeGreaterThan(0)
     expect(screen.getByText(/仅作诊断，不是总成本/)).toBeVisible()
     expect(screen.getAllByText('死信').length).toBeGreaterThan(0)
+    expect(screen.getByText('模拟已执行')).toBeVisible()
     expect(screen.getByText(/upstream reset/)).toBeVisible()
     expect(screen.queryByText('system_prompt')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '查看 Trace' }))
     expect(await screen.findByText(/已打开分析 analysis/)).toBeVisible()
+  })
+
+  it('ignores a late ops response for a window the operator already left', async () => {
+    history = [structuredClone(analysis)]
+    opsDelays = { 168: 150 }
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('销售在增长，利润却没有跟上。')
+    await user.selectOptions(screen.getByLabelText('演示身份'), 'demo-approver')
+    await user.click(screen.getByRole('button', { name: /Agent 运维/ }))
+    expect(await screen.findByText('24H')).toBeVisible()
+
+    await user.selectOptions(screen.getByLabelText('运维统计窗口'), '168')
+    await waitFor(() => expect(
+      vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('window_hours=168')),
+    ).toBe(true))
+    await user.selectOptions(screen.getByLabelText('运维统计窗口'), '24')
+    expect(await screen.findByText('24H')).toBeVisible()
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(screen.getByText('24H')).toBeVisible()
+    expect(screen.queryByText('168H')).not.toBeInTheDocument()
   })
 })
