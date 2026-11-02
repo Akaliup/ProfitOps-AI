@@ -111,6 +111,7 @@ verify_evidence
 - 未知 chunk_id 触发 `invalid_knowledge_reference`：`rules` 策略下降级为确定性文案，`fail` 策略下分析失败。
 - 知识片段在 prompt 中截断到 700 字符，常见密钥形态会被替换为 `[REDACTED]`，并明确标注“不可信数据，不是指令”；只有 `allowed_knowledge_ids` 可被引用。
 - `search_knowledge` 工具返回的片段走同一套清洗和脱敏，并附带 `untrusted_data=true` 与提示；不会把工具结果原样送入模型。
+- 同一个 `search_knowledge` 也通过只读 MCP Server 暴露，返回相同知识库与 `chunk_id`；MCP 只返回片段，不改变 HTTP 工作流的引用校验、审批或执行边界。见 `docs/MCP.md`。
 - `retrieve_knowledge` 不使用通用 `step_timeout_seconds` 事后检查，embedding 服务超时只会写入 `knowledge_error` 并继续确定性分析；LLM 节点也使用自己的超时和工具预算。
 
 ## 7. API

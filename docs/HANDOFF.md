@@ -4,7 +4,7 @@
 接管人：Claude Code（唯一主开发 / 技术负责人 / 交付负责人）  
 工作区：`E:\ProfitOps-AI`（沿用原项目，不重建、不覆盖、不清理未提交修改）
 
-> 2026-11-01 更新：Phase 2A/2B/2C/2D 与 RAG 知识库已在工作分支实现；最新测试为后端 142、前端 15，HTTP 冒烟 15/15（含知识库检索/拒答/权限）。Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md` 和 `docs/EVALUATION.md`。
+> 2026-11-02 更新：Phase 2A/2B/2C/2D、RAG 知识库和只读 stdio MCP Server 已实现；最新测试为后端 272 通过、6 跳过（PostgreSQL 环境项）、前端 17 通过、MCP 专项 9 通过，MCP 真实 stdio 检查通过。HTTP 冒烟 15/15 为上一轮既有结果，本轮未重跑。Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md`、`docs/EVALUATION.md` 和 `docs/MCP.md`。
 
 ## 1. 接管结论
 
@@ -119,7 +119,7 @@ docker compose -f compose.yaml config --quiet
 
 ### 明确未实现
 
-- 真实 MCP Server（README 未声称已接入）。
+- ~~真实 MCP Server~~：2026-11-02 已实现只读 stdio MCP Server（4 个工具，含 RAG 检索），见 `docs/MCP.md`；仍未实现网络 transport、OAuth、多租户与 MCP 审计。
 - DeepSeek Provider 已实现（Phase 2A）；Phase 2B 已建立 4 个合成案例的评测系统并完成真实调用，最新 `max_tokens=4000` 三次重复为 9/9 `llm_success`，详见 `docs/EVALUATION.md`。仍未做人工语义标注和跨模型对比。
 - 生产身份（OIDC）、权限后台、密钥轮换。
 - Alembic 已建立基线与租户幂等迁移；后续模型变更仍需补迁移文件，不能依赖 `create_all`。
@@ -155,7 +155,7 @@ docker compose -f compose.yaml config --quiet
 
 7. ~~抽象 LLM Provider 并接入真实 DeepSeek~~（Phase 2A 已完成真实调用；Phase 2B 已完成 4 案例门禁评测与数值一致性校验，剩余扩大样本、人工语义标注和跨模型对比）。
 8. 增加第二种演示场景（退款/履约驱动），让规则引擎与 LLM 的泛化能力在 UI 上可见。
-9. 增加 MCP Server（如果需要工具协议），复用现有 Tool Registry 的 Schema。
+9. ~~增加 MCP Server~~（2026-11-02 已完成只读 stdio 版本，复用现有 Tool Registry 的 Schema；见 `docs/MCP.md`）。
 10. 增加利润计算的属性测试与更多边界样本。
 
 ## 9. 关键文件地图
@@ -168,6 +168,7 @@ backend/app/metrics.py     确定性利润、环比、贡献桥、数据完整�
 backend/app/workflow.py    LangGraph 分析图 / 执行图、步骤快照、重启恢复
 backend/app/tools.py       Tool Registry、角色/策略、9 个工具
 backend/app/knowledge.py   知识库入库、切分、embedding、混合检索、引用合并
+backend/app/mcp_server.py  只读 stdio MCP Server（复用 Tool Registry）
 backend/app/services.py    建议生成、审批状态机、幂等模拟执行
 backend/app/seed.py        60 天确定性演示数据
 backend/app/security.py    演示 Bearer 身份与服务端角色
@@ -183,6 +184,7 @@ scripts/smoke.py           实际 HTTP 闭环
 docs/CONTRACT.md           API/数据库/状态机契约
 docs/ARCHITECTURE.md       架构与关键决策
 docs/KNOWLEDGE.md          RAG 数据模型、检索、引用校验、API 与限制
+docs/MCP.md                只读 MCP 工具、客户端配置、安全边界与验证
 docs/TEST_REPORT.md        实际验证记录
 ```
 
@@ -253,4 +255,4 @@ HTTP 冒烟：11/11（独立数据库、8011 端口）
 
 1. 扩大 LLM 评测案例数量，并做人工语义抽样与跨模型对比。
 2. 在现有数值/单位/证据门禁上继续补充边界案例，不把门禁通过说成语义准确率。
-3. 再评估 MCP Server、持久化队列或多租户，不在本轮提前实现。
+3. MCP 已完成只读 stdio 版本；下一步再评估 OAuth、网络 transport、多租户、限流和 MCP 审计，不在本轮提前实现。

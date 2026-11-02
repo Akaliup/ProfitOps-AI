@@ -69,6 +69,10 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 
 配置来自后端进程环境：`KNOWLEDGE_EMBEDDING_PROVIDER`（`hashing` 默认 / `openai`）、`KNOWLEDGE_EMBEDDING_MODEL`（默认 `hashing-v1`）、`KNOWLEDGE_EMBEDDING_BASE_URL`、`KNOWLEDGE_EMBEDDING_API_KEY`、`KNOWLEDGE_EMBEDDING_DIMENSIONS`（32–1024，默认 256）、`KNOWLEDGE_CHUNK_CHARS`（200–2000，默认 600）、`KNOWLEDGE_CHUNK_OVERLAP`（0–500，默认 100，必须小于 chunk chars）、`KNOWLEDGE_TOP_K`（1–10，默认 5）、`KNOWLEDGE_CANDIDATE_K`（1–100，默认 20，不小于 top_k）、`KNOWLEDGE_MIN_SCORE`（0–1，默认 0.15）。
 
+## MCP（只读，stdio）
+
+`backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 四个 `effect=read|pure`、`policy=safe` 的工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
+
 ## API
 
 全部 JSON；`/health` 与 `/metrics` 无认证，`/api/demo` 可匿名读取 demo 租户概览（带 Bearer 时返回该租户自己的店铺与数据范围），其余 API 需 Bearer。`POST /api/auth/login` 返回 `{access_token,token_type,expires_in,user}`；`GET /api/auth/me` 返回当前用户、角色与租户。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。登录、创建分析和其他 API 分别按 IP + token 哈希限流，超限返回 429 `rate_limited` 与 `Retry-After`；`/health`、`/metrics` 不限流。限流身份只接受 demo token 或签名有效的 JWT；缺失、伪造或过期 Bearer 共用匿名桶，轮换无效 token 不能绕过基础限额。TokenBucketLimiter 的 bucket 数量是硬上限，达到上限时先清理一小时未更新的桶，再按最旧时间淘汰，唯一 key 突发不会突破 `max_buckets`。

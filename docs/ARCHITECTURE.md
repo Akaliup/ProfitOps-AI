@@ -54,6 +54,12 @@ LLM 节点位于确定性利润、异常归因和证据校验之后、创建建�
 
 离线评测 `backend/evals/rag.py` 使用临时 SQLite、固定查询集和 hashing embedding，报告 hit@1/hit@3、no-answer 准确率、引用有效性与延迟，任一硬门禁失败时退出码非 0。本次 6 篇文档、8 个查询的结果是 hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次。它验证的是检索与引用链路在合成知识库上的行为，不是通用语义检索准确率。
 
+## MCP Server
+
+`backend/app/mcp_server.py` 是独立的 stdio MCP 进程，复用同一个 `ToolRegistry`，只暴露四个只读工具：`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status`。服务启动时校验每个工具都在 Registry 中、`effect` 为 `read`/`pure`、`policy=safe`；`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在允许列表，客户端直接调用返回 `unknown_tool`。MCP 层不另写业务逻辑，也不构建 LLM Provider。
+
+角色来自服务端 `PROFITOPS_MCP_ROLE`（analyst/approver），不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须由主服务或初始化流程准备好；工具调用只读，测试会核对 `analyses/recommendations/executions/audit_logs` 前后计数不变。`search_knowledge` 与 HTTP/LangGraph 共用知识文档、切分、embedding 和 `chunk_id`；默认 hashing 不联网，配置远程 embedding 时 `openWorldHint=true`。MCP 只返回知识片段，不改变 HTTP 工作流的引用校验与审批边界。审批和模拟执行仍只能通过 HTTP + 人工 approver 完成。
+
 ## 状态机与并发
 
 `proposed → pending_approval → approved → executing → executed`，另有 `rejected` 和 `execution_failed` 终态。审批和执行都通过带旧状态条件的 UPDATE 抢占状态；执行先抢占行锁/写锁，再检查唯一执行记录，最后在同一个事务中插入执行记录、模拟变更、更新状态和写审计。`executions.recommendation_id` 唯一，`(tenant_id, idempotency_key)` 复合唯一。重复请求返回已有执行记录并标记 `replayed=true`；不同建议复用执行键返回 409。失败保留错误诊断并返回 HTTP 500，不会伪装成成功。

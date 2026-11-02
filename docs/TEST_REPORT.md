@@ -2,6 +2,8 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+> 2026-11-02 MCP 分支补充：只读 stdio MCP Server 已加入；后端 272 通过、6 跳过，MCP 专项 9 通过，MCP stdio 检查通过，前端 17 通过、生产构建通过。详见下方“2026-11-02 只读 MCP Server”一节；HTTP 冒烟与浏览器 E2E 本轮未重跑。
+
 ## 2026-11-02 PR #9 成本与调用口径收口（Claude Code）
 
 分支 `feat/final-agent-validation`，PR #9，基线 `7da915e`。本轮只修复 native Function Calling 的逐轮成本完整性与模型调用/Provider 请求计数口径，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史运行数据。
@@ -281,6 +283,22 @@ fail-closed 回归：复制案例并破坏 `source_type`、`expected.primary_dri
 RAG 评测报告写入 `backend/evals/reports/rag-latest.json`。评测强制 hashing embedding，使用临时 SQLite，不读写 `data/profitops.db`；`hit@1` 未达 100% 的查询是“执行幂等键重复请求怎么办”，top-1 命中广告预算文档、top-2 命中目标文档，报告保留真实排名，没有为提升 hit@1 调参。
 
 开发过程中发现并修复：无关查询“如何预订会议室午餐”最初因中文单字“预/订”误命中广告文档；修复为单字低权重、`KNOWLEDGE_MIN_SCORE` 默认 0.15，并在 `no_answer` 时清空 hits。HTTP 冒烟使用独立 `data/smoke-rag-20261101.db`，未修改 `data/profitops.db`。
+
+## 2026-11-02 只读 MCP Server（Claude Code）
+
+分支 `feat/mcp-rag-server`，基于已合并的 `origin/master` `4b591b4`。RAG 知识库已在 master 实现；本轮新增 stdio MCP Server，并把同一套 RAG 检索暴露为 MCP 工具，未修改 HTTP 业务契约或数据库结构。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | **272 passed, 6 skipped**（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试；1 个第三方 DeprecationWarning，172.52s） |
+| MCP 专项测试 | `.venv/Scripts/python.exe -m pytest backend/tests/test_mcp_server.py -q` | **9 passed**（6.18s） |
+| MCP 真实 stdio 子进程 | `.venv/Scripts/python.exe scripts/mcp_check.py` | **ok=true**；4 个只读工具；`get_profit_analysis` 净利润 `-570300` 美分、`bridge_verified=true`、8 条证据；SKU 3 行；RAG 命中 3 条、`embedding_model=hashing-v1`；写/审批工具均为 `unknown_tool` |
+| 前端单元/交互 | `npm --prefix frontend test -- --run` | **17 passed**（Vitest + RTL，39.58s） |
+| TypeScript + 生产构建 | `npm --prefix frontend run build` | 通过；Vite 6.4.5，2252 modules，18.79s |
+| 真实 LLM 调用 | 未执行 | **未验证**：MCP 进程不构建 LLM Provider；检查脚本固定 `LLM_PROVIDER=disabled`、空 `LLM_API_KEY` |
+| HTTP 冒烟 / 浏览器 E2E | 未重新执行 | **未验证**：本轮未改动 HTTP 路由或前端页面；MCP 是独立 stdio 进程。RAG 的既有 HTTP/浏览器证据保留在上一节 |
+
+MCP 测试使用临时 SQLite 和 `hashing` embedding，不读写 `data/profitops.db`，网络调用 0 次。`test_mcp_calls_do_not_write_business_tables` 对比调用前后 `analyses`、`recommendations`、`executions`、`audit_logs` 计数；`test_mcp_rejects_unknown_write_ask_and_invalid_arguments` 验证 `create_recommendation`、`simulate_execute_approved_action`、未知工具、非法 period 和客户端 `role` 注入均被拒绝。MCP 的角色由 `PROFITOPS_MCP_ROLE` 服务端配置决定，`Settings` 拒绝 `admin` 等非法值。
 
 ## 已验证（2026-10-30 基线）
 

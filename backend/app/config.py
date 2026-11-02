@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     auth_issuer: str = "profitops"
     auth_token_ttl_seconds: int = Field(default=3600, ge=60, le=604800)
     step_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    # The MCP server is a separate stdio process. Its role is server-side
+    # configuration, never a client-supplied header or tool argument.
+    mcp_role: Literal["analyst", "approver"] = Field(
+        default="analyst",
+        validation_alias=AliasChoices("PROFITOPS_MCP_ROLE", "mcp_role"),
+    )
 
     # Durable analysis jobs. The worker runs inside the API process by default;
     # a deployment can disable it and run backend/app/worker.py separately.

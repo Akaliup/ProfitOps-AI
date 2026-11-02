@@ -114,8 +114,18 @@
 - [x] 后端 204 通过、4 跳过；前端 15 通过、生产构建通过；回放 4/4；RAG 评测通过；HTTP 冒烟 15/15
 - [ ] Alembic 本地执行与容器镜像构建未验证（本机未安装依赖/未构建），待 CI 或安装依赖后复验
 
+## 阶段十二：只读 MCP Server（2026-11-02）
+- [x] 基于 `mcp==1.30.0` 的 stdio Server，复用现有 Tool Registry，不另写业务逻辑
+- [x] 只暴露 `get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 四个 read/pure + safe 工具
+- [x] RAG 通过 MCP 暴露，返回与 HTTP/LangGraph 相同的知识库、`chunk_id`、`no_answer` 与 embedding 模型
+- [x] 明确不暴露 `create_recommendation` 与 `simulate_execute_approved_action`；审批/执行仍走 HTTP + 人工 approver
+- [x] 服务端 `PROFITOPS_MCP_ROLE` 决定角色；拒绝客户端角色注入、未知工具和非法参数
+- [x] MCP 进程不建表、不 Seed、不构建 LLM Provider；测试核对调用前后业务表计数不变
+- [x] `backend/tests/test_mcp_server.py` 9 项通过；`scripts/mcp_check.py` 真实 stdio 子进程检查通过
+- [x] `docs/MCP.md`、README、架构、契约、知识库文档与依赖锁同步
+
 ## 后续（核心通过后再评估）
-- 实际 MCP Server（未实现前不能宣称已接入 MCP）
+- MCP 生产化：OAuth、网络 transport、多租户、限流、审计与客户端权限管理
 - RAG 生产化：真实 embedding、业务语料与人工标注查询集、reranker、文档级 ACL、PDF/OCR
 - LLM 解释质量评测集（固定案例比较结论、证据引用、知识引用与越权承诺）
 - 生产身份（OIDC/SSO）、密码重置、MFA、租户管理后台、分布式限流与共享指标状态
