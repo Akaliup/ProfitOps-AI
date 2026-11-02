@@ -91,6 +91,29 @@
 
 BGE-M3 阻塞原因是本机 Ollama 未安装该模型，`/v1/embeddings` 返回真实 HTTP 404；`ollama pull bge-m3` 因重定向到非公网地址失败。没有用随机向量、mock 或 `qwen3-embedding:0.6b` 冒充 BGE-M3。Hashing 的唯一失败是 `quality-03` top-1 未中（正确文档第 3 名），未调参。完整报告见 `docs/RAG_REAL_EMBEDDING_REPORT.md` 与 `docs/rag-real-embedding-2026-11-02.json`。
 
+### R8. 42 条标注集与 BM25 + RRF 混合检索（2026-11-03）
+
+2026-11-03 起 `backend/evals/rag.py` 统一读 `backend/evals/rag_queries.json`（42 条：36 可回答 / 6 不可回答），并把一次运行变成 **两种排序策略的 A/B**：`weighted`（旧单一混合分）与 `hybrid_rrf`（稠密可选 + BM25 + confidence 三路倒数排名融合，`k=60`），随后用 `KNOWLEDGE_MAX_PER_DOCUMENT=2` 限制单篇文档占位。
+
+新增指标：MRR、nDCG@5（二值相关性）、按 keyword(15) / paraphrase(17) / cross_doc(4) / unanswerable(6) 分层，cross_doc 另报 `coverage@3`。新增门禁 `no_rank_regression`：`hybrid_rrf` 的 MRR 不得低于 `weighted`。分层标签是 2026-11-03 追加的**辅助标注**，不改变 `expected_title`，`coverage@3` 也不参与门禁。
+
+| 配置 | hit@1 | hit@3 | MRR | nDCG@5 | no-answer | citation | coverage@3 | P50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| hashing · weighted | 97.22% | 100% | 0.9815 | 0.9861 | 100% | 100% | 75% | 7.3 ms |
+| hashing · hybrid_rrf | 97.22% | 100% | 0.9815 | 0.9861 | 100% | 100% | 75% | 10.0 ms |
+| qwen3-embedding:0.6b · weighted | 100% | 100% | 1.0000 | 1.0000 | 100% | 100% | 50% | 515 ms |
+| qwen3-embedding:0.6b · hybrid_rrf | 100% | 100% | 1.0000 | 1.0000 | 100% | 100% | 75% | 552 ms |
+
+四条结论，都按实测写：
+
+1. **hashing 下两种策略同分**：hashing 无排序能力（`semantic_ranking=False`），不参与融合投票，`confidence` 本身已含余弦，因此 `hybrid_rrf` 实际等于「旧排序 + BM25 打破平局」。这不是参数没生效，而是这条语料上两者本就等价。
+2. **真实 embedding 下 hit@1 打满，收益体现在跨文档覆盖**：`coverage@3` 75% vs 50%。
+3. **消融决定了 dense 的投票权**：三路等权时，一个 32 字的相关片段余弦为 0.0（dense 排名 34/34），被两路「中等」的无关片段平均掉并掉出 top-5；去掉 dense 后该片段回到 top-1，42 条指标不变。据此实现为「provider 有排序能力才投票」，而不是给它调小权重。
+4. **绝对阈值不能跨模型复用**：`min_score=0.15` 在 hashing 下正确（max 不可回答 0.1450 < min 可回答 0.1800），在 qwen3-embedding 下 6 条不可回答全部误答（no-answer 0%）；该 provider 的建议值是 0.3982，取 0.40 后 no-answer 回到 100%。评测现在直接输出这组分布与建议值，换模型不再靠猜。
+
+仍不能声明的事：语料只有 6 篇 SOP / 32 个 chunk，两个 provider 上检索都接近饱和，以上只证明链路、门禁与校准方法有效，不是通用检索准确率。
+
+
 ## 离线 LLM 回放评测（2026-11-01）
 
 ### P1. 目标与边界

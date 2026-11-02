@@ -76,7 +76,11 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 | `KNOWLEDGE_EMBEDDING_DIMENSIONS` | `256` | hashing 维度（32–1024） |
 | `KNOWLEDGE_CHUNK_CHARS` / `KNOWLEDGE_CHUNK_OVERLAP` | `600` / `100` | Markdown 切分与重叠 |
 | `KNOWLEDGE_TOP_K` / `KNOWLEDGE_CANDIDATE_K` | `5` / `20` | 返回数与候选数 |
-| `KNOWLEDGE_MIN_SCORE` | `0.15` | 低于阈值返回 `no_answer` |
+| `KNOWLEDGE_MIN_SCORE` | `0.15` | 拒答阈值（作用于 `confidence`；换 embedding 需重新校准，评测会给建议值） |
+| `KNOWLEDGE_RETRIEVAL_MODE` | `hybrid_rrf` | `hybrid_rrf`（BM25 + 倒数排名融合）或 `weighted`（旧单一混合分） |
+| `KNOWLEDGE_RRF_K` | `60` | RRF 平滑常数 |
+| `KNOWLEDGE_BM25_K1` / `KNOWLEDGE_BM25_B` | `1.5` / `0.75` | BM25 参数 |
+| `KNOWLEDGE_MAX_PER_DOCUMENT` | `2` | 单篇文档最多占几个片段 |
 
 完整设计、API、打分公式与限制见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)。
 
@@ -130,14 +134,20 @@ MCP 进程不建表、不 Seed，使用前需先初始化数据库；默认 hash
 ### RAG 检索评测（默认离线）
 
 ```bash
+# 默认：hashing，一次跑完 weighted（旧）与 hybrid_rrf（新）两种排序
 .venv/Scripts/python.exe backend/evals/rag.py
+
+# 真实 embedding：同一套 42 条查询、同一组参数
+.venv/Scripts/python.exe backend/evals/rag.py --embedding-provider openai \
+    --embedding-model qwen3-embedding:0.6b --min-score 0.40
 ```
 
-- 临时 SQLite + hashing embedding，不联网、不读写 `data/profitops.db`。
-- 6 篇合成 SOP，6 个可回答 + 2 个不可回答查询。
-- 报告 hit@1、hit@3、no-answer accuracy、citation validity 和延迟；硬门禁失败时退出码非 0。
-- 本次结果：hit@1 83.33%、hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次。
-- 报告写入 `backend/evals/reports/rag-latest.json`；口径见 [docs/EVALUATION.md](docs/EVALUATION.md) 的 RAG 章节。
+- 临时 SQLite，不联网、不读写 `data/profitops.db`（默认 hashing）。
+- 6 篇合成 SOP，**42 条固定标注查询**（36 可回答 + 6 不可回答），按 keyword / paraphrase / cross_doc / unanswerable 分层统计。
+- 报告 hit@1、hit@3、MRR、nDCG@5、no-answer accuracy、citation validity、延迟，以及阈值校准建议；硬门禁失败时退出码非 0。
+- 本次结果（hashing，`min_score=0.15`）：hit@1 97.22%、hit@3 100%、MRR 0.9815、no-answer 100%、citation validity 100%、网络调用 0。
+- 真实 embedding（各自按校准阈值）：**BGE-M3**（`min_score=0.42`）hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 50%（旧排序 25%）；`qwen3-embedding:0.6b`（`0.40`）hit@1 100%、跨文档覆盖 75%。两者都证明「换 embedding 必须重算阈值」：0.15 下 6 条不可回答全部误答。
+- 报告写入 `backend/evals/reports/rag-latest.json`；口径与消融见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) 第 5、9 节。
 
 ### Docker Compose（可选 PostgreSQL）
 
@@ -309,7 +319,8 @@ TASKS.md             交付与后续任务
 - [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)：云端单机 Compose、初始化/迁移、备份恢复、故障排查与访问控制。
 - [docs/FINAL_DEMO_ACCEPTANCE.md](docs/FINAL_DEMO_ACCEPTANCE.md)：最终端到端模拟验收报告与修复复验记录。
 - [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。
-- [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)：RAG 数据模型、切分、embedding、混合检索、引用校验、API 与限制。
+- [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)：RAG 数据模型、切分、embedding、混合检索与 RRF、引用校验、API 与限制。
+- [docs/RAG_BGE_M3_2026-11-03.md](docs/RAG_BGE_M3_2026-11-03.md)：BGE-M3 的 GGUF 来源、字节校验、42 条查询对比与阈值校准。
 - [docs/EVALUATION.md](docs/EVALUATION.md)：Phase 2B Agent 评测、Phase 2D 原生工具评测与 RAG 检索评测记录。
 
 ## 演示与讲解建议

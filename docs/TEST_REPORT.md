@@ -6,6 +6,33 @@
 
 > 2026-11-02 MCP 分支补充：只读 stdio MCP Server 已加入；后端 272 通过、6 跳过，MCP 专项 9 通过，MCP stdio 检查通过，前端 17 通过、生产构建通过。详见下方“2026-11-02 只读 MCP Server”一节；HTTP 冒烟与浏览器 E2E 本轮未重跑。
 
+## 2026-11-03 RAG 检索评测统一 + BM25/RRF（Claude Code 实现 · 本人验收）
+
+分支 `docs/collaboration-narrative`。改动：`backend/evals/rag.py` 改读 42 条固定标注集并做双策略 A/B；新增 `backend/app/bm25.py`（内存 BM25）；`search_knowledge` 增加 `hybrid_rrf` 排序（BM25 + confidence 融合，`dense` 仅在有排序能力的 provider 下投票）、同文档上限、逐片段 `confidence`；新增配置 `KNOWLEDGE_RETRIEVAL_MODE/RRF_K/BM25_K1/BM25_B/MAX_PER_DOCUMENT`。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 后端全量 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | **277 passed, 6 skipped**（154.88s；跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL`） |
+| 新增 BM25/融合测试 | `.venv/Scripts/python.exe -m pytest backend/tests/test_bm25.py -q` | **5 passed** |
+| RAG 评测（hashing，双策略） | `.venv/Scripts/python.exe backend/evals/rag.py` | 退出码 0；weighted 与 hybrid_rrf 均 hit@1 97.22%、MRR 0.9815、no-answer 100%、citation 100% |
+| RAG 评测（真实 embedding） | `... rag.py --embedding-provider openai --embedding-model qwen3-embedding:0.6b --min-score 0.40` | 退出码 0；hit@1 100%、MRR 1.0000、no-answer 100%、coverage@3 hybrid 75% / weighted 50% |
+| 前端生产构建 | `npm --prefix frontend run build` | 通过（Vite 6.4.5，19.74s） |
+| 前端单元测试 | 未重跑 | **NOT RUN**（本轮只改 `types.ts` 的可选字段） |
+| BGE-M3 模型可用性 | `POST /v1/embeddings`（本机 Ollama） | 1024 维；`ollama list` 含 `bge-m3`（Q8_0 GGUF 导入，634,553,760 字节与镜像一致） |
+| RAG 评测（BGE-M3） | `... rag.py --embedding-provider openai --embedding-model bge-m3 --min-score 0.42` | 退出码 0；hit@1 100%、MRR 1.0000、no-answer 100%、coverage@3 hybrid 50% / weighted 25% |
+| 阈值校准 | 同上，先以 `--min-score 0.15` 跑一次 | 0.15 下 no-answer 0%（6/6 误答），校准建议 0.4164；取 0.42 后 100% |
+| 现有库重嵌入 | `.venv/Scripts/python.exe scripts/reindex_knowledge.py` | 6 documents / 32 chunks：`hashing-v1` → `bge-m3`；重嵌入前已备份 `data/backup/profitops-20261103-pre-bge-m3.db` |
+| 真实 API 检索（BGE-M3） | TestClient + `data/profitops.db` | `rankers=["dense","bm25","confidence"]`；相关查询命中正确文档（confidence 0.59/0.61 ≥ 0.42），无关查询 `no_answer=true` |
+| 测试与本地 .env 隔离 | `pytest backend/tests`（`.env` 已指向 bge-m3） | 277 passed, 6 skipped；conftest 增加 session 级环境覆写，避免本机配置让测试调用真实 embedding 服务 |
+
+本轮披露的三个负面发现，均写入 `docs/EVALUATION.md` R8：
+
+1. hashing 下 `hybrid_rrf` 与 `weighted` 指标完全相同：hashing 不参与融合投票，两者在这条语料上等价。
+2. `min_score=0.15` 在 qwen3-embedding 下失效（6 条不可回答全部误答），重新校准到 0.40 后恢复 100%；评测现在输出校准建议值。BGE-M3 同样失效，校准到 0.42 恢复 100%。
+3. BGE-M3 的检索延迟（P50 约 518 ms）是 CPU 推理成本，未做批处理或缓存；hashing 是 0.2 ms，两者不可直接比较。
+
+BGE-M3 的完整接入记录（GGUF 来源、字节校验、`ollama pull` 中断原因、重嵌入步骤）见 `docs/RAG_BGE_M3_2026-11-03.md`。
+
 ## 2026-11-02 PR #9 成本与调用口径收口（Claude Code 实现 · 本人验收）
 
 分支 `feat/final-agent-validation`，PR #9，基线 `7da915e`。本轮只修复 native Function Calling 的逐轮成本完整性与模型调用/Provider 请求计数口径，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史运行数据。

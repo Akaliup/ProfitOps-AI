@@ -65,6 +65,7 @@ KNOWLEDGE_EMBEDDING_API_KEY=
 
 - 重新上传相同正文：创建接口检测到相同 SHA-256 的 active 文档后，若当前模型或维度不同，会在原文档上重嵌入现有 chunk，返回 `created=false, reindexed=true`。
 - 显式调用 `POST /api/knowledge/documents/{id}/reindex`（仅 approver）：对指定文档重嵌入现有 chunk。
+- 批量：`scripts/reindex_knowledge.py`（读取 `.env`，先 `--dry-run` 预览；保留文档/chunk/审计，只换向量与 `embedding_model`；默认拒绝重嵌回 hashing）。
 
 两种方式都保留文档 ID、source、version、effective_date、active，以及 chunk ID、正文和 heading；重复 reindex 已是最新模型与维度时为 no-op，不产生额外 embedding 调用。嵌入或写入失败会回滚事务，旧向量与旧 `embedding_model` 保留，不会把真实 embedding 静默降级为 hashing。审计记录 `knowledge.document.reindexed`。
 
@@ -72,20 +73,29 @@ KNOWLEDGE_EMBEDDING_API_KEY=
 
 ## 5. 检索与打分
 
-查询先归一化，再生成 query embedding。对每个 active 文档、`embedding_model` 匹配且向量长度等于 query 向量的 chunk 计算：
+默认 `KNOWLEDGE_RETRIEVAL_MODE=hybrid_rrf`：三路排名 → 倒数排名融合（RRF）→ 同文档上限 → 逐片段置信度。
 
-```
-score = 0.65 * max(0, cosine)
-      + 0.35 * lexical
-      + 0.05 * heading_match
-```
+**三路排名**（同一候选池，各自独立排序）：
 
-- `lexical`：ASCII 词 + 中文单字/双字/三字 token 的加权重合；单字权重 0.2，双字/三字/ASCII 词按长度加权。
-- `heading_match`：query token 是否出现在 chunk 标题。
-- 取 `candidate_k`（默认 20）后，对文档标题命中再加 `0.03` 重排，返回 `top_k`（默认 5）。
-- 最高分 `< KNOWLEDGE_MIN_SCORE`（默认 0.15）时 `no_answer=true`，并清空 hits。
+| 排名器 | 依据 | 生效条件 |
+|---|---|---|
+| `dense` | 查询向量与 chunk 向量的余弦 | 仅当 provider 具备排序能力（`semantic_ranking=True`，即 OpenAI 兼容的真实 embedding） |
+| `bm25` | 同一套 token 上的 Okapi BM25（k1=1.5、b=0.75，中文单字/双字/三字 + ASCII 词） | 始终生效 |
+| `confidence` | 可解释混合分：`0.65·cos + 0.35·lexical + 0.05·heading + 0.03·title` | 始终生效 |
 
-混合打分的取舍：hashing 向量能捕捉词形相似，词法层保证中文关键词不被向量稀释；标题加权让 SOP 的章节标题参与排序。阈值是离线评测校准的工程默认值，不是通用准确率保证。
+**融合**：`rrf(chunk) = Σ 1 / (k + rank)`，`k=60`；按融合分降序，再用 `KNOWLEDGE_MAX_PER_DOCUMENT`（默认 2）限制单篇文档占位，避免 top-k 被一篇 SOP 占满（`docs/EVALUATION.md` 记录了这条约束的由来）。
+
+**为什么 dense 会缺席**：`hashing` 是特征哈希，不是语义模型。实测一个 32 字的正确片段对相关查询的余弦为 **0.0**，等权投票会把正确结果压到第 6 名（回归见 `docs/EVALUATION.md` 的消融）。因此 hashing 下只让 BM25 与 confidence 投票（`rankers=["bm25","confidence"]`），换成真实 embedding 后自动恢复三路。
+
+**分数与拒答是两套东西**：
+
+- `score` 是对外的排序分：`fused / (n_rankers / (k+1))`，压缩到 [0,1]，**只表示排名一致程度**。
+- `confidence` 是逐片段的可解释置信度，`no_answer` 只由它判定：`max(confidence over top-k) < KNOWLEDGE_MIN_SCORE` 时返回 `no_answer=true` 并清空 hits。
+- 不能用 RRF 分数做拒答：它是纯排名量，即使全是不相关片段，第一名也照样拿高分。
+
+`confidence` 是绝对分数，**换 embedding 模型后必须重新校准 `KNOWLEDGE_MIN_SCORE`**。评测会输出两组的分布（`max_unanswerable_top_confidence` / `min_answerable_top_confidence`）和 `suggested_min_score`，实测：hashing 下 0.15 可用，`qwen3-embedding:0.6b` 下需要 0.40（见第 9 节）。
+
+`KNOWLEDGE_RETRIEVAL_MODE=weighted` 保留旧行为（单一混合分排序，无 BM25、无融合、无同文档上限），用于 A/B 对比与回滚。
 
 ## 6. 工作流与引用生命周期
 
@@ -148,11 +158,14 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
   "hits": [{
     "chunk_id": "...", "document_id": "...", "title": "广告预算调整与审批规则",
     "source": "synthetic://profitops/knowledge/ad-budget-policy", "version": "v1",
-    "heading": "审批流程", "content": "...", "score": 0.42, "rank": 1
+    "heading": "审批流程", "content": "...",
+    "score": 0.83, "rank": 1, "confidence": 0.47
   }],
   "no_answer": false,
   "embedding_model": "hashing-v1",
-  "retrieval_ms": 8.2
+  "retrieval_ms": 8.2,
+  "retrieval_mode": "hybrid_rrf",
+  "rankers": ["bm25", "confidence"]
 }
 ```
 
@@ -169,35 +182,72 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
 | `KNOWLEDGE_CHUNK_OVERLAP` | `100` | 0–500，必须小于 chunk chars |
 | `KNOWLEDGE_TOP_K` | `5` | 1–10 |
 | `KNOWLEDGE_CANDIDATE_K` | `20` | 1–100，不小于 top_k |
-| `KNOWLEDGE_MIN_SCORE` | `0.15` | 低于阈值返回 no_answer |
+| `KNOWLEDGE_MIN_SCORE` | `0.15` | 拒答阈值，作用于 `confidence`（换 embedding 需重新校准） |
+| `KNOWLEDGE_RETRIEVAL_MODE` | `hybrid_rrf` | `hybrid_rrf`（BM25 + 融合）或 `weighted`（旧单一混合分） |
+| `KNOWLEDGE_RRF_K` | `60` | RRF 平滑常数，值越大越看重多路一致性 |
+| `KNOWLEDGE_BM25_K1` / `KNOWLEDGE_BM25_B` | `1.5` / `0.75` | BM25 词频饱和与长度归一化 |
+| `KNOWLEDGE_MAX_PER_DOCUMENT` | `2` | 单篇文档在 top-k 中最多占几个片段 |
 
 ## 9. 评测
 
 ```bash
+# 默认：hashing + 两种排序策略对比（离线，网络调用 0）
 .venv/Scripts/python.exe backend/evals/rag.py
+
+# 真实 embedding：同一套查询、同一组参数
+.venv/Scripts/python.exe backend/evals/rag.py --embedding-provider openai \
+    --embedding-model qwen3-embedding:0.6b --min-score 0.40
 ```
 
-- 临时 SQLite，不读写 `data/profitops.db`；强制 hashing embedding，网络调用 0 次。
-- 6 个可回答查询 + 2 个不可回答查询。
-- 指标：hit@1、hit@3、no-answer accuracy、citation validity、平均延迟。
-- 硬门禁：hit@3 全部命中、no-answer 全部正确、引用 chunk_id 全部存在；失败时退出码非 0。
-- 报告写入 `backend/evals/reports/rag-latest.json`。
+- 查询集：`backend/evals/rag_queries.json`，**42 条固定标注**（36 可回答 + 6 不可回答），标签在任何 embedding 生成前固定。
+- 辅助分层标签（2026-11-03 新增，不参与门禁）：`keyword` 15 条、`paraphrase` 17 条、`cross_doc` 4 条、`unanswerable` 6 条。`cross_doc` 额外标注 `secondary_titles`，只用于报告 `coverage@3`。
+- 指标：hit@1、hit@3、MRR、nDCG@5（二值相关性、单相关文档）、no-answer accuracy、可回答误拒数、citation validity、P50/P95 延迟，以及按查询类型分桶。
+- 硬门禁：hit@3 全中、no-answer 全对、可回答误拒为 0、citation validity 100%，且 `hybrid_rrf` 的 MRR 不低于 `weighted`。任一失败退出码非 0。
+- 临时 SQLite，不读写 `data/profitops.db`；默认 hashing，网络调用 0 次。
+- 报告写入 `backend/evals/reports/rag-latest.json`（真实 embedding 见 `rag-qwen3-embedding.json`）。
 
-本次结果（2026-11-01）：
+### 结果（2026-11-03）
 
-| 指标 | 结果 |
+hashing + 42 条查询：
+
+| 排序策略 | hit@1 | hit@3 | MRR | nDCG@5 | no-answer | citation | P50 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `weighted`（旧） | 97.22% | 100% | 0.9815 | 0.9861 | 100% | 100% | 7.3 ms |
+| `hybrid_rrf`（新） | 97.22% | 100% | 0.9815 | 0.9861 | 100% | 100% | 10.0 ms |
+
+hashing 下两种策略的排名完全一致：`hashing` 不参与融合投票，`confidence` 已经包含余弦，所以 `hybrid_rrf` 等价于「旧排序 + BM25 打破平局」。这不是没生效，而是这条数据上两者本就同分——**BM25 的收益要等真实 embedding 才显现**。
+
+真实 embedding（各自按校准阈值）：
+
+| provider（min_score） | 排序策略 | hit@1 | hit@3 | MRR | nDCG@5 | no-answer | coverage@3 | P50 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `qwen3-embedding:0.6b`（0.40） | `weighted` | 100% | 100% | 1.0000 | 1.0000 | 100% | 50% | 513 ms |
+| `qwen3-embedding:0.6b`（0.40） | `hybrid_rrf` | 100% | 100% | 1.0000 | 1.0000 | 100% | **75%** | 591 ms |
+| `bge-m3`（0.42） | `weighted` | 100% | 100% | 1.0000 | 1.0000 | 100% | 25% | 556 ms |
+| `bge-m3`（0.42） | `hybrid_rrf` | 100% | 100% | 1.0000 | 1.0000 | 100% | **50%** | 518 ms |
+
+BGE-M3 的接入与完整对比（含 GGUF 来源、字节校验、启用步骤）见 [`docs/RAG_BGE_M3_2026-11-03.md`](RAG_BGE_M3_2026-11-03.md)。
+
+真实 embedding 下 hit@1 已经打满，差异体现在跨文档覆盖：`hybrid_rrf` 让 top-3 更容易同时覆盖两篇 SOP（75% vs 50%）。这两个模型上的检索都接近饱和（6 篇 SOP、32 个 chunk 太少），所以**这一节只能证明链路与门禁有效，不能宣称通用准确率**。
+
+### 阈值校准（同一套查询，不同 embedding）
+
+| provider | max(不可回答 top1) | min(可回答 top1) | 建议阈值 | 0.15 是否可用 |
+|---|---:|---:|---:|---|
+| `hashing-v1` | 0.1402 | 0.1797 | 0.1599 | 可用 |
+| `bge-m3` | 0.3418 | 0.4911 | 0.4164 | **不可用**：6 条不可回答全部误答（no-answer 0%） |
+| `qwen3-embedding:0.6b` | 0.3404 | 0.4561 | 0.3982 | **不可用**：同上 |
+
+这就是「绝对阈值不能跨模型复用」的实测证据，也是本文件反复强调换模型要重新校准的原因。
+
+### 消融：为什么 hashing 不参与融合投票
+
+| 配置 | 结果 |
 |---|---|
-| 文档数 | 6 |
-| 可回答查询 | 6 |
-| 不可回答查询 | 2 |
-| hit@1 | 83.33% |
-| hit@3 | 100% |
-| no-answer accuracy | 100% |
-| citation validity | 100% |
-| 网络调用 | 0 |
-| 平均延迟 | 约 6 ms |
+| 三路等权（dense + bm25 + confidence） | 一个 32 字的相关片段余弦为 0.0、dense 排名 34/34，被两路都「中等」的无关片段平均掉，掉出 top-5 |
+| 去掉 dense（hashing 下） | 该片段回到 top-1；42 条查询指标不变 |
 
-`approval-idempotency` 的 top-1 命中了广告预算文档，但目标文档在 top-3 内；报告保留真实排名，没有为提升 hit@1 调参。该结果是合成知识库上的检索门禁，不是通用语义准确率，也不代表真实业务文档上的效果。
+结论：无排序能力的 provider 不该投票，而不是给它调小权重。
 
 ## 10. 安全与限制
 
@@ -211,5 +261,7 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
 - 并发测试覆盖 SQLite 双请求（`BEGIN IMMEDIATE` 串行化）与 PostgreSQL 双请求（唯一索引冲突后 savepoint 恢复）；PostgreSQL 测试使用独立 schema，需设置 `PROFITOPS_TEST_POSTGRES_URL`。
 - 超过 200 字符的 Markdown 标题只保留前 200 字符作为 heading 元数据；正文不受影响，但完整标题不会单独保存。
 - hashing embedding 不是语义模型；同义改写召回有限，生产应换真实 embedding 并重新跑评测。
-- `no_answer` 阈值是工程默认值，需要按业务语料校准；当前评测集只有 8 个查询，不能据此声明泛化准确率。
+- `no_answer` 阈值是**绝对分数**，换 embedding 或换语料都要重新校准（评测会给出建议值）；当前 42 条查询、6 篇合成 SOP，不能据此声明泛化准确率。
+- BM25 索引每次检索在内存构建（与既有全量打分同阶，32 chunk 时 P50 约 10 ms）；语料上到万级 chunk 应换成 FTS5/pgvector，而不是继续全表扫。
+- 三路融合在同文档上限生效时会跳过超额片段，因此返回条数在极端语料（文档数不足）下可能少于 `top_k`；此时不做截断退让，避免用低质量片段凑数。
 - 知识库只影响解释与建议文案，不影响利润、动作参数、审批或执行。

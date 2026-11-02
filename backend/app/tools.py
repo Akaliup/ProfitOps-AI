@@ -185,6 +185,11 @@ def build_registry(embeddings=None, settings=None):
     embeddings = embeddings or HashingEmbeddingProvider()
     candidate_k = settings.knowledge_candidate_k if settings is not None else 20
     min_score = settings.knowledge_min_score if settings is not None else 0.15
+    retrieval_mode = settings.knowledge_retrieval_mode if settings is not None else "hybrid_rrf"
+    rrf_k = settings.knowledge_rrf_k if settings is not None else 60
+    bm25_k1 = settings.knowledge_bm25_k1 if settings is not None else 1.5
+    bm25_b = settings.knowledge_bm25_b if settings is not None else 0.75
+    max_per_document = settings.knowledge_max_per_document if settings is not None else 2
 
     def search(payload, context):
         with context.factory() as session:
@@ -192,6 +197,9 @@ def build_registry(embeddings=None, settings=None):
                 session, payload, embeddings,
                 candidate_k=candidate_k, min_score=min_score,
                 tenant_id=context.actor.tenant_id,
+                retrieval_mode=retrieval_mode, rrf_k=rrf_k,
+                bm25_k1=bm25_k1, bm25_b=bm25_b,
+                max_per_document=max_per_document,
             )
         context.knowledge_hits.extend(hit.model_dump(mode="json") for hit in result.hits)
         return result

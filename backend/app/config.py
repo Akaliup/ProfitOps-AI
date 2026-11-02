@@ -143,6 +143,29 @@ class Settings(BaseSettings):
         default=0.15, ge=0, le=1,
         validation_alias=AliasChoices("KNOWLEDGE_MIN_SCORE", "PROFITOPS_KNOWLEDGE_MIN_SCORE", "knowledge_min_score"),
     )
+    # Ranking strategy: ``hybrid_rrf`` fuses a dense ranking with BM25 through
+    # reciprocal rank fusion; ``weighted`` is the previous single-ranking blend,
+    # kept so the retrieval evaluation can report a before/after on one command.
+    knowledge_retrieval_mode: Literal["hybrid_rrf", "weighted"] = Field(
+        default="hybrid_rrf",
+        validation_alias=AliasChoices("KNOWLEDGE_RETRIEVAL_MODE", "PROFITOPS_KNOWLEDGE_RETRIEVAL_MODE", "knowledge_retrieval_mode"),
+    )
+    knowledge_rrf_k: int = Field(
+        default=60, ge=1, le=200,
+        validation_alias=AliasChoices("KNOWLEDGE_RRF_K", "PROFITOPS_KNOWLEDGE_RRF_K", "knowledge_rrf_k"),
+    )
+    knowledge_bm25_k1: float = Field(
+        default=1.5, ge=0.1, le=3.0,
+        validation_alias=AliasChoices("KNOWLEDGE_BM25_K1", "PROFITOPS_KNOWLEDGE_BM25_K1", "knowledge_bm25_k1"),
+    )
+    knowledge_bm25_b: float = Field(
+        default=0.75, ge=0, le=1,
+        validation_alias=AliasChoices("KNOWLEDGE_BM25_B", "PROFITOPS_KNOWLEDGE_BM25_B", "knowledge_bm25_b"),
+    )
+    knowledge_max_per_document: int = Field(
+        default=2, ge=1, le=10,
+        validation_alias=AliasChoices("KNOWLEDGE_MAX_PER_DOCUMENT", "PROFITOPS_KNOWLEDGE_MAX_PER_DOCUMENT", "knowledge_max_per_document"),
+    )
 
     @property
     def llm_configured(self) -> bool:

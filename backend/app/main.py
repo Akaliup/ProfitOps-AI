@@ -391,6 +391,11 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
                 candidate_k=settings.knowledge_candidate_k,
                 min_score=settings.knowledge_min_score,
                 tenant_id=actor.tenant_id,
+                retrieval_mode=settings.knowledge_retrieval_mode,
+                rrf_k=settings.knowledge_rrf_k,
+                bm25_k1=settings.knowledge_bm25_k1,
+                bm25_b=settings.knowledge_bm25_b,
+                max_per_document=settings.knowledge_max_per_document,
             )
         return result.model_dump(mode="json")
 

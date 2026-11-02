@@ -289,6 +289,10 @@ class KnowledgeHit(StrictModel):
     content: str
     score: float = Field(ge=0, le=1.1)
     rank: int = Field(ge=1, le=100)
+    # Interpretable per-chunk relevance used for abstention. ``score`` is the
+    # ranking value (RRF in hybrid mode), which is rank-based and therefore
+    # cannot decide whether anything relevant exists at all.
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 KNOWLEDGE_MAX_HITS = 10
@@ -305,6 +309,9 @@ class KnowledgeSearchOutput(StrictModel):
     no_answer: bool = False
     embedding_model: str
     retrieval_ms: float = Field(ge=0)
+    retrieval_mode: str = "hybrid_rrf"
+    # Which rankers voted in the fusion, for example ["bm25", "confidence"].
+    rankers: list[str] = Field(default_factory=list)
 
 
 class KnowledgeCitation(KnowledgeHit):

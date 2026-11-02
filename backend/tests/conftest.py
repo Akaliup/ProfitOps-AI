@@ -1,9 +1,36 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
 from app.observability import METRICS
+
+
+@pytest.fixture(autouse=True, scope="session")
+def offline_knowledge_defaults():
+    """Keep the suite independent of a developer's local `.env`.
+
+    ``Settings`` reads `.env`, so a machine configured for BGE-M3 would otherwise
+    make the whole test suite call a real embedding server. Environment variables
+    take precedence over `.env`; explicit ``Settings(...)`` kwargs still win.
+    """
+    overrides = {
+        "KNOWLEDGE_EMBEDDING_PROVIDER": "hashing",
+        "KNOWLEDGE_EMBEDDING_MODEL": "hashing-v1",
+        "KNOWLEDGE_EMBEDDING_BASE_URL": "",
+        "KNOWLEDGE_EMBEDDING_API_KEY": "",
+        "KNOWLEDGE_MIN_SCORE": "0.15",
+    }
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
+    yield
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +48,8 @@ def client(tmp_path):
     app = create_app(Settings(
         database_url=f"sqlite:///{tmp_path / 'test.db'}", auto_seed=True, llm_api_key="",
         analysis_worker_enabled=False, analysis_max_attempts=1,
+        knowledge_embedding_provider="hashing", knowledge_embedding_model="hashing-v1",
+        knowledge_min_score=0.15,
     ), inline_jobs=True)
     with TestClient(app) as http:
         yield http
