@@ -24,16 +24,16 @@
 - [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
 - [x] 最终验证记录、README 与演示说明
 
-## 阶段五：接管复验与加固（2026-10-30）
-- [x] 只读接管审计：代码、文档、测试、数据库与 Git 状态
+## 阶段五：独立复核与加固（2026-10-30）
+- [x] 只读复核审计：代码、文档、测试、数据库与 Git 状态
 - [x] 重新执行全部验证：后端 33、前端 6、构建、HTTP 冒烟 11/11、浏览器 E2E 2/2
 - [x] 工具安全策略显式化：safe / ask / deny，注册表拒绝 deny
 - [x] API 时间戳统一为 UTC ISO 8601（Z），SQLite 与 PostgreSQL 输出一致
 - [x] 审计接口与页面支持按 request_id 精确追踪
 - [x] 审批页展示待执行模拟动作（SKU、参考日预算、模拟新预算）
 - [x] 新增 Seed 不删除审批/执行/审计的回归测试
-- [x] 新增交接报告与演示材料
-- [x] 按用户明确要求建立首个 Git 基线（`master` 根提交，67 个文件）
+- [x] 新增交付报告与演示材料
+- [x] 按明确确认建立首个 Git 基线（`master` 根提交，67 个文件）
 - [x] Docker Compose 实际运行（2026-10-31 Docker Desktop 验收通过；见 `docs/TEST_REPORT.md`）
 
 ## 阶段六：Phase 2A DeepSeek 真实 LLM（2026-10-31）

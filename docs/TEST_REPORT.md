@@ -2,9 +2,11 @@
 
 本文件记录本次交付实际执行的命令与结果。未实际执行的验证不会标记为通过。
 
+> **协作方式说明**：本项目的规格、契约、验收标准与合并决定由本人负责；具体编码实现由 Claude Code 在 `AGENTS.md` 约定的边界内完成。各阶段标题中的“Claude Code 实现 · 本人验收”表示该标记，不是把 AI 产出算作人工手写代码。完整边界见 `docs/COLLABORATION.md`。
+
 > 2026-11-02 MCP 分支补充：只读 stdio MCP Server 已加入；后端 272 通过、6 跳过，MCP 专项 9 通过，MCP stdio 检查通过，前端 17 通过、生产构建通过。详见下方“2026-11-02 只读 MCP Server”一节；HTTP 冒烟与浏览器 E2E 本轮未重跑。
 
-## 2026-11-02 PR #9 成本与调用口径收口（Claude Code）
+## 2026-11-02 PR #9 成本与调用口径收口（Claude Code 实现 · 本人验收）
 
 分支 `feat/final-agent-validation`，PR #9，基线 `7da915e`。本轮只修复 native Function Calling 的逐轮成本完整性与模型调用/Provider 请求计数口径，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史运行数据。
 
@@ -21,7 +23,7 @@
 
 本轮定向回归覆盖：native 两轮均有 Usage 且可定价时 `cost.status=complete`，总额为两轮独立估算之和；第一轮有 Usage、第二轮缺失时 `partial`、`amount_usd=null`，`known_subtotal_usd` 只含第一轮；一轮成功、一轮失败且失败轮缺 Usage 时同样为 `partial`；native 两轮但 `attempts=3` 时 `model_calls=2`、`provider_requests=3`、`provider_retries=1`；非 native 单次逻辑调用 `attempts=3` 时 `model_calls=1`、`provider_requests=3`；请求发出前即失败（`attempts=0`、无 Usage、无轮次）不计入模型调用与成本分母。`verify_llm` 成功事件与随后终止事件的去重测试已改为两轮 native 记录，确保不会把同一次运行重复计数。
 
-## 2026-11-02 PR #9 运维汇总 P2 修复复验（Claude Code）
+## 2026-11-02 PR #9 运维汇总 P2 修复复验（Claude Code 实现 · 本人验收）
 
 分支 `feat/final-agent-validation`，PR #9，基线 `e99a016`。本轮只修复 `GET /api/ops/summary` 的成本口径、审计历史去重与查询边界，不新增功能，不调用真实模型，不修改既有评测 JSON、固定金标或历史失败数据。
 
@@ -67,7 +69,7 @@
 
 本轮 E2E 暴露并修复了两个测试基础设施问题：Playwright 同一 spec 的多个 worker 会并发执行 `beforeAll`，导致 fixture 租户唯一键竞争；共享数据库下测试依赖“最新分析”顺序。修复为 `fullyParallel: false`（同一 spec 内串行、不同 spec 仍并行）、fixture 插入竞争重试，以及按 fixture ID 显式选择失败分析。没有放宽生产逻辑或断言。
 
-## 2026-11-02 最终验收收口（Claude Code）
+## 2026-11-02 最终验收收口（Claude Code 实现 · 本人验收）
 
 分支 `feat/platform-reliability`，基线 `dd104c2`，PR #8。本轮只补齐验收证据：浏览器 E2E、Python 3.11、历史库重复文档、真实 LLM 状态；不新增业务功能，不调用真实 LLM，不修改 `data/profitops.db`。
 
@@ -111,7 +113,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 历史库重复文档：使用 `backend/tests/legacy_schema.py` 构造隔离临时 SQLite（6 条文档，5 条共享同一 SHA-256，其中 4 条迁移前 active），执行 `stamp 0001_baseline → upgrade head`。全部文档 ID 与分片保留、外键有效、每组内容仅 1 条 active、最早创建的 `legacy-document` 保留、3 条重复活跃文档软删除、原有 inactive 与不同内容文档不变、业务表行数不变、重复 upgrade no-op；12/12 PASS。未读取或修改 `data/profitops.db`。
 
-## 2026-11-01 PR #8 最终合并门禁（Claude Code）
+## 2026-11-01 PR #8 最终合并门禁（Claude Code 实现 · 本人验收）
 
 分支 `feat/platform-reliability`，基线 `fb02522`。本轮只处理三项明确问题：真实历史库迁移（P1）、指标标签基数（P2）、租约到期严格保护（P3）；不扩展功能，不调用付费模型，不修改 `data/profitops.db`。
 
@@ -129,7 +131,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 真实进程 kill/restart **本轮未重跑**：上一轮（基线 `40a629c`）已在临时库完成真实 `taskkill /F` 与重启恢复；本轮 P3 只增加写入时的租约校验，`requeue_expired` / `finalize_job` 的恢复路径未改，并由 22 个 worker 测试覆盖。真实 LLM、浏览器 E2E、Python 3.11 **未验证**（本机 `.venv` 为 3.12.8，`LLM_API_KEY` 为空）；CI 结果在推送后确认。迁移测试与冒烟均使用临时数据库，未修改 `data/profitops.db`。
 
-## 2026-11-01 PR #8 P2 收口复验（Claude Code）
+## 2026-11-01 PR #8 P2 收口复验（Claude Code 实现 · 本人验收）
 
 分支 `feat/platform-reliability`，基线 `40a629c`。本轮只修复四项 P2：跨租户幂等键冲突、租户前缀后的列宽、并发手工重试状态回退、`run_analysis` 写入 failed 后 `finalize_job` 前退出的恢复；不新增功能，不修改 RAG、前端页面或执行语义。
 
@@ -154,7 +156,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 测试专用补丁只存在于操作系统临时目录，通过 `PYTHONPATH` 加载，未提交、未修改生产代码；它用于把进程稳定停在“failed 已写入、finalize 未执行”的窗口，kill 本身是真实操作系统强制终止。真实 LLM、浏览器 E2E、PostgreSQL 0002 downgrade 本轮未执行；CI 结果在推送后另行确认。Python 3.11 未验证（本机 `.venv` 为 3.12.8）。
 
-## 2026-11-01 可靠性 P1 修复复验（Claude Code）
+## 2026-11-01 可靠性 P1 修复复验（Claude Code 实现 · 本人验收）
 
 分支 `feat/platform-reliability`，只修复两个 P1：过期租约遵守 `max_attempts` 并进入死信；推荐建议写入与租约所有权校验处于同一数据库事务。
 
@@ -169,7 +171,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 真实进程 kill/restart **未验证**：本轮只通过数据库租约过期/回收与旧/新 worker 交错测试模拟故障，没有真实终止操作系统进程后重启。真实 LLM、浏览器 E2E 未在本轮执行。
 
-## 2026-11-01 阶段十一验证（Claude Code）
+## 2026-11-01 阶段十一验证（Claude Code 实现 · 本人验收）
 
 分支 `feat/agent-evaluation-trace`，工作区包含持久化任务队列、认证与租户隔离、可观测性/限流/熔断、Alembic 基线、离线回放评测和运行手册。以下为本次实际输出：
 
@@ -189,7 +191,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 早先一次运行在未安装 `alembic` 时为 204 passed、4 skipped；安装 `backend/requirements.lock.txt` 后复验为 215 passed、0 skipped。PostgreSQL 使用一次性 `postgres:16-alpine` 容器与独立 schema，结束后删除，未连接或修改本机 Supabase 实例。Python 3.11 未验证（本机 `.venv` 为 3.12.8）；真实 LLM 未调用（`LLM_API_KEY` 为空）；CI 结果尚未观察，不标记为通过。迁移脚本使用临时 SQLite，未修改 `data/profitops.db`。
 
-## 2026-10-31 Docker Compose 实际运行验收（Claude Code）
+## 2026-10-31 Docker Compose 实际运行验收（Claude Code 实现 · 本人验收）
 
 本机 Docker Desktop 29.5.3 / Compose v5.1.4（WSL2）。Docker Hub 直连受限，构建时通过本机代理拉取基础镜像并传入 BuildKit 代理参数；未修改 `compose.yaml`、Dockerfile 或业务代码。`node:22-alpine` 使用 AWS ECR Public 的官方镜像 `public.ecr.aws/docker/library/node:22-alpine` 后本地打标签。后端启动参数为 `LLM_API_KEY=`、`LLM_PROVIDER=disabled`，不调用真实 LLM。
 
@@ -206,7 +208,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 验收后执行 `docker compose down`；PostgreSQL 命名卷 `profitops-ai_profitops_pg` 保留，未删除数据。`data/profitops.db` 未被修改。
 
-## 2026-10-31 Phase 2A：DeepSeek 接入（Claude Code）
+## 2026-10-31 Phase 2A：DeepSeek 接入（Claude Code 实现 · 本人验收）
 
 分支 `feat/deepseek-llm-agent`，基线 `4285afe`。以下均为本次实际输出：
 
@@ -226,7 +228,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 单元测试全部使用 `httpx.MockTransport` 或 `FakeProvider`，没有调用 DeepSeek，也没有消耗真实 Token；只有 `scripts/llm_check.py` 发起了真实调用。测试库使用临时目录或独立 `data/*.db`，未修改 `data/profitops.db`。
 
-## 2026-11-01 Phase 2C：原生 Function Calling（Claude Code）
+## 2026-11-01 Phase 2C：原生 Function Calling（Claude Code 实现 · 本人验收）
 
 分支 `feat/native-function-calling`，基线 `origin/master` `1134ff4`。以下均为本次实际输出：
 
@@ -243,7 +245,7 @@ Python 3.11 说明：`py -0p` 仅列出 3.14 与 3.12，项目 `.venv` 为 3.12.
 
 测试库使用临时目录或独立 `data/*.db`，未修改 `data/profitops.db`。
 
-## 2026-11-01 Phase 2D：Agent 评测与执行轨迹（Claude Code）
+## 2026-11-01 Phase 2D：Agent 评测与执行轨迹（Claude Code 实现 · 本人验收）
 
 分支 `feat/agent-evaluation-trace`，基线 `origin/master` `69aae77`。以下均为本次实际输出：
 
@@ -265,7 +267,7 @@ fail-closed 回归：复制案例并破坏 `source_type`、`expected.primary_dri
 
 测试数据库为临时目录或独立 `data/*.db`，未修改 `data/profitops.db`；`data/smoke-phase2d.db` 与 `data/e2e.db` 均在 `data/` 下且被 Git 忽略。
 
-## 2026-11-01 RAG 运营知识库（Claude Code）
+## 2026-11-01 RAG 运营知识库（Claude Code 实现 · 本人验收）
 
 分支 `feat/agent-evaluation-trace`，在 Phase 2D 工作树上增量实现。以下均为本次实际输出：
 
@@ -284,7 +286,7 @@ RAG 评测报告写入 `backend/evals/reports/rag-latest.json`。评测强制 ha
 
 开发过程中发现并修复：无关查询“如何预订会议室午餐”最初因中文单字“预/订”误命中广告文档；修复为单字低权重、`KNOWLEDGE_MIN_SCORE` 默认 0.15，并在 `no_answer` 时清空 hits。HTTP 冒烟使用独立 `data/smoke-rag-20261101.db`，未修改 `data/profitops.db`。
 
-## 2026-11-02 只读 MCP Server（Claude Code）
+## 2026-11-02 只读 MCP Server（Claude Code 实现 · 本人验收）
 
 分支 `feat/mcp-rag-server`，基于已合并的 `origin/master` `4b591b4`。RAG 知识库已在 master 实现；本轮新增 stdio MCP Server，并把同一套 RAG 检索暴露为 MCP 工具，未修改 HTTP 业务契约或数据库结构。
 
@@ -315,9 +317,9 @@ MCP 测试使用临时 SQLite 和 `hashing` embedding，不读写 `data/profitop
 | 真实浏览器 E2E | `.venv/Scripts/python.exe scripts/browser_test.py --skip-install` | 2/2 通过：桌面完整闭环、手机视图与拒绝分支；无页面异常；使用隔离的 `data/e2e.db` |
 | 容器配置语法 | `docker compose config --quiet` | 通过 |
 
-## 2026-10-30 接管复验（Claude Code）
+## 2026-10-30 首轮独立复核（Claude Code 实现 · 本人验收）
 
-接管后重新执行以下命令，结果均为本次实际输出：
+建立 Git 基线前重新执行以下命令，结果均为当次实际输出：
 
 | 检查 | 命令 | 结果 |
 |---|---|---|

@@ -14,6 +14,14 @@ LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根�
 ![模拟执行结果](docs/screenshots/execution.png)
 </details>
 
+## 开发方式与协作边界
+
+本项目由**本人担任技术负责人**：确定业务口径与利润公式、定义 API/数据库/状态机契约、设计评测门禁与验收标准、审查每次合并；**具体编码实现由 Claude Code 完成**。
+
+仓库根目录的 `AGENTS.md` 就是给编码 Agent 的工作约定（禁止直接推 `master`、契约变更必须同步测试与前端类型、真实 LLM 调用不得进入 CI、未实际验证不得写成通过），它随项目存在，不是事后补写的说明。
+
+取舍很明确：**吞吐来自 AI，判断必须来自本人**。哪些是本人做的、哪些是 AI 做的、怎么核对，见 [docs/COLLABORATION.md](docs/COLLABORATION.md)。
+
 ## 快速启动（本地，推荐）
 
 前置：Python 3.11+、Node.js 20.19+、npm。无需 Docker 或外部数据库。
@@ -292,11 +300,12 @@ TASKS.md             交付与后续任务
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
 - 已加入 Alembic 基线和迁移入口；旧库仍依赖启动时的兼容迁移补充租户/任务字段，后续 schema 变更必须新增显式 revision。Alembic 未安装时相关测试会跳过，CI 会安装并执行 upgrade/downgrade。
 - Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；云端单机覆盖也在隔离栈完成十项验收（见 `docs/CLOUD_DEPLOYMENT.md`）。其他机器和真实云服务器仍需按文档复验。
-- 实际 MCP Server 未实现，因此不声称支持 MCP。
+- MCP 只实现了 stdio 只读服务（4 个工具），没有网络 transport、OAuth、多租户隔离和 MCP 侧审计；写工具永不暴露给客户端。
 
 ## 交付与验收材料
 
-- [docs/HANDOFF.md](docs/HANDOFF.md)：接管报告、实际验证结果、未完成项与下一步顺序。
+- [docs/COLLABORATION.md](docs/COLLABORATION.md)：开发方式、AI 协作边界，以及哪些判断由本人负责。
+- [docs/HANDOFF.md](docs/HANDOFF.md)：交付报告、实际验证结果、未完成项与下一步顺序。
 - [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)：云端单机 Compose、初始化/迁移、备份恢复、故障排查与访问控制。
 - [docs/FINAL_DEMO_ACCEPTANCE.md](docs/FINAL_DEMO_ACCEPTANCE.md)：最终端到端模拟验收报告与修复复验记录。
 - [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)：DeepSeek 真实调用的模型、耗时、Token、结构化输出与证据校验记录。

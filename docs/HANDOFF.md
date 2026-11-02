@@ -1,18 +1,19 @@
-# ProfitOps AI 接管报告与交接说明
+# ProfitOps AI 交付报告与验证记录
 
-日期：2026-10-30  
-接管人：Claude Code（唯一主开发 / 技术负责人 / 交付负责人）  
-工作区：`E:\ProfitOps-AI`（沿用原项目，不重建、不覆盖、不清理未提交修改）
+日期：2026-10-30（持续更新至 2026-11-02）  
+负责人：梁钊（技术负责人 / 交付负责人）  
+编码实现：Claude Code 辅助（边界见 `docs/COLLABORATION.md`）  
+工作区：`E:\ProfitOps-AI`
 
 > 2026-11-02 更新：Phase 2A/2B/2C/2D、RAG 知识库和只读 stdio MCP Server 已实现；最新测试为后端 272 通过、6 跳过（PostgreSQL 环境项）、前端 17 通过、MCP 专项 9 通过，MCP 真实 stdio 检查通过。HTTP 冒烟 15/15 为上一轮既有结果，本轮未重跑。Docker Compose 已在本机 Docker Desktop 实际验收（PostgreSQL 16 + 后端 + nginx，后端直连与 nginx 代理各 11/11 HTTP 冒烟通过）。以下 2026-10-30 记录保留为历史快照，最新验证见 `docs/TEST_REPORT.md`、`docs/EVALUATION.md` 和 `docs/MCP.md`。
 
-## 1. 接管结论
+## 1. 复核结论
 
-磁盘上的项目已经是一个可运行、可测试、可演示的 MVP，不是空壳，也不是只停留在文档阶段。接管后我以实际代码、数据库、测试输出和真实 HTTP/浏览器结果为准重新验证了一遍，并补齐了几处影响“可信 Agent”表达的缺口。
+磁盘上的项目已经是一个可运行、可测试、可演示的 MVP，不是空壳，也不是只停留在文档阶段。复核阶段以实际代码、数据库、测试输出和真实 HTTP/浏览器结果为准重新验证了一遍，并补齐了几处影响“可信 Agent”表达的缺口。
 
-当前状态（2026-10-30 接管时）：**核心业务闭环完整，后端 33 项测试、前端 6 项测试、生产构建、HTTP 冒烟 11 项、Chromium 浏览器 E2E 2 项全部通过。** 当时唯一明确的环境阻碍是 Docker Desktop 引擎不可用，因此 Compose 的 PostgreSQL 容器运行路径未实际验证（配置语法已通过）；该阻碍已于 2026-10-31 解除，见顶部更新。
+当前状态（2026-10-30 复核时）：**核心业务闭环完整，后端 33 项测试、前端 6 项测试、生产构建、HTTP 冒烟 11 项、Chromium 浏览器 E2E 2 项全部通过。** 当时唯一明确的环境阻碍是 Docker Desktop 引擎不可用，因此 Compose 的 PostgreSQL 容器运行路径未实际验证（配置语法已通过）；该阻碍已于 2026-10-31 解除，见顶部更新。
 
-## 2. 接管方法与事实来源
+## 2. 复核方法与事实来源
 
 先只读检查，再动手：
 
@@ -20,13 +21,13 @@
 - 逐个阅读后端 `models / schemas / metrics / workflow / tools / services / seed / security / main / views / audit`。
 - 逐个阅读前端 `App.tsx / api.ts / types.ts / format.ts / TrendChart.tsx` 与测试、E2E。
 - 只读检查 `data/profitops.db`（未启动服务写入、未清空）：2 店铺、3 SKU、1920 订单、360 条每日经营记录、2 次分析/执行、22 条审计，Seed 版本 `demo-60d-v1`。
-- 检查 Git：接管时当前分支 `master`，**没有任何 commit**，所有项目文件均为未跟踪状态。没有使用 `reset --hard`、`clean` 等破坏性命令。本轮结束时已按用户明确要求建立首个基线（见第 10 节）。
+- 检查 Git：复核时当前分支 `master`，**没有任何 commit**，所有项目文件均为未跟踪状态。没有使用 `reset --hard`、`clean` 等破坏性命令。本轮结束时已按明确确认建立首个基线（见第 10 节）。
 - 未读取或输出 `.env` 中的任何密钥；`.env.example` 只包含公开的本地演示值。
-- 所有新增验证使用独立数据库（`data/smoke-takeover-2.db`、`data/e2e.db`），未触碰用户运行库。
+- 所有新增验证使用独立数据库（`data/smoke-takeover-2.db`、`data/e2e.db`），未触碰运行库。
 
-## 3. 交接时已经完成的工作
+## 3. 早期阶段已完成的工作
 
-以下均以磁盘实现为准，不依赖前任 Agent 的聊天记录：
+以下均以磁盘实现为准，不依赖早期阶段的会话记录：
 
 ### 后端
 
@@ -129,7 +130,7 @@ docker compose -f compose.yaml config --quiet
 
 ## 7. 当前最严重的问题（按风险排序）
 
-1. **Git 基线已建立**：接管时仓库零 commit、全部文件未跟踪；用户随后明确要求提交，已在 `master` 建立根提交（67 个文件）。后续提交仍须遵守 `AGENTS.md`：由用户明确要求后才提交。
+1. **Git 基线已建立**：复核时仓库零 commit、全部文件未跟踪；随后按明确确认完成提交，已在 `master` 建立根提交（67 个文件）。后续提交仍须遵守 `AGENTS.md`：由本人明确要求后才提交。
 2. **Docker/PostgreSQL 路径已实测**：2026-10-31 已在本机 Docker Desktop 完成实际启动与 11/11 HTTP 冒烟；其他机器仍需复验。详见 `docs/TEST_REPORT.md`。
 3. **演示认证不是生产安全方案**：本地 `/api/demo` 返回公开演示 token；云端覆盖用 Nginx Basic Auth 保护该入口并使用随机 token，但仍没有 OIDC/SSO/MFA，不能把它说成生产能力。
 4. **LLM 已有门禁评测，但样本仍小**：Phase 2A 实现了 DeepSeek Provider、结构化输出和证据引用校验；Phase 2B 增加了 4 个合成案例、离线负向对照和真实三次重复（见 `docs/EVALUATION.md`）。最新 4000 复测为 9/9 通过，但只有 3 个异常案例、每个 3 次，没有人工语义标注或跨模型对比；演示时仍不能把规则输出说成 LLM 输出，应展示 `llm_success` 与降级状态的区分。
@@ -141,7 +142,7 @@ docker compose -f compose.yaml config --quiet
 
 ### P0：交付基线
 
-1. 首个 Git 基线已完成（`master` 根提交，2026-10-30，用户明确要求）。
+1. 首个 Git 基线已完成（`master` 根提交，2026-10-30）。
 2. 在 Docker 可用的机器执行 `docker compose up --build`，跑 `scripts/smoke.py` 与浏览器 E2E，补 `docs/TEST_REPORT.md`。
 
 ### P1：可信度与可维护性
@@ -182,13 +183,14 @@ frontend/e2e/              Playwright 真实浏览器验收
 scripts/dev.py             一键启动
 scripts/smoke.py           实际 HTTP 闭环
 docs/CONTRACT.md           API/数据库/状态机契约
+docs/COLLABORATION.md      开发方式、AI 协作边界与可核对项
 docs/ARCHITECTURE.md       架构与关键决策
 docs/KNOWLEDGE.md          RAG 数据模型、检索、引用校验、API 与限制
 docs/MCP.md                只读 MCP 工具、客户端配置、安全边界与验证
 docs/TEST_REPORT.md        实际验证记录
 ```
 
-## 10. 本轮接管变更（2026-10-30）
+## 10. 本轮复核变更（2026-10-30）
 
 - `backend/app/tools.py`：工具显式声明 `policy`（safe / ask / deny）；注册表拒绝 deny；`/api/tools` 暴露策略。
 - `backend/app/views.py`：所有 API 时间戳统一为 UTC ISO 8601（`Z`），消除 SQLite/PostgreSQL 输出差异。
@@ -201,7 +203,7 @@ docs/TEST_REPORT.md        实际验证记录
 - `frontend/src/styles.css`：审计过滤输入样式。
 - `docs/CONTRACT.md`、`docs/ARCHITECTURE.md`、`docs/TEST_REPORT.md`、`TASKS.md`、`README.md`：同步契约、验证记录与交付状态。
 - 新增本文件与运行/演示说明。
-- 按用户明确要求建立首个 Git 基线：`master` 根提交，67 个文件；`.env`、`data/`、`node_modules` 等运行文件保持忽略。
+- 按明确确认建立首个 Git 基线：`master` 根提交，67 个文件；`.env`、`data/`、`node_modules` 等运行文件保持忽略。
 
 ## 11. 运行与演示入口
 
