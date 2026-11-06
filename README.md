@@ -115,6 +115,44 @@ python scripts/dev.py
 | 9 | 打开运营知识库 | 检索「广告预算下调审批」命中片段；检索「如何预订会议室午餐」显示「无可靠答案」 | 规则必须带引用，检索不到就拒答 |
 | 10 | 打开审计日志，按请求 ID 过滤 | 分析、批准、开始执行、成功执行、重复回放、被拦截请求 | `request_id` 贯穿全链路，谁在什么时候做了什么一目了然 |
 
+### 端到端演示验证（2026-11-07）
+
+在独立端口（后端 8020 / 前端 5190）、临时 SQLite 库、`LLM_PROVIDER=disabled`、`hashing` embedding 下实际走完上面 10 步：浏览器操作与 API 断言共 29 项全部通过，无浏览器 console/page error。演示未触碰默认 8010/5180 的本地数据，没有调用付费模型，也没有任何真实外部副作用。原始证据（29 项检查、请求 ID、执行 ID 与响应字段）见 [evidence.json](docs/screenshots/demo-20261107/evidence.json)。
+
+| 环节 | 实测结果 |
+|---|---|
+| 经营总览 | 销售额 `US$45,600.00`（4,560,000 美分）、净利润 `-US$5,703.00`；异常标记与利润桥守恒均为 true |
+| Agent 工作流 | 10 个 LangGraph 步骤全部 completed，状态 `waiting_approval`；LLM 未配置时降级为确定性规则且状态可见 |
+| 建议与证据 | 8 项证据均带 `evidence.id` 与 `source`；知识库检索命中 5 个可引用片段 |
+| 越权拦截 | 分析师界面无「批准建议」按钮；用分析师 token 伪造 `X-Role: approver` 调用 API 返回 `403` |
+| 审批与执行 | 审批负责人批准后模拟执行：`simulation=true`、`external_calls=0`，日预算 `US$255.50 → US$217.17`（25,550 → 21,717 美分） |
+| 执行幂等 | 再次请求返回同一 `execution_id`，页面提示「重复请求已命中原执行记录」 |
+| 知识检索 | 「广告预算下调审批」命中 5 个片段、`no_answer=false`；「如何预订会议室午餐」`no_answer=true` |
+| 审计链路 | 按 `request_id` 过滤得到 `analysis.requested` 等事件；全量审计同时包含 `recommendation.approve`、`execution.executed`、`execution.replayed` |
+
+| 经营总览 | Agent 工作流 |
+|---|---|
+| ![经营总览](docs/screenshots/demo-20261107/01-overview.png) | ![Agent 工作流](docs/screenshots/demo-20261107/02-agent-workflow.png) |
+
+| 待审批建议 | 模拟执行 |
+|---|---|
+| ![待审批建议](docs/screenshots/demo-20261107/03-approval-pending.png) | ![模拟执行](docs/screenshots/demo-20261107/04-execution.png) |
+
+<details>
+<summary>展开其余 4 张截图</summary>
+
+| 幂等回放 | 知识命中 |
+|---|---|
+| ![幂等回放](docs/screenshots/demo-20261107/05-idempotent.png) | ![知识命中](docs/screenshots/demo-20261107/06-knowledge-hit.png) |
+
+| 知识拒答 | 审计过滤 |
+|---|---|
+| ![知识拒答](docs/screenshots/demo-20261107/07-knowledge-no-answer.png) | ![审计过滤](docs/screenshots/demo-20261107/08-audit-filtered.png) |
+
+</details>
+
+> 离线 `hashing` 的拒答阈值使用 `KNOWLEDGE_MIN_SCORE=0.15`（本次演示显式设置）。如果本地 `.env` 是按 BGE-M3 校准的（例如 `0.42`），切回 `hashing` 时必须同步下调，否则知识检索会全部拒答。
+
 ---
 
 ## 架构
@@ -256,6 +294,16 @@ npm --prefix frontend run build                   通过（Vite 6.4.5）
 * python scripts/mcp_check.py                    MCP stdio 检查通过（2026-11-02）
 * python scripts/smoke.py                        15/15 passed（2026-11-02）
 * npm --prefix frontend run test:e2e             7 passed（2026-11-02）
+```
+
+2026-11-07 在 UI 改版分支实际执行：
+
+```
+npm --prefix frontend test                        17 passed
+npm --prefix frontend run build                   通过（Vite 6.4.5）
+npm --prefix frontend run test:e2e                7 passed
+python scripts/smoke.py                           15/15 passed
+端到端演示（独立端口 + 临时库 + 离线）             29/29 检查通过，8 张截图
 ```
 
 hashing 下 `weighted` 与 `hybrid_rrf` 指标相同：hashing 没有排序能力，不参与稠密路投票，两种排序在这套语料上等价。

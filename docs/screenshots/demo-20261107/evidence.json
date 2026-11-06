@@ -1,0 +1,475 @@
+{
+  "started_at": "2026-11-06T21:32:21.727Z",
+  "health": {
+    "status": "ok",
+    "database": "connected",
+    "simulation": true,
+    "engine": "deterministic-rules-v1",
+    "llm": {
+      "configured": false,
+      "provider": "disabled",
+      "model": "deepseek-flash"
+    },
+    "knowledge": {
+      "provider": "hashing",
+      "model": "hashing-v1",
+      "remote": false,
+      "seed_error": null
+    }
+  },
+  "summary": {
+    "sales": 4560000,
+    "net_profit": -570300,
+    "ad_spend": 1621500,
+    "margin_pct": -13.84,
+    "changes": {
+      "sales": {
+        "absolute": 1440000,
+        "pct": 46.15
+      },
+      "discounts": {
+        "absolute": 208800,
+        "pct": 133.85
+      },
+      "refunds": {
+        "absolute": 37000,
+        "pct": 101.09
+      },
+      "cogs": {
+        "absolute": 480000,
+        "pct": 46.15
+      },
+      "ad_spend": {
+        "absolute": 1350000,
+        "pct": 497.24
+      },
+      "fulfillment": {
+        "absolute": 412800,
+        "pct": 117.61
+      },
+      "platform_fees": {
+        "absolute": 216000,
+        "pct": 46.15
+      },
+      "other_costs": {
+        "absolute": 32400,
+        "pct": 46.15
+      },
+      "net_sales": {
+        "absolute": 1194200,
+        "pct": 40.79
+      },
+      "net_profit": {
+        "absolute": -1297000,
+        "pct": -178.48
+      },
+      "orders": {
+        "absolute": 360,
+        "pct": 46.15
+      },
+      "units": {
+        "absolute": 360,
+        "pct": 46.15
+      },
+      "margin_pct": {
+        "absolute": -38.66,
+        "pct": null
+      }
+    },
+    "anomaly": true,
+    "bridge_verified": true,
+    "data_quality": {
+      "complete": true,
+      "expected_records": 360,
+      "observed_records": 360,
+      "missing_records": 0,
+      "incomplete_records": 0,
+      "missing_examples": [],
+      "issues": []
+    }
+  },
+  "analysis": {
+    "id": "0a2139d1-7c2e-4b18-bc1f-bc4a7b6e4018",
+    "status": "waiting_approval",
+    "attempts": 1,
+    "request_id": "fa3d319a-d614-4438-befd-ea900aff3c12",
+    "recommendation_id": "8d7d47a3-6f7d-4712-a08c-0dca7f0a5e5a",
+    "steps": [
+      {
+        "name": "receive_request",
+        "status": "completed",
+        "duration_ms": 4.836
+      },
+      {
+        "name": "get_sales_metrics",
+        "status": "completed",
+        "duration_ms": 65.819
+      },
+      {
+        "name": "calculate_profit",
+        "status": "completed",
+        "duration_ms": 3.2
+      },
+      {
+        "name": "analyze_profit_drivers",
+        "status": "completed",
+        "duration_ms": 3.045
+      },
+      {
+        "name": "verify_evidence",
+        "status": "completed",
+        "duration_ms": 4.442
+      },
+      {
+        "name": "retrieve_knowledge",
+        "status": "completed",
+        "duration_ms": 22.481
+      },
+      {
+        "name": "llm_root_cause_analysis",
+        "status": "completed",
+        "duration_ms": 6.548
+      },
+      {
+        "name": "verify_llm_evidence",
+        "status": "completed",
+        "duration_ms": 4.01
+      },
+      {
+        "name": "create_recommendation",
+        "status": "completed",
+        "duration_ms": 13.674
+      },
+      {
+        "name": "wait_for_approval",
+        "status": "completed",
+        "duration_ms": 5.725
+      }
+    ],
+    "llm": {
+      "status": "deterministic_fallback",
+      "reason": "not_configured",
+      "model": "deepseek-flash",
+      "termination_reason": null
+    }
+  },
+  "recommendation": {
+    "id": "8d7d47a3-6f7d-4712-a08c-0dca7f0a5e5a",
+    "status": "pending_approval",
+    "title": "TRAVEL-BAG-01 · 广告预算优化模拟",
+    "action": {
+      "type": "adjust_ad_budget",
+      "simulation": true,
+      "product_id": "bag",
+      "sku": "TRAVEL-BAG-01",
+      "adjustment_pct": 15,
+      "baseline_daily_budget": 25550,
+      "proposed_daily_budget": 21717,
+      "source_period": {
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-30"
+      }
+    },
+    "evidence_ids": [
+      "ev-ad_spend",
+      "ev-cogs",
+      "ev-fulfillment",
+      "ev-platform_fees",
+      "ev-discounts",
+      "ev-refunds",
+      "ev-other_costs",
+      "ev-sales"
+    ],
+    "knowledge_hits": [
+      {
+        "chunk_id": "4b3c639e-4fbe-43f4-b9ec-869dd5d6aa12",
+        "title": "广告预算调整与审批规则",
+        "score": 0.9919
+      },
+      {
+        "chunk_id": "a53ccabd-fd8c-46b2-a985-b33b3846d651",
+        "title": "履约成本异常排查",
+        "score": 0.9683
+      },
+      {
+        "chunk_id": "92b7828d-945d-4c85-a021-a624d3bc79de",
+        "title": "广告预算调整与审批规则",
+        "score": 0.9621
+      },
+      {
+        "chunk_id": "3f527a6c-64bd-49e3-ba2e-f2ae49c57dd6",
+        "title": "数据完整性与缺失处理",
+        "score": 0.9251
+      },
+      {
+        "chunk_id": "286c3ebf-c2ea-4b1d-ae65-f81c9b4bfc97",
+        "title": "退款率异常排查手册",
+        "score": 0.9186
+      }
+    ]
+  },
+  "forged_role": {
+    "status": 403,
+    "code": "forbidden"
+  },
+  "approval": {
+    "status": "approved",
+    "reason": "已复核利润桥、广告贡献与知识片段，批准受控模拟"
+  },
+  "execution": {
+    "execution_id": "a8b8588b-d356-4f7d-b9ae-d88b384d0b96",
+    "status": "executed",
+    "simulation": true,
+    "external_calls": 0,
+    "before": {
+      "daily_budget": 25550
+    },
+    "after": {
+      "daily_budget": 21717
+    }
+  },
+  "idempotency": {
+    "same_execution_id": true,
+    "execution_id": "a8b8588b-d356-4f7d-b9ae-d88b384d0b96",
+    "page_notice": "重复请求已命中原执行记录 a8b8588b-d356-4f7d-b9ae-d88b384d0b96，未生成第二次模拟变更。"
+  },
+  "knowledge_hit": {
+    "query": "广告预算下调审批",
+    "no_answer": false,
+    "hits": [
+      {
+        "chunk_id": "e5f5cffb-08cf-4ee4-9de7-6e1dde5ca9bc",
+        "title": "广告预算调整与审批规则",
+        "score": 0.9919
+      },
+      {
+        "chunk_id": "dc8c8929-cc58-4537-b897-5c3b5483127f",
+        "title": "广告预算调整与审批规则",
+        "score": 0.9919
+      },
+      {
+        "chunk_id": "f548bf2a-e86e-4c8d-a637-ed6ed7e2738d",
+        "title": "审批、执行与幂等规则",
+        "score": 0.9607
+      },
+      {
+        "chunk_id": "03b9cdf3-c45a-4b58-85f7-010dc02fc209",
+        "title": "审批、执行与幂等规则",
+        "score": 0.9173
+      },
+      {
+        "chunk_id": "538b3c28-59b8-46ae-863c-53cc7a2bec65",
+        "title": "数据完整性与缺失处理",
+        "score": 0.8777
+      }
+    ]
+  },
+  "knowledge_no_answer": {
+    "query": "如何预订会议室午餐",
+    "no_answer": true,
+    "hits": 0
+  },
+  "audit": {
+    "filtered_request_id": "fa3d319a-d614-4438-befd-ea900aff3c12",
+    "filtered_events": [
+      {
+        "action": "analysis.finished",
+        "outcome": "success",
+        "actor": "demo-analyst"
+      },
+      {
+        "action": "recommendation.proposed",
+        "outcome": "success",
+        "actor": "demo-analyst"
+      },
+      {
+        "action": "recommendation.pending_approval",
+        "outcome": "success",
+        "actor": "demo-analyst"
+      },
+      {
+        "action": "analysis.llm_fallback",
+        "outcome": "degraded",
+        "actor": "demo-analyst"
+      },
+      {
+        "action": "analysis.claimed",
+        "outcome": "success",
+        "actor": "system"
+      },
+      {
+        "action": "analysis.requested",
+        "outcome": "success",
+        "actor": "demo-analyst"
+      }
+    ],
+    "all_actions": [
+      "execution.replayed",
+      "execution.started",
+      "execution.executed",
+      "recommendation.approve",
+      "request.approve.denied",
+      "analysis.finished",
+      "recommendation.proposed",
+      "recommendation.pending_approval",
+      "analysis.llm_fallback",
+      "analysis.claimed",
+      "analysis.requested"
+    ]
+  },
+  "steps": [
+    {
+      "name": "check: health offline",
+      "passed": true,
+      "status": "ok",
+      "database": "connected",
+      "simulation": true,
+      "engine": "deterministic-rules-v1",
+      "llm": {
+        "configured": false,
+        "provider": "disabled",
+        "model": "deepseek-flash"
+      },
+      "knowledge": {
+        "provider": "hashing",
+        "model": "hashing-v1",
+        "remote": false,
+        "seed_error": null
+      }
+    },
+    {
+      "name": "screenshot 01-overview.png"
+    },
+    {
+      "name": "check: overview anomaly and bridge",
+      "passed": true
+    },
+    {
+      "name": "check: integer cents sales",
+      "passed": true,
+      "sales": 4560000
+    },
+    {
+      "name": "check: analysis waiting approval",
+      "passed": true,
+      "status": "waiting_approval"
+    },
+    {
+      "name": "check: all workflow steps completed",
+      "passed": true,
+      "steps": 10
+    },
+    {
+      "name": "screenshot 02-agent-workflow.png"
+    },
+    {
+      "name": "screenshot 03-approval-pending.png"
+    },
+    {
+      "name": "check: pending approval recommendation",
+      "passed": true
+    },
+    {
+      "name": "check: evidence traceable",
+      "passed": true
+    },
+    {
+      "name": "check: analyst has no approve button",
+      "passed": true
+    },
+    {
+      "name": "check: forged X-Role rejected",
+      "passed": true,
+      "status": 403
+    },
+    {
+      "name": "check: approved by approver",
+      "passed": true
+    },
+    {
+      "name": "screenshot 04-execution.png"
+    },
+    {
+      "name": "check: simulation only",
+      "passed": true,
+      "execution_id": "a8b8588b-d356-4f7d-b9ae-d88b384d0b96",
+      "status": "executed",
+      "simulation": true,
+      "external_calls": 0,
+      "before": {
+        "daily_budget": 25550
+      },
+      "after": {
+        "daily_budget": 21717
+      }
+    },
+    {
+      "name": "check: budget preview",
+      "passed": true,
+      "execution_id": "a8b8588b-d356-4f7d-b9ae-d88b384d0b96",
+      "status": "executed",
+      "simulation": true,
+      "external_calls": 0,
+      "before": {
+        "daily_budget": 25550
+      },
+      "after": {
+        "daily_budget": 21717
+      }
+    },
+    {
+      "name": "screenshot 05-idempotent.png"
+    },
+    {
+      "name": "check: idempotent replay reuses execution",
+      "passed": true
+    },
+    {
+      "name": "screenshot 06-knowledge-hit.png"
+    },
+    {
+      "name": "check: knowledge hit has citable chunks",
+      "passed": true
+    },
+    {
+      "name": "screenshot 07-knowledge-no-answer.png"
+    },
+    {
+      "name": "check: knowledge refuses low relevance",
+      "passed": true
+    },
+    {
+      "name": "screenshot 08-audit-filtered.png"
+    },
+    {
+      "name": "check: audit filtered by request id",
+      "passed": true
+    },
+    {
+      "name": "check: audit action analysis.requested",
+      "passed": true
+    },
+    {
+      "name": "check: audit action recommendation.approve",
+      "passed": true
+    },
+    {
+      "name": "check: audit action execution.executed",
+      "passed": true
+    },
+    {
+      "name": "check: audit action execution.replayed",
+      "passed": true
+    },
+    {
+      "name": "check: no browser errors",
+      "passed": true,
+      "consoleErrors": [],
+      "pageErrors": []
+    }
+  ],
+  "console_errors": [],
+  "page_errors": [],
+  "failures": [],
+  "finished_at": "2026-11-06T21:32:29.933Z"
+}
