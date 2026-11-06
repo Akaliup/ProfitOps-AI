@@ -1,34 +1,75 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown, CircleDollarSign, Clock3, Database, FileCheck2, Fingerprint, LayoutDashboard, LoaderCircle, Moon, Play, RefreshCw, Search, ShieldCheck, Sparkles, Sun, Terminal, TriangleAlert, X } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, CircleDollarSign, Database, Fingerprint, LoaderCircle, Megaphone, Play, RefreshCw, Search, ShieldCheck, Sparkles, Terminal, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { api, ApiError } from './api'
 import type { Analysis, Audit, Demo, Execution, Identity, JobStatus, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope } from './types'
 import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels, terminationLabels } from './format'
+import { pages, type Page } from './navigation'
+import { cn } from './lib/utils'
+import { AppSidebar } from './components/layout/app-sidebar'
+import { AppHeader } from './components/layout/app-header'
+import { Badge } from './components/ui/badge'
+import { Button } from './components/ui/button'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader } from './components/ui/card'
+import { Input } from './components/ui/input'
+import { NativeSelect } from './components/ui/native-select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
+import { Textarea } from './components/ui/textarea'
 import './styles.css'
 
 const TrendChart = lazy(() => import('./components/TrendChart').then(module => ({ default: module.TrendChart })))
 
-type Page = 'overview' | 'agent' | 'approvals' | 'knowledge' | 'audit' | 'ops'
 const jobStatusOrder: JobStatus[] = [
   'queued', 'running', 'waiting_approval', 'completed', 'insufficient_data', 'failed',
   'approved', 'rejected', 'executed', 'execution_failed',
-]
-const pages = [
-  { id: 'overview' as const, label: '经营总览', icon: LayoutDashboard, detail: '把增长，变成利润。' },
-  { id: 'agent' as const, label: 'Agent 工作台', icon: Sparkles, detail: '从经营信号，到有据可依的行动。' },
-  { id: 'approvals' as const, label: '审批与执行', icon: FileCheck2, detail: '每一步行动，都由你掌控。' },
-  { id: 'ops' as const, label: 'Agent 运维', icon: Activity, detail: '任务、模型与成本的运行视图。' },
-  { id: 'knowledge' as const, label: '运营知识库', icon: BookOpen, detail: '让建议有规则可依，让引用可追溯。' },
-  { id: 'audit' as const, label: '审计日志', icon: Fingerprint, detail: '让每一次决策都有迹可循。' },
 ]
 const busyStatuses = ['queued', 'running']
 const usd = (value: number) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value)
 const countText = (value: number | null) => value == null ? '暂无数据' : value.toLocaleString('zh-CN')
 
 function Status({ value }: { value: string }) {
-  return <span className={`status status-${value}`}><span aria-hidden="true">{['executed', 'completed', 'approved'].includes(value) ? '✓' : ['failed', 'execution_failed', 'rejected'].includes(value) ? '×' : '◷'}</span>{statusLabels[value] ?? value}</span>
+  const positive = ['executed', 'completed', 'approved'].includes(value)
+  const negative = ['failed', 'execution_failed', 'rejected'].includes(value)
+  const pending = ['waiting_approval', 'pending_approval', 'insufficient_data'].includes(value)
+  return <Badge variant={positive ? 'success' : negative ? 'danger' : pending ? 'warning' : 'secondary'} className='gap-1.5 font-medium'>
+    <span className={cn('size-1.5 rounded-full', positive ? 'bg-emerald-600 dark:bg-emerald-400' : negative ? 'bg-destructive' : pending ? 'bg-amber-600 dark:bg-amber-400' : 'bg-muted-foreground/60')} />
+    {statusLabels[value] ?? value}
+  </Badge>
 }
-function Empty({ title, text, children }: { title: string; text: string; children?: React.ReactNode }) {
-  return <div className="empty"><Database size={28} /><h3>{title}</h3><p>{text}</p>{children}</div>
+
+function Empty({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
+  return <div className='flex min-h-[200px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-8 text-center'>
+    <Database className='size-6 text-muted-foreground/60' />
+    <h3 className='text-sm font-medium'>{title}</h3>
+    <p className='max-w-sm text-sm leading-relaxed text-muted-foreground'>{text}</p>
+    {children && <div className='mt-2'>{children}</div>}
+  </div>
+}
+
+function SectionHeading({ title, description, icon, action }: { title: ReactNode; description?: ReactNode; icon?: ReactNode; action?: ReactNode }) {
+  return <div className='flex items-start justify-between gap-3 border-b px-5 py-4'>
+    <div className='min-w-0 space-y-1'>
+      <h2 className='flex items-center gap-2 text-base font-semibold leading-none tracking-tight'>{icon}{title}</h2>
+      {description && <p className='text-xs text-muted-foreground'>{description}</p>}
+    </div>
+    {action}
+  </div>
+}
+
+function KpiCard({ label, value, sub, icon: Icon, delta, favorable }: { label: string; value: string; sub: string; icon: LucideIcon; delta: ReactNode; favorable: boolean }) {
+  return <Card className='gap-0 py-0'>
+    <CardHeader className='flex flex-row items-center justify-between px-5 pt-5 pb-2'>
+      <CardDescription className='text-sm'>{label}</CardDescription>
+      <Icon className='size-4 text-muted-foreground' />
+    </CardHeader>
+    <CardContent className='px-5 pb-3'>
+      <div className='text-2xl font-semibold tracking-tight tabular-nums'>{value}</div>
+      <div className='mt-1.5 flex items-center gap-2'>
+        <Badge variant={favorable ? 'success' : 'danger'} className='gap-0.5 px-1.5 text-[11px] font-medium'>{delta}</Badge>
+        <span className='text-xs text-muted-foreground'>较上一周期</span>
+      </div>
+    </CardContent>
+    <CardFooter className='border-t px-5 py-2.5 text-xs text-muted-foreground'>{sub}</CardFooter>
+  </Card>
 }
 
 export default function App() {
@@ -57,10 +98,19 @@ export default function App() {
   const [notice, setNotice] = useState('')
   const [execution, setExecution] = useState<Execution | null>(null)
   const [reason, setReason] = useState('已复核证据，批准受控模拟')
-  const [dark, setDark] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem('profitops-theme')
+    if (stored === 'light' || stored === 'dark') return stored
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('profitops-sidebar-collapsed') === 'true')
+  const [mobileOpen, setMobileOpen] = useState(false)
   const loadSequence = useRef(0)
   const opsSequence = useRef(0)
-  const selected = recommendations.find(item => item.id === selectedId) ?? recommendations[0]
+  // A freshly created recommendation may not be in the last list response yet.
+  // Never fall back to another item: approval and execution must target the
+  // recommendation the user opened, not whatever happens to be first.
+  const selected = selectedId ? recommendations.find(item => item.id === selectedId) : recommendations[0]
   const pending = recommendations.filter(item => item.status === 'pending_approval').length
   const isApprover = identity?.role === 'approver'
 
@@ -119,8 +169,12 @@ export default function App() {
     if (page === 'ops' && isApprover) void loadOps()
   }, [page, isApprover, loadOps])
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-  }, [dark])
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    localStorage.setItem('profitops-theme', theme)
+  }, [theme])
+  useEffect(() => {
+    localStorage.setItem('profitops-sidebar-collapsed', String(collapsed))
+  }, [collapsed])
 
   useEffect(() => {
     if (!identity || !analysis || !busyStatuses.includes(analysis.status)) return
@@ -178,7 +232,7 @@ export default function App() {
       setDemo(await api.demo()); setNotice(result.message)
     })
   }
-  function searchKnowledge(event: React.FormEvent) {
+  function searchKnowledge(event: FormEvent) {
     event.preventDefault()
     if (!identity || knowledgeQuery.trim().length < 2) return
     void action('knowledge-search', async () => {
@@ -187,7 +241,7 @@ export default function App() {
       setNotice(result.no_answer ? '知识库没有达到阈值的可靠片段。' : `检索到 ${result.hits.length} 个知识片段。`)
     })
   }
-  function addKnowledgeDocument(event: React.FormEvent) {
+  function addKnowledgeDocument(event: FormEvent) {
     event.preventDefault()
     if (!identity || knowledgeDraft.title.trim().length < 2 || knowledgeDraft.content.trim().length < 10) return
     void action('knowledge-create', async () => {
@@ -233,169 +287,583 @@ export default function App() {
       await refresh()
     })
   }
+  function changeIdentity(next: Identity) {
+    setIdentity(next)
+    setNotice(`已切换为${next.name}；权限由后端 token 校验`)
+    setError('')
+  }
 
   const activePage = pages.find(item => item.id === page)!
-  const renderButton = (label = '启动 Profit Agent') => <button className="button primary" onClick={startAnalysis} disabled={!!busy || !metrics || busyStatuses.includes(analysis?.status ?? '')}>{busy === 'analysis' || busyStatuses.includes(analysis?.status ?? '') ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}{label}</button>
+  const renderButton = (label = '启动 Profit Agent') => <Button onClick={startAnalysis} disabled={!!busy || !metrics || busyStatuses.includes(analysis?.status ?? '')}>{busy === 'analysis' || busyStatuses.includes(analysis?.status ?? '') ? <LoaderCircle className='size-4 animate-spin' /> : <Sparkles className='size-4' />}{label}</Button>
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <a className="brand" href="#" onClick={event => { event.preventDefault(); setPage('overview') }}><span className="brand-mark"><BarChart3 size={21} /></span><span>ProfitOps<span className="brand-ai">AI</span><small>经营决策工作空间</small></span></a>
-      <div className="workspace"><span className="workspace-avatar">P</span><div>跨境增长团队<small>演示工作空间</small></div><ChevronDown size={14} /></div>
-      <div className="nav-label">工作空间</div>
-      <nav aria-label="主导航">{pages.map(item => <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => { setPage(item.id); setError('') }} aria-current={page === item.id ? 'page' : undefined}><item.icon size={18} />{item.label}{item.id === 'approvals' && pending > 0 && <span className="nav-count">{pending}</span>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="mode-card"><ShieldCheck size={20} /><strong>受控模拟环境</strong><p>人工审批后执行<br />全程记录，零外部操作</p><span><i />{demo?.llm?.configured ? `DeepSeek ${demo.llm.model}` : '规则引擎在线'}</span></div><div className="sidebar-foot"><span className="avatar">{isApprover ? '审' : '析'}</span><div>{identity?.name ?? '连接中'}<small>本地演示身份</small></div><button className="icon-button" aria-label={dark ? '切换浅色模式' : '切换深色模式'} onClick={() => setDark(!dark)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button></div></div>
-    </aside>
+  return <div className='flex min-h-svh bg-background'>
+    <AppSidebar
+      page={page}
+      pending={pending}
+      collapsed={collapsed}
+      mobileOpen={mobileOpen}
+      demo={demo}
+      identity={identity}
+      isApprover={isApprover}
+      onNavigate={next => { setPage(next); setError(''); setMobileOpen(false) }}
+      onCloseMobile={() => setMobileOpen(false)}
+    />
 
-    <main>
-      <header className="topbar"><div className="breadcrumb">工作空间 <span>/</span> <strong>{activePage.label}</strong></div><div className="topbar-actions"><span className="environment"><i />演示环境 · 仅模拟</span><label className="identity-select"><ShieldCheck size={14} /><select aria-label="演示身份" value={identity?.id ?? ''} onChange={event => { const next = demo?.identities.find(item => item.id === event.target.value); if (next) { setIdentity(next); setNotice(`已切换为${next.name}；权限由后端 token 校验`); setError('') } }}>{demo?.identities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></header>
-      <div className="content">
-        <div className="page-title"><div><div className="eyebrow">PROFIT INTELLIGENCE</div><h1>{activePage.label}<span className="title-dot">.</span></h1><p>{activePage.detail}</p></div><div className="title-actions"><button className="button secondary" onClick={() => { setError(''); if (page === 'ops') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}><RefreshCw size={15} className={loading || opsLoading ? 'spin' : ''} />刷新数据</button>{!['audit', 'knowledge', 'ops'].includes(page) && renderButton()}</div></div>
-        {error && <div className="alert error" role="alert"><TriangleAlert size={18} /><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}><X size={16} /></button></div>}
-        {notice && <div className="alert notice" role="status"><CheckCircle2 size={18} /><span>{notice}</span><button className="icon-button" aria-label="关闭通知" onClick={() => setNotice('')}><X size={16} /></button></div>}
-        {(page === 'overview' || page === 'agent') && <div className="filter-bar"><div><label>统计周期<select aria-label="统计周期" value={scope.days} onChange={event => setScope({ ...scope, days: Number(event.target.value) })}><option value={30}>最近 30 个数据日</option><option value={7}>最近 7 个数据日</option></select></label><label>店铺<select aria-label="店铺" value={scope.storeId} onChange={event => setScope({ ...scope, storeId: event.target.value })}><option value="">全部店铺</option>{demo?.stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label></div><span>{metrics ? `${metrics.period.start_date} — ${metrics.period.end_date} · UTC · USD` : '等待数据连接'}</span></div>}
-        {loading && !metrics && <div className="loading" role="status"><LoaderCircle className="spin" size={22} />正在读取经营账本…</div>}
-        {!loading && !demo && <Empty title="后端连接失败" text="启动后端后刷新页面，API 默认通过本机 8010 端口提供服务。"><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button></Empty>}
-        {demo && !demo.data_range && !loading && <Empty title="从第一份经营数据开始" text="初始化 60 天演示数据，体验一次完整的利润决策闭环。"><button className="button primary" onClick={seed} disabled={!!busy}><Database size={16} />初始化演示数据</button></Empty>}
+    <div className={cn('flex min-h-svh w-full flex-col transition-none duration-200 md:transition-[padding]', collapsed ? 'md:pl-14' : 'md:pl-64')}>
+      <AppHeader
+        pageLabel={activePage.label}
+        collapsed={collapsed}
+        demo={demo}
+        identity={identity}
+        theme={theme}
+        onToggleCollapsed={() => setCollapsed(value => !value)}
+        onOpenMobile={() => setMobileOpen(true)}
+        onIdentityChange={changeIdentity}
+        onToggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')}
+      />
 
-        {page === 'overview' && metrics && <div className={loading ? 'refreshing' : ''}>
-          <div className="kpi-grid">{[
-            { label: '销售额', value: money(metrics.current.sales), metric: 'sales', icon: CircleDollarSign, favorable: metrics.changes.sales.absolute >= 0, sub: `${metrics.current.orders.toLocaleString()} 笔订单` },
-            { label: '净利润', value: money(metrics.current.net_profit), metric: 'net_profit', icon: Activity, favorable: metrics.changes.net_profit.absolute >= 0, sub: `净销售额 ${money(metrics.current.net_sales)}` },
-            { label: '净利润率', value: metrics.current.margin_pct === null ? '—' : `${metrics.current.margin_pct.toFixed(2)}%`, metric: 'margin_pct', icon: BarChart3, favorable: metrics.changes.margin_pct.absolute >= 0, sub: '净利润 / 净销售额' },
-            { label: '广告支出', value: money(metrics.current.ad_spend), metric: 'ad_spend', icon: ArrowUpRight, favorable: metrics.changes.ad_spend.absolute <= 0, sub: '按每日广告账单入账' },
-          ].map(item => <section className="kpi" key={item.metric}><div className="kpi-label">{item.label}<item.icon size={17} /></div><strong>{item.value}</strong><div className="kpi-bottom"><span className={`delta ${item.favorable ? 'good' : 'bad'}`}>{metrics.changes[item.metric].absolute >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{item.metric === 'margin_pct' ? `${metrics.changes.margin_pct.absolute > 0 ? '+' : ''}${metrics.changes.margin_pct.absolute.toFixed(2)} pp` : percent(metrics.changes[item.metric].pct)}</span><span>较上一周期</span></div><p>{item.sub}</p></section>)}</div>
-          {!metrics.data_quality.complete && <div className="alert error"><TriangleAlert size={18} /><div><strong>数据覆盖不足</strong><p>{metrics.data_quality.issues.join('；')}</p></div></div>}
-          <section className={`insight-banner ${!metrics.anomaly ? 'healthy' : ''}`}><div className="insight-icon"><TriangleAlert size={22} /></div><div><div className="insight-top"><span className="small-label">PROFIT SIGNAL</span><span>{metrics.anomaly ? '发现经营异常' : '经营信号检查完成'}</span></div><h2>{metrics.anomaly ? '销售在增长，利润却没有跟上。' : '当前周期未发现销售与利润背离。'}</h2><p>{metrics.anomaly ? `销售额环比 ${percent(metrics.changes.sales.pct)}，净利润环比 ${percent(metrics.changes.net_profit.pct)}。${metrics.drivers[0]?.label}贡献 ${signedMoney(metrics.drivers[0]?.contribution ?? 0)}，值得优先关注。` : '可启动 Agent 核对经营数据、利润桥与完整性。'}</p></div><button className="insight-link" onClick={startAnalysis} disabled={!!busy}>分析原因<ArrowRight size={17} /></button></section>
-          <div className="overview-grid"><Suspense fallback={<div className="panel chart loading">加载经营趋势…</div>}><TrendChart metrics={metrics} /></Suspense><section className="panel drivers-panel"><div className="panel-heading"><div><h2>利润变动归因</h2><p>每一项，均可回算到账本</p></div><span className="tiny-tag">USD</span></div><div className="bridge-total"><span>净利润变化</span><strong>{signedMoney(metrics.changes.net_profit.absolute)}</strong></div><div className="driver-list">{metrics.drivers.map(driver => <div className="driver-row" key={driver.metric}><div><span>{driver.label}</span><strong className={driver.contribution < 0 ? 'negative' : ''}>{signedMoney(driver.contribution)}</strong></div><div className="driver-track"><span className={driver.contribution < 0 ? 'decrease' : 'increase'} style={{ width: `${Math.max(1, Math.abs(driver.contribution) / Math.max(...metrics.drivers.map(item => Math.abs(item.contribution)), 1) * 100)}%` }} /></div></div>)}</div><div className="verified"><CheckCircle2 size={14} />{metrics.bridge_verified ? '贡献项合计与利润变化一致' : '贡献核对异常'}</div></section></div>
-          <section className="panel sku-panel"><div className="panel-heading"><div><h2>商品经营表现</h2><p>找到需要优先关注的 SKU</p></div><span className="tiny-tag">{metrics.sku_breakdown.length} 个商品</span></div><div className="table-wrap"><table><thead><tr><th>商品 / SKU</th><th>销售额</th><th>净利润</th><th>利润变化</th><th>广告支出</th><th>库存 / 在途</th></tr></thead><tbody>{metrics.sku_breakdown.map(row => <tr key={row.sku}><td><strong>{row.name}</strong><small>{row.sku}</small></td><td>{money(row.current.sales)}</td><td>{money(row.current.net_profit)}</td><td className={row.profit_delta < 0 ? 'negative' : ''}>{signedMoney(row.profit_delta)}</td><td>{money(row.current.ad_spend)}</td><td>{row.inventory} <span className="muted">/ {row.inbound_inventory}</span></td></tr>)}</tbody></table></div></section>
-          <div className="accounting-note"><Database size={14} /><span>净利润 = 销售额 − 折扣 − 退款 − 采购 − 广告 − 履约 − 平台费 − 其他可变成本。零分母显示“无可比基数”。</span><button className="text-button" onClick={seed} disabled={!!busy}>重新检查演示数据</button></div>
-        </div>}
+      <main className='flex-1'>
+        <div className='mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 md:px-6 lg:py-8'>
+          <div className='flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between'>
+            <div className='space-y-1'>
+              <h1 className='text-2xl font-bold tracking-tight'>{activePage.label}</h1>
+              <p className='text-sm text-muted-foreground'>{activePage.detail}</p>
+            </div>
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button variant='outline' size='sm' onClick={() => { setError(''); if (page === 'ops') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}>
+                <RefreshCw className={cn('size-4', (loading || opsLoading) && 'animate-spin')} />刷新数据
+              </Button>
+              {!['audit', 'knowledge', 'ops'].includes(page) && renderButton()}
+            </div>
+          </div>
 
-        {page === 'agent' && <div className="agent-layout"><section className="panel workflow-panel"><div className="panel-heading"><div><h2><Sparkles size={18} />Profit Agent</h2><p>LangGraph · {analysis?.result?.llm?.status === 'llm_success' ? `DeepSeek ${analysis.result?.llm?.model}` : demo?.llm?.configured ? `DeepSeek ${demo.llm.model} · 待调用` : '确定性规则引擎'}</p></div>{analysis && <Status value={analysis.status} />}</div>{!analysis ? <Empty title="开始一次利润诊断" text="Agent 会读取数据、计算利润、核对证据，并将建议交给你审批。">{renderButton('启动分析')}</Empty> : <><div className="run-meta"><span>RUN {analysis.id.slice(0, 8)}</span><span>尝试 {analysis.attempts}/{analysis.max_attempts}</span><span>{dateTime(analysis.created_at)}</span>{analysis.next_run_at && <span>下次重试 {dateTime(analysis.next_run_at)}</span>}</div><div className="workflow-steps">{analysis.steps.map((step, index) => <div className={`workflow-step step-${step.status}`} key={`${step.name}-${index}`}><div className="step-node">{step.status === 'completed' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : <LoaderCircle className="spin" size={14} />}</div><div className="step-body"><div><strong>{step.label}</strong><span>{step.duration_ms == null ? '运行中' : `${step.duration_ms.toFixed(1)} ms`}</span></div><p>{step.summary ?? '正在执行工具…'}</p><code>{step.name}</code></div></div>)}</div>{busyStatuses.includes(analysis.status) && <div className="running-hint"><LoaderCircle className="spin" size={15} />正在通过后端工作流处理…</div>}{analysis.error && <div className="alert error">{analysis.error.code}：{analysis.error.message}</div>}{analysis.status === 'failed' && <button className="button secondary" onClick={retryAnalysis} disabled={!!busy}>{busy === 'analysis-retry' ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新排队执行</button>}<div className="run-footer"><Fingerprint size={14} /><span>请求 ID：{analysis.request_id}</span></div></>}
-          {analyses.length > 1 && <label className="history-picker">查看历史分析<select aria-label="历史分析" value={analysis?.id ?? ''} onChange={event => { const value = analyses.find(item => item.id === event.target.value); if (value) setAnalysis(value) }}>{analyses.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 8)} · {statusLabels[item.status]} · {dateTime(item.created_at)}</option>)}</select></label>}
-        </section><div className="agent-result"><section className="panel"><div className="panel-heading"><div><h2>分析结论与依据</h2><p>计算结果绑定统计周期与数据来源</p></div><Terminal size={18} /></div>{analysis?.result ? <><div className="conclusion"><span className="small-label">AGENT FINDING</span><h3>{analysis.result.findings?.conclusion}</h3><p>当前：{analysis.result.metrics.period.start_date} — {analysis.result.metrics.period.end_date}<br />上一周期：{analysis.result.metrics.previous_period.start_date} — {analysis.result.metrics.previous_period.end_date}</p></div><div className="evidence-stats"><div><span>净利润变化</span><strong>{signedMoney(analysis.result.metrics.changes.net_profit.absolute)}</strong></div><div><span>数据覆盖</span><strong>{analysis.result.metrics.data_quality.observed_records} / {analysis.result.metrics.data_quality.expected_records}</strong></div></div><div className="evidence-list">{analysis.result.findings?.evidence.slice(0, 4).map(item => <div key={item.id}><span>{item.label}<small>{item.source}</small></span><strong>{signedMoney(item.contribution)}</strong></div>)}</div>{analysis.recommendation_id && <button className="button primary full" onClick={() => { setSelectedId(analysis.recommendation_id!); setPage('approvals') }}>查看经营建议<ArrowRight size={16} /></button>}</> : <Empty title="等待分析结果" text="完成计算与证据核验后，将在这里展示结论。" />}</section><LLMPanel llm={analysis?.result?.llm} config={demo?.llm} /><KnowledgePanel knowledge={analysis?.result?.knowledge} /><AgentTrace llm={analysis?.result?.llm} /><section className="explain-card"><ShieldCheck size={19} /><div><h3>让数据决定结论，让人决定行动</h3><p>不完整的数据会暂停建议生成。建议必须经人工审批；模拟只产生数据库预览记录，真实广告和资金均不变。</p><span>当前引擎：规则与本地工具 · 无模型调用</span></div></section></div></div>}
+          {error && <div className='flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive' role='alert'>
+            <TriangleAlert className='mt-0.5 size-4 shrink-0' />
+            <span className='flex-1 break-words'>{error}</span>
+            <button type='button' className='rounded-sm opacity-70 transition-opacity hover:opacity-100' aria-label='关闭错误' onClick={() => setError('')}><X className='size-4' /></button>
+          </div>}
+          {notice && <div className='flex items-start gap-3 rounded-lg border border-emerald-600/20 bg-emerald-600/5 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-400' role='status'>
+            <CheckCircle2 className='mt-0.5 size-4 shrink-0' />
+            <span className='flex-1 break-words'>{notice}</span>
+            <button type='button' className='rounded-sm opacity-70 transition-opacity hover:opacity-100' aria-label='关闭通知' onClick={() => setNotice('')}><X className='size-4' /></button>
+          </div>}
 
-        {page === 'ops' && <div className="ops-page">
-          {!isApprover ? <Empty title="需要审批负责人权限" text="Agent 运维视图包含跨任务的失败详情与模型成本，仅审批负责人可查看。请使用右上角切换为审批负责人。" /> : <>
-            <div className="ops-toolbar"><div><label>统计窗口<select aria-label="运维统计窗口" value={opsHours} onChange={event => setOpsHours(Number(event.target.value))}><option value={24}>最近 24 小时</option><option value={72}>最近 3 天</option><option value={168}>最近 7 天</option></select></label></div><span>{ops ? `${ops.window.start} — ${ops.window.end} · UTC · 持久化记录` : '等待持久化记录'}</span></div>
-            {opsLoading && !ops && <div className="loading" role="status"><LoaderCircle className="spin" size={22} />正在聚合任务、模型轨迹与审计记录…</div>}
-            {!opsLoading && !ops && <Empty title="暂无运维数据" text="当前窗口没有可聚合的任务记录。启动一次分析后，任务、工具调用与成本会显示在这里。" />}
-            {ops && <>
-              <div className="ops-kpi-grid">
-                <section className="ops-kpi"><span>任务总数</span><strong>{ops.jobs.total}</strong><p>排队 {ops.jobs.by_status.queued ?? 0} · 执行中 {ops.jobs.by_status.running ?? 0} · 待审批 {ops.jobs.by_status.waiting_approval ?? 0}</p></section>
-                <section className="ops-kpi"><span>失败任务</span><strong className={ops.jobs.by_status.failed ? 'negative' : ''}>{ops.jobs.by_status.failed ?? 0}</strong><p>死信 {ops.jobs.dead_letter} · 重试 {ops.jobs.retry_count} 次</p></section>
-                <section className="ops-kpi"><span>LLM 运行</span><strong>{ops.llm.runs}</strong><p>模型调用 {ops.llm.model_calls} · Provider 请求 {ops.llm.provider_requests}{ops.llm.provider_retries ? `（内部重试 ${ops.llm.provider_retries}）` : ''} · 无模型调用 {ops.llm.no_model_call_runs} · 成功 {ops.llm.by_status.llm_success ?? 0} · 降级 {ops.llm.by_status.deterministic_fallback ?? 0} · 失败 {ops.llm.by_status.llm_failed ?? 0}</p></section>
-                <section className="ops-kpi"><span>估算成本</span><strong>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '部分未知' : '暂无数据'}</strong><p>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · ${ops.cost.pricing_version}` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格${ops.cost.known_subtotal_usd != null ? ` · 已知小计 ${usd(ops.cost.known_subtotal_usd)}` : ''}` : '没有可定价的模型调用'}</p></section>
+          {(page === 'overview' || page === 'agent') && <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div className='flex flex-wrap items-center gap-2'>
+              <label className='flex items-center gap-2 text-sm text-muted-foreground'>统计周期
+                <NativeSelect aria-label='统计周期' className='w-[170px]' value={scope.days} onChange={event => setScope({ ...scope, days: Number(event.target.value) })}>
+                  <option value={30}>最近 30 个数据日</option>
+                  <option value={7}>最近 7 个数据日</option>
+                </NativeSelect>
+              </label>
+              <label className='flex items-center gap-2 text-sm text-muted-foreground'>店铺
+                <NativeSelect aria-label='店铺' className='w-[150px]' value={scope.storeId} onChange={event => setScope({ ...scope, storeId: event.target.value })}>
+                  <option value=''>全部店铺</option>
+                  {demo?.stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}
+                </NativeSelect>
+              </label>
+            </div>
+            <span className='text-xs text-muted-foreground'>{metrics ? `${metrics.period.start_date} — ${metrics.period.end_date} · UTC · USD` : '等待数据连接'}</span>
+          </div>}
+
+          {loading && !metrics && <div className='flex min-h-[200px] items-center justify-center gap-2 text-sm text-muted-foreground' role='status'><LoaderCircle className='size-5 animate-spin' />正在读取经营账本…</div>}
+          {!loading && !demo && <Empty title='后端连接失败' text='启动后端后刷新页面，API 默认通过本机 8010 端口提供服务。'><Button variant='outline' onClick={() => window.location.reload()}>重新连接</Button></Empty>}
+          {demo && !demo.data_range && !loading && <Empty title='从第一份经营数据开始' text='初始化 60 天演示数据，体验一次完整的利润决策闭环。'><Button onClick={seed} disabled={!!busy}><Database className='size-4' />初始化演示数据</Button></Empty>}
+
+          {page === 'overview' && metrics && <div className={cn('space-y-6', loading && 'pointer-events-none opacity-60')}>
+            <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4'>{[
+              { label: '销售额', value: money(metrics.current.sales), metric: 'sales', icon: CircleDollarSign, favorable: metrics.changes.sales.absolute >= 0, sub: `${metrics.current.orders.toLocaleString()} 笔订单` },
+              { label: '净利润', value: money(metrics.current.net_profit), metric: 'net_profit', icon: Activity, favorable: metrics.changes.net_profit.absolute >= 0, sub: `净销售额 ${money(metrics.current.net_sales)}` },
+              { label: '净利润率', value: metrics.current.margin_pct === null ? '—' : `${metrics.current.margin_pct.toFixed(2)}%`, metric: 'margin_pct', icon: BarChart3, favorable: metrics.changes.margin_pct.absolute >= 0, sub: '净利润 / 净销售额' },
+              { label: '广告支出', value: money(metrics.current.ad_spend), metric: 'ad_spend', icon: Megaphone, favorable: metrics.changes.ad_spend.absolute <= 0, sub: '按每日广告账单入账' },
+            ].map(item => <KpiCard
+              key={item.metric}
+              label={item.label}
+              value={item.value}
+              sub={item.sub}
+              icon={item.icon}
+              favorable={item.favorable}
+              delta={<>
+                {metrics.changes[item.metric].absolute >= 0 ? <ArrowUpRight className='size-3' /> : <ArrowDownRight className='size-3' />}
+                {item.metric === 'margin_pct' ? `${metrics.changes.margin_pct.absolute > 0 ? '+' : ''}${metrics.changes.margin_pct.absolute.toFixed(2)} pp` : percent(metrics.changes[item.metric].pct)}
+              </>}
+            />)}</div>
+
+            {!metrics.data_quality.complete && <div className='flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive'>
+              <TriangleAlert className='mt-0.5 size-4 shrink-0' />
+              <div><strong className='font-medium'>数据覆盖不足</strong><p className='mt-0.5 text-xs'>{metrics.data_quality.issues.join('；')}</p></div>
+            </div>}
+
+            <Card className={cn('flex-row items-center gap-4 p-5', metrics.anomaly ? 'border-amber-200 bg-amber-50/60 dark:border-amber-900/50 dark:bg-amber-950/20' : 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/20')}>
+              <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-full', metrics.anomaly ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400')}>
+                <TriangleAlert className='size-5' />
               </div>
-              <div className="ops-grid">
-                <section className="panel ops-panel">
-                  <div className="panel-heading"><div><h2>任务队列</h2><p>按窗口内创建的任务聚合</p></div><span className="tiny-tag">{ops.window.hours}H</span></div>
-                  <div className="ops-rows">
-                    {jobStatusOrder.map(status => <div className="ops-row" key={status}><span>{statusLabels[status] ?? status}</span><strong>{ops.jobs.by_status[status] ?? 0}</strong></div>)}
-                    <div className="ops-row emphasis"><span>死信任务</span><strong>{ops.jobs.dead_letter}</strong></div>
-                    <div className="ops-row"><span>重试次数（按 attempts）</span><strong>{ops.jobs.retry_count}</strong></div>
-                    <div className="ops-row"><span>重试调度事件</span><strong>{ops.jobs.retry_scheduled_events}</strong></div>
-                  </div>
-                </section>
-                <section className="panel ops-panel">
-                  <div className="panel-heading"><div><h2>模型与工具</h2><p>来自已持久化的 LLM 运行与工具轨迹</p></div><Terminal size={18} /></div>
-                  <div className="ops-rows">
-                    {Object.entries(ops.llm.by_status).map(([status, count]) => <div className="ops-row" key={status}><span>{llmStatusLabels[status] ?? status}</span><strong>{count}</strong></div>)}
-                    <div className="ops-row"><span>原生工具运行</span><strong>{ops.llm.native_tool_runs}</strong></div>
-                    <div className="ops-row"><span>工具调用 / 失败</span><strong>{ops.tools.calls} / {ops.tools.failed_calls}</strong></div>
-                    <div className="ops-row"><span>工具轮次</span><strong>{ops.tools.rounds}</strong></div>
-                  </div>
-                  {ops.tools.by_name.length > 0 && <div className="ops-chips">{ops.tools.by_name.map(item => <span key={item.name}><code>{item.name}</code>{item.calls} 次{item.failed ? ` · ${item.failed} 失败` : ''}</span>)}</div>}
-                  {ops.llm.termination_reasons.length > 0 && <p className="ops-note">终止原因：{ops.llm.termination_reasons.map(item => `${terminationLabels[item.reason] ?? item.reason} ×${item.count}`).join('；')}</p>}
-                </section>
-                <section className="panel ops-panel">
-                  <div className="panel-heading"><div><h2>Token 与成本</h2><p>缺失用量或价格时显示未知，不按 0 计</p></div><CircleDollarSign size={18} /></div>
-                  <div className="ops-token-grid">
-                    <div><span>输入 Token</span><strong>{countText(ops.tokens.prompt)}</strong></div>
-                    <div><span>输出 Token</span><strong>{countText(ops.tokens.completion)}</strong></div>
-                    <div><span>总 Token</span><strong>{countText(ops.tokens.total)}</strong></div>
-                    <div><span>缓存命中</span><strong>{countText(ops.tokens.cached)}</strong></div>
-                  </div>
-                  <p className="ops-note">{ops.tokens.runs_with_usage} 次运行有 Usage{ops.tokens.runs_without_usage ? `，${ops.tokens.runs_without_usage} 次缺失` : ''}。</p>
-                  <div className={`ops-cost ${ops.cost.status}`}><span>估算成本 · {ops.cost.currency}</span><strong>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '未知' : '暂无数据'}</strong><p>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · 单价版本 ${ops.cost.pricing_version} · 公开列表价估算，非账单` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格，未按 0 计。${ops.cost.known_subtotal_usd != null ? ` 已知小计 ${usd(ops.cost.known_subtotal_usd)}，仅作诊断，不是总成本。` : ''}` : '没有可定价的模型调用记录。'}</p></div>
-                </section>
-                <section className="panel ops-panel">
-                  <div className="panel-heading"><div><h2>错误与人工环节</h2><p>错误码来自失败任务；审批与执行展示当前状态</p></div><TriangleAlert size={18} /></div>
-                  {!ops.jobs.error_codes.length ? <p className="ops-note">窗口内没有失败错误码。</p> : <div className="ops-chips">{ops.jobs.error_codes.map(item => <span key={item.code}><code>{item.code}</code>{item.count} 次</span>)}</div>}
-                  <div className="ops-rows">
-                    <div className="ops-row"><span>待审批建议</span><strong>{ops.approvals.by_status.pending_approval ?? 0}</strong></div>
-                    <div className="ops-row"><span>已批准建议</span><strong>{ops.approvals.by_status.approved ?? 0}</strong></div>
-                    <div className="ops-row"><span>已执行建议</span><strong>{ops.approvals.by_status.executed ?? 0}</strong></div>
-                    <div className="ops-row"><span>模拟执行记录</span><strong>{ops.executions.total}</strong></div>
-                  </div>
-                </section>
+              <div className='min-w-0 flex-1 space-y-1'>
+                <div className='flex flex-wrap items-center gap-2 text-xs'>
+                  <span className={cn('font-semibold tracking-wide', metrics.anomaly ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400')}>PROFIT SIGNAL</span>
+                  <span className='text-muted-foreground'>{metrics.anomaly ? '发现经营异常' : '经营信号检查完成'}</span>
+                </div>
+                <h2 className='text-base font-semibold'>{metrics.anomaly ? '销售在增长，利润却没有跟上。' : '当前周期未发现销售与利润背离。'}</h2>
+                <p className='text-sm leading-relaxed text-muted-foreground'>{metrics.anomaly ? `销售额环比 ${percent(metrics.changes.sales.pct)}，净利润环比 ${percent(metrics.changes.net_profit.pct)}。${metrics.drivers[0]?.label}贡献 ${signedMoney(metrics.drivers[0]?.contribution ?? 0)}，值得优先关注。` : '可启动 Agent 核对经营数据、利润桥与完整性。'}</p>
               </div>
-              <section className="panel ops-failures">
-                <div className="panel-heading"><div><h2>最近失败任务</h2><p>点击查看该分析已保存的执行轨迹</p></div><span className="tiny-tag">{ops.recent_failures.length}</span></div>
-                {!ops.recent_failures.length ? <Empty title="暂无失败任务" text="当前窗口没有失败记录。任务失败或进入死信后会显示在这里。" /> : <div className="table-wrap"><table><thead><tr><th>任务 / 请求 ID</th><th>错误</th><th>尝试</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{ops.recent_failures.map(item => <tr key={item.id}><td><strong>{item.id.slice(0, 8)}</strong><small className="mono">{item.request_id}</small></td><td>{item.dead_letter && <span className="status status-failed">死信</span>}<small>{item.error_code ?? 'unknown'}：{item.error_message ?? '无错误详情'}</small></td><td>{item.attempts} / {item.max_attempts}</td><td>{dateTime(item.updated_at)}</td><td><button className="text-button" onClick={() => openAnalysis(item.id)} disabled={!!busy}>查看 Trace</button></td></tr>)}</tbody></table></div>}
-              </section>
-              <div className="accounting-note"><Database size={14} /><span>{ops.source.note} {ops.notes.join(' ')}</span></div>
+              <Button variant='ghost' className='shrink-0' onClick={startAnalysis} disabled={!!busy}>分析原因<ArrowRight className='size-4' /></Button>
+            </Card>
+
+            <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]'>
+              <Suspense fallback={<Card className='h-[380px] animate-pulse bg-muted/40' />}><TrendChart metrics={metrics} /></Suspense>
+              <Card className='gap-0 py-0'>
+                <SectionHeading title='利润变动归因' description='每一项，均可回算到账本' action={<Badge variant='outline'>USD</Badge>} />
+                <CardContent className='px-5 py-4'>
+                  <div className='flex items-center justify-between border-b pb-4 text-sm'>
+                    <span className='text-muted-foreground'>净利润变化</span>
+                    <span className='text-xl font-semibold tabular-nums'>{signedMoney(metrics.changes.net_profit.absolute)}</span>
+                  </div>
+                  <div className='mt-4 space-y-3'>{metrics.drivers.map(driver => <div key={driver.metric}>
+                    <div className='flex items-center justify-between gap-3 text-xs'>
+                      <span className='text-muted-foreground'>{driver.label}</span>
+                      <span className={cn('font-medium tabular-nums', driver.contribution < 0 && 'text-destructive')}>{signedMoney(driver.contribution)}</span>
+                    </div>
+                    <div className='mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted'>
+                      <span className={cn('block h-full rounded-full', driver.contribution < 0 ? 'bg-destructive/70' : 'bg-emerald-600/70')} style={{ width: `${Math.max(1, Math.abs(driver.contribution) / Math.max(...metrics.drivers.map(item => Math.abs(item.contribution)), 1) * 100)}%` }} />
+                    </div>
+                  </div>)}</div>
+                  <div className='mt-4 flex items-center gap-1.5 border-t pt-3 text-xs text-emerald-600 dark:text-emerald-400'>
+                    <CheckCircle2 className='size-3.5' />{metrics.bridge_verified ? '贡献项合计与利润变化一致' : '贡献核对异常'}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className='gap-0 overflow-hidden py-0'>
+              <SectionHeading title='商品经营表现' description='找到需要优先关注的 SKU' action={<Badge variant='outline'>{metrics.sku_breakdown.length} 个商品</Badge>} />
+              <Table>
+                <TableHeader><TableRow><TableHead>商品 / SKU</TableHead><TableHead>销售额</TableHead><TableHead>净利润</TableHead><TableHead>利润变化</TableHead><TableHead>广告支出</TableHead><TableHead>库存 / 在途</TableHead></TableRow></TableHeader>
+                <TableBody>{metrics.sku_breakdown.map(row => <TableRow key={row.sku}>
+                  <TableCell><strong className='font-medium'>{row.name}</strong><span className='block text-xs text-muted-foreground'>{row.sku}</span></TableCell>
+                  <TableCell className='tabular-nums'>{money(row.current.sales)}</TableCell>
+                  <TableCell className='tabular-nums'>{money(row.current.net_profit)}</TableCell>
+                  <TableCell className={cn('tabular-nums', row.profit_delta < 0 && 'text-destructive')}>{signedMoney(row.profit_delta)}</TableCell>
+                  <TableCell className='tabular-nums'>{money(row.current.ad_spend)}</TableCell>
+                  <TableCell className='tabular-nums'>{row.inventory} <span className='text-muted-foreground'>/ {row.inbound_inventory}</span></TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+            </Card>
+
+            <div className='flex flex-wrap items-start gap-2 text-xs text-muted-foreground'>
+              <Database className='mt-0.5 size-3.5 shrink-0' />
+              <span className='flex-1'>净利润 = 销售额 − 折扣 − 退款 − 采购 − 广告 − 履约 − 平台费 − 其他可变成本。零分母显示“无可比基数”。</span>
+              <button type='button' className='font-medium text-foreground underline-offset-4 hover:underline' onClick={seed} disabled={!!busy}>重新检查演示数据</button>
+            </div>
+          </div>}
+
+          {page === 'agent' && <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]'>
+            <Card className='gap-0 self-start py-0'>
+              <SectionHeading
+                title='Profit Agent'
+                icon={<Sparkles className='size-4' />}
+                description={`LangGraph · ${analysis?.result?.llm?.status === 'llm_success' ? `DeepSeek ${analysis.result?.llm?.model}` : demo?.llm?.configured ? `DeepSeek ${demo.llm.model} · 待调用` : '确定性规则引擎'}`}
+                action={analysis ? <Status value={analysis.status} /> : undefined}
+              />
+              <CardContent className='px-5 py-4'>
+                {!analysis ? <Empty title='开始一次利润诊断' text='Agent 会读取数据、计算利润、核对证据，并将建议交给你审批。'>{renderButton('启动分析')}</Empty> : <>
+                  <div className='flex flex-wrap gap-x-4 gap-y-1 border-b pb-3 text-xs text-muted-foreground'>
+                    <span>RUN {analysis.id.slice(0, 8)}</span>
+                    <span>尝试 {analysis.attempts}/{analysis.max_attempts}</span>
+                    <span>{dateTime(analysis.created_at)}</span>
+                    {analysis.next_run_at && <span>下次重试 {dateTime(analysis.next_run_at)}</span>}
+                  </div>
+                  <div className='mt-4 space-y-0'>{analysis.steps.map((step, index) => <div className='relative flex gap-3' key={`${step.name}-${index}`}>
+                    <div className='flex flex-col items-center'>
+                      <div className={cn('z-10 flex size-6 shrink-0 items-center justify-center rounded-full border bg-background', step.status === 'completed' ? 'border-emerald-600/30 bg-emerald-600/10 text-emerald-600 dark:text-emerald-400' : step.status === 'failed' ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'text-muted-foreground')}>
+                        {step.status === 'completed' ? <Check className='size-3.5' /> : step.status === 'failed' ? <X className='size-3.5' /> : <LoaderCircle className='size-3.5 animate-spin' />}
+                      </div>
+                      {index < analysis.steps.length - 1 && <div className='w-px flex-1 bg-border' />}
+                    </div>
+                    <div className='min-w-0 flex-1 pb-4'>
+                      <div className='flex items-center justify-between gap-2 text-sm'>
+                        <span className='font-medium'>{step.label}</span>
+                        <span className='text-xs text-muted-foreground'>{step.duration_ms == null ? '运行中' : `${step.duration_ms.toFixed(1)} ms`}</span>
+                      </div>
+                      <p className='mt-0.5 text-xs text-muted-foreground'>{step.summary ?? '正在执行工具…'}</p>
+                      <code className='mt-1 block text-[11px] text-muted-foreground/80'>{step.name}</code>
+                    </div>
+                  </div>)}</div>
+                  {busyStatuses.includes(analysis.status) && <div className='mt-2 flex items-center gap-2 text-xs text-muted-foreground'><LoaderCircle className='size-3.5 animate-spin' />正在通过后端工作流处理…</div>}
+                  {analysis.error && <div className='mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive'>{analysis.error.code}：{analysis.error.message}</div>}
+                  {analysis.status === 'failed' && <Button variant='outline' size='sm' className='mt-3' onClick={retryAnalysis} disabled={!!busy}>{busy === 'analysis-retry' ? <LoaderCircle className='size-3.5 animate-spin' /> : <RefreshCw className='size-3.5' />}重新排队执行</Button>}
+                  <div className='mt-4 flex items-start gap-1.5 border-t pt-3 text-xs text-muted-foreground'><Fingerprint className='mt-0.5 size-3.5 shrink-0' /><span className='break-all'>请求 ID：{analysis.request_id}</span></div>
+                </>}
+              </CardContent>
+              {analyses.length > 1 && <label className='flex flex-col gap-1.5 border-t px-5 py-3 text-xs text-muted-foreground'>查看历史分析
+                <NativeSelect aria-label='历史分析' value={analysis?.id ?? ''} onChange={event => { const value = analyses.find(item => item.id === event.target.value); if (value) setAnalysis(value) }}>
+                  {analyses.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 8)} · {statusLabels[item.status]} · {dateTime(item.created_at)}</option>)}
+                </NativeSelect>
+              </label>}
+            </Card>
+
+            <div className='space-y-6'>
+              <Card className='gap-0 py-0'>
+                <SectionHeading title='分析结论与依据' description='计算结果绑定统计周期与数据来源' action={<Terminal className='size-4 text-muted-foreground' />} />
+                <CardContent className='px-5 py-4'>
+                  {analysis?.result ? <>
+                    <div className='rounded-lg bg-muted/50 p-4'>
+                      <span className='text-[11px] font-medium tracking-wide text-muted-foreground'>AGENT FINDING</span>
+                      <h3 className='mt-2 text-sm font-medium leading-relaxed'>{analysis.result.findings?.conclusion}</h3>
+                      <p className='mt-2 text-xs leading-relaxed text-muted-foreground'>当前：{analysis.result.metrics.period.start_date} — {analysis.result.metrics.period.end_date}<br />上一周期：{analysis.result.metrics.previous_period.start_date} — {analysis.result.metrics.previous_period.end_date}</p>
+                    </div>
+                    <div className='mt-4 grid grid-cols-2 gap-4'>
+                      <div><span className='text-xs text-muted-foreground'>净利润变化</span><div className='mt-1 text-xl font-semibold tabular-nums'>{signedMoney(analysis.result.metrics.changes.net_profit.absolute)}</div></div>
+                      <div><span className='text-xs text-muted-foreground'>数据覆盖</span><div className='mt-1 text-xl font-semibold tabular-nums'>{analysis.result.metrics.data_quality.observed_records} / {analysis.result.metrics.data_quality.expected_records}</div></div>
+                    </div>
+                    <div className='mt-4'>{analysis.result.findings?.evidence.slice(0, 4).map(item => <div key={item.id} className='flex items-center justify-between gap-3 border-t py-2.5 text-sm first:border-t-0'>
+                      <span>{item.label}<small className='block text-xs text-muted-foreground'>{item.source}</small></span>
+                      <strong className='font-medium tabular-nums'>{signedMoney(item.contribution)}</strong>
+                    </div>)}</div>
+                    {analysis.recommendation_id && <Button className='mt-4 w-full' onClick={() => { setSelectedId(analysis.recommendation_id!); setPage('approvals') }}>查看经营建议<ArrowRight className='size-4' /></Button>}
+                  </> : <Empty title='等待分析结果' text='完成计算与证据核验后，将在这里展示结论。' />}
+                </CardContent>
+              </Card>
+              <LLMPanel llm={analysis?.result?.llm} config={demo?.llm} />
+              <KnowledgePanel knowledge={analysis?.result?.knowledge} />
+              <AgentTrace llm={analysis?.result?.llm} />
+              <Card className='flex-row gap-3 bg-muted/40 p-5 shadow-none'>
+                <ShieldCheck className='mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400' />
+                <div>
+                  <h3 className='text-sm font-medium'>让数据决定结论，让人决定行动</h3>
+                  <p className='mt-1.5 text-sm leading-relaxed text-muted-foreground'>不完整的数据会暂停建议生成。建议必须经人工审批；模拟只产生数据库预览记录，真实广告和资金均不变。</p>
+                  <span className='mt-2 block text-xs text-muted-foreground/80'>当前引擎：规则与本地工具 · 无模型调用</span>
+                </div>
+              </Card>
+            </div>
+          </div>}
+
+          {page === 'ops' && <div className='space-y-6'>
+            {!isApprover ? <Card className='p-5'><Empty title='需要审批负责人权限' text='Agent 运维视图包含跨任务的失败详情与模型成本，仅审批负责人可查看。请使用右上角切换为审批负责人。' /></Card> : <>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <label className='flex items-center gap-2 text-sm text-muted-foreground'>统计窗口
+                  <NativeSelect aria-label='运维统计窗口' className='w-[150px]' value={opsHours} onChange={event => setOpsHours(Number(event.target.value))}>
+                    <option value={24}>最近 24 小时</option>
+                    <option value={72}>最近 3 天</option>
+                    <option value={168}>最近 7 天</option>
+                  </NativeSelect>
+                </label>
+                <span className='text-xs text-muted-foreground'>{ops ? `${ops.window.start} — ${ops.window.end} · UTC · 持久化记录` : '等待持久化记录'}</span>
+              </div>
+              {opsLoading && !ops && <Card><div className='flex min-h-[200px] items-center justify-center gap-2 text-sm text-muted-foreground' role='status'><LoaderCircle className='size-5 animate-spin' />正在聚合任务、模型轨迹与审计记录…</div></Card>}
+              {!opsLoading && !ops && <Card className='p-5'><Empty title='暂无运维数据' text='当前窗口没有可聚合的任务记录。启动一次分析后，任务、工具调用与成本会显示在这里。' /></Card>}
+              {ops && <>
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4'>
+                  <Card className='gap-0 px-5 py-4'><span className='text-sm text-muted-foreground'>任务总数</span><strong className='mt-1 text-2xl font-semibold tracking-tight tabular-nums'>{ops.jobs.total}</strong><p className='mt-1 text-xs leading-relaxed text-muted-foreground'>排队 {ops.jobs.by_status.queued ?? 0} · 执行中 {ops.jobs.by_status.running ?? 0} · 待审批 {ops.jobs.by_status.waiting_approval ?? 0}</p></Card>
+                  <Card className='gap-0 px-5 py-4'><span className='text-sm text-muted-foreground'>失败任务</span><strong className={cn('mt-1 text-2xl font-semibold tracking-tight tabular-nums', ops.jobs.by_status.failed && 'text-destructive')}>{ops.jobs.by_status.failed ?? 0}</strong><p className='mt-1 text-xs leading-relaxed text-muted-foreground'>死信 {ops.jobs.dead_letter} · 重试 {ops.jobs.retry_count} 次</p></Card>
+                  <Card className='gap-0 px-5 py-4'><span className='text-sm text-muted-foreground'>LLM 运行</span><strong className='mt-1 text-2xl font-semibold tracking-tight tabular-nums'>{ops.llm.runs}</strong><p className='mt-1 text-xs leading-relaxed text-muted-foreground'>模型调用 {ops.llm.model_calls} · Provider 请求 {ops.llm.provider_requests}{ops.llm.provider_retries ? `（内部重试 ${ops.llm.provider_retries}）` : ''} · 无模型调用 {ops.llm.no_model_call_runs} · 成功 {ops.llm.by_status.llm_success ?? 0} · 降级 {ops.llm.by_status.deterministic_fallback ?? 0} · 失败 {ops.llm.by_status.llm_failed ?? 0}</p></Card>
+                  <Card className='gap-0 px-5 py-4'><span className='text-sm text-muted-foreground'>估算成本</span><strong className='mt-1 text-2xl font-semibold tracking-tight tabular-nums'>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '部分未知' : '暂无数据'}</strong><p className='mt-1 text-xs leading-relaxed text-muted-foreground'>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · ${ops.cost.pricing_version}` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格${ops.cost.known_subtotal_usd != null ? ` · 已知小计 ${usd(ops.cost.known_subtotal_usd)}` : ''}` : '没有可定价的模型调用'}</p></Card>
+                </div>
+
+                <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
+                  <Card className='gap-0 py-0'>
+                    <SectionHeading title='任务队列' description='按窗口内创建的任务聚合' action={<Badge variant='outline'>{ops.window.hours}H</Badge>} />
+                    <CardContent className='px-5 py-2'>{jobStatusOrder.map(status => <div className='flex items-center justify-between gap-3 border-t py-2 text-sm first:border-t-0' key={status}><span className='text-muted-foreground'>{statusLabels[status] ?? status}</span><strong className='font-medium tabular-nums'>{ops.jobs.by_status[status] ?? 0}</strong></div>)}
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>死信任务</span><strong className='font-medium tabular-nums text-destructive'>{ops.jobs.dead_letter}</strong></div>
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>重试次数（按 attempts）</span><strong className='font-medium tabular-nums'>{ops.jobs.retry_count}</strong></div>
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>重试调度事件</span><strong className='font-medium tabular-nums'>{ops.jobs.retry_scheduled_events}</strong></div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className='gap-0 py-0'>
+                    <SectionHeading title='模型与工具' description='来自已持久化的 LLM 运行与工具轨迹' action={<Terminal className='size-4 text-muted-foreground' />} />
+                    <CardContent className='px-5 py-2'>{Object.entries(ops.llm.by_status).map(([status, count]) => <div className='flex items-center justify-between gap-3 border-t py-2 text-sm first:border-t-0' key={status}><span className='text-muted-foreground'>{llmStatusLabels[status] ?? status}</span><strong className='font-medium tabular-nums'>{count}</strong></div>)}
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>原生工具运行</span><strong className='font-medium tabular-nums'>{ops.llm.native_tool_runs}</strong></div>
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>工具调用 / 失败</span><strong className='font-medium tabular-nums'>{ops.tools.calls} / {ops.tools.failed_calls}</strong></div>
+                      <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>工具轮次</span><strong className='font-medium tabular-nums'>{ops.tools.rounds}</strong></div>
+                    </CardContent>
+                    {ops.tools.by_name.length > 0 && <div className='flex flex-wrap gap-1.5 px-5 pb-4'>{ops.tools.by_name.map(item => <span key={item.name} className='inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground'><code className='text-foreground'>{item.name}</code>{item.calls} 次{item.failed ? ` · ${item.failed} 失败` : ''}</span>)}</div>}
+                    {ops.llm.termination_reasons.length > 0 && <p className='px-5 pb-4 text-xs leading-relaxed text-muted-foreground'>终止原因：{ops.llm.termination_reasons.map(item => `${terminationLabels[item.reason] ?? item.reason} ×${item.count}`).join('；')}</p>}
+                  </Card>
+
+                  <Card className='gap-0 py-0'>
+                    <SectionHeading title='Token 与成本' description='缺失用量或价格时显示未知，不按 0 计' action={<CircleDollarSign className='size-4 text-muted-foreground' />} />
+                    <CardContent className='px-5 py-4'>
+                      <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+                        <div><span className='block text-xs text-muted-foreground'>输入 Token</span><strong className='mt-1 block text-base font-medium tabular-nums'>{countText(ops.tokens.prompt)}</strong></div>
+                        <div><span className='block text-xs text-muted-foreground'>输出 Token</span><strong className='mt-1 block text-base font-medium tabular-nums'>{countText(ops.tokens.completion)}</strong></div>
+                        <div><span className='block text-xs text-muted-foreground'>总 Token</span><strong className='mt-1 block text-base font-medium tabular-nums'>{countText(ops.tokens.total)}</strong></div>
+                        <div><span className='block text-xs text-muted-foreground'>缓存命中</span><strong className='mt-1 block text-base font-medium tabular-nums'>{countText(ops.tokens.cached)}</strong></div>
+                      </div>
+                      <p className='mt-3 text-xs text-muted-foreground'>{ops.tokens.runs_with_usage} 次运行有 Usage{ops.tokens.runs_without_usage ? `，${ops.tokens.runs_without_usage} 次缺失` : ''}。</p>
+                      <div className={cn('mt-4 rounded-lg border bg-muted/40 p-4', ops.cost.status === 'partial' && 'border-amber-200 bg-amber-50/60 dark:border-amber-900/50 dark:bg-amber-950/20')}>
+                        <span className='block text-xs text-muted-foreground'>估算成本 · {ops.cost.currency}</span>
+                        <strong className='mt-1 block text-2xl font-semibold tracking-tight'>{ops.cost.status === 'complete' ? usd(ops.cost.amount_usd ?? 0) : ops.cost.status === 'partial' ? '未知' : '暂无数据'}</strong>
+                        <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>{ops.cost.status === 'complete' ? `${ops.cost.priced_calls} 次调用 · 单价版本 ${ops.cost.pricing_version} · 公开列表价估算，非账单` : ops.cost.status === 'partial' ? `${ops.cost.unpriced_calls} 次调用缺少 Usage 或价格，未按 0 计。${ops.cost.known_subtotal_usd != null ? ` 已知小计 ${usd(ops.cost.known_subtotal_usd)}，仅作诊断，不是总成本。` : ''}` : '没有可定价的模型调用记录。'}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className='gap-0 py-0'>
+                    <SectionHeading title='错误与人工环节' description='错误码来自失败任务；审批与执行展示当前状态' action={<TriangleAlert className='size-4 text-muted-foreground' />} />
+                    <CardContent className='px-5 py-4'>
+                      {!ops.jobs.error_codes.length ? <p className='text-xs text-muted-foreground'>窗口内没有失败错误码。</p> : <div className='flex flex-wrap gap-1.5'>{ops.jobs.error_codes.map(item => <span key={item.code} className='inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground'><code className='text-foreground'>{item.code}</code>{item.count} 次</span>)}</div>}
+                      <div className='mt-3'>
+                        <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>待审批建议</span><strong className='font-medium tabular-nums'>{ops.approvals.by_status.pending_approval ?? 0}</strong></div>
+                        <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>已批准建议</span><strong className='font-medium tabular-nums'>{ops.approvals.by_status.approved ?? 0}</strong></div>
+                        <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>已执行建议</span><strong className='font-medium tabular-nums'>{ops.approvals.by_status.executed ?? 0}</strong></div>
+                        <div className='flex items-center justify-between gap-3 border-t py-2 text-sm'><span className='text-muted-foreground'>模拟执行记录</span><strong className='font-medium tabular-nums'>{ops.executions.total}</strong></div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card className='ops-failures gap-0 overflow-hidden py-0'>
+                  <SectionHeading title='最近失败任务' description='点击查看该分析已保存的执行轨迹' action={<Badge variant='outline'>{ops.recent_failures.length}</Badge>} />
+                  {!ops.recent_failures.length ? <div className='p-5'><Empty title='暂无失败任务' text='当前窗口没有失败记录。任务失败或进入死信后会显示在这里。' /></div> : <Table>
+                    <TableHeader><TableRow><TableHead>任务 / 请求 ID</TableHead><TableHead>错误</TableHead><TableHead>尝试</TableHead><TableHead>更新时间</TableHead><TableHead>操作</TableHead></TableRow></TableHeader>
+                    <TableBody>{ops.recent_failures.map(item => <TableRow key={item.id}>
+                      <TableCell><strong className='font-medium'>{item.id.slice(0, 8)}</strong><small className='mono block font-mono text-[11px] text-muted-foreground'>{item.request_id}</small></TableCell>
+                      <TableCell className='whitespace-normal'>{item.dead_letter && <Badge variant='danger' className='mb-1'>死信</Badge>}<small className='block text-xs text-muted-foreground'>{item.error_code ?? 'unknown'}：{item.error_message ?? '无错误详情'}</small></TableCell>
+                      <TableCell className='tabular-nums'>{item.attempts} / {item.max_attempts}</TableCell>
+                      <TableCell>{dateTime(item.updated_at)}</TableCell>
+                      <TableCell><button type='button' className='text-sm font-medium text-foreground underline-offset-4 hover:underline' onClick={() => openAnalysis(item.id)} disabled={!!busy}>查看 Trace</button></TableCell>
+                    </TableRow>)}</TableBody>
+                  </Table>}
+                </Card>
+                <div className='flex items-start gap-2 text-xs text-muted-foreground'><Database className='mt-0.5 size-3.5 shrink-0' /><span>{ops.source.note} {ops.notes.join(' ')}</span></div>
+              </>}
             </>}
-          </>}
-        </div>}
+          </div>}
 
-        {page === 'approvals' && <div className="approval-layout"><section className="panel recommendation-list"><div className="panel-heading"><div><h2>经营建议</h2><p>{pending} 项等待人工复核</p></div><span className="count-circle">{recommendations.length}</span></div>{!recommendations.length ? <Empty title="还没有待处理建议" text="先启动 Profit Agent，异常分析通过证据核验后会生成建议。" /> : recommendations.map(item => <button key={item.id} className={`recommendation-item ${selected?.id === item.id ? 'selected' : ''}`} onClick={() => { setSelectedId(item.id); setExecution(null); setNotice('') }}><Status value={item.status} /><strong>{item.title}</strong><p>{item.body.recommendation}</p><small>{dateTime(item.created_at)}</small></button>)}</section>{selected ? <section className="panel recommendation-detail"><div className="panel-heading"><div><span className="small-label">RECOMMENDATION / {selected.id.slice(0, 8)}</span><h2>{selected.title}</h2></div><Status value={selected.status} /></div><div className="detail-section"><h3>问题与建议</h3><p>{selected.body.problem}</p><div className="recommendation-callout"><Sparkles size={19} /><strong>{selected.body.recommendation}</strong></div></div><div className="detail-section"><h3>数据证据 <span className="tiny-tag">可核对</span></h3><p className="muted">{selected.body.period.start_date} — {selected.body.period.end_date} 对比 {selected.body.previous_period.start_date} — {selected.body.previous_period.end_date} · {selected.body.store_id ?? '全部店铺'} · USD</p><div className="table-wrap"><table><thead><tr><th>指标 / 数据来源</th><th>上一周期</th><th>当前周期</th><th>利润贡献</th></tr></thead><tbody>{selected.body.evidence.map(item => <tr key={item.id}><td>{item.label}<small>{item.source}</small></td><td>{money(item.previous)}</td><td>{money(item.current)}</td><td>{signedMoney(item.contribution)}</td></tr>)}</tbody></table></div></div><KnowledgePanel knowledge={selected.body.knowledge} showCited />{selected.body.llm && <div className="detail-section"><h3>LLM 根因分析 <span className="tiny-tag">{llmStatusLabels[selected.body.llm.status] ?? selected.body.llm.status}</span></h3>{selected.body.llm.output ? <><p>{selected.body.llm.output.summary}</p><div className="llm-refs">{selected.body.llm.output.evidence_references.map(id => <code key={id}>{id}</code>)}</div>{(selected.body.llm.output.knowledge_references?.length ?? 0) > 0 && <div className="llm-refs knowledge-refs">{selected.body.llm.output.knowledge_references!.map(id => <code key={id}>{id}</code>)}</div>}<ul className="llm-cause-list">{selected.body.llm.output.root_causes.map(cause => <li key={cause.cause}><strong>{cause.cause}</strong><span>{cause.reasoning}</span></li>)}</ul></> : <p className="muted">本次建议由确定性规则生成，LLM 未参与（{llmReasonLabels[selected.body.llm.reason ?? ''] ?? selected.body.llm.reason ?? '未调用'}）。</p>}</div>}<div className="impact-box"><div><span>条件性利润改善情景</span><strong>{money(selected.body.expected_impact.profit_improvement_min)} — {money(selected.body.expected_impact.profit_improvement_max)}</strong><small>未来 {selected.body.expected_impact.horizon_days} 天 · 非实际收益或保证值</small></div><p>{selected.body.expected_impact.explanation}</p></div><div className="detail-section"><h3>待执行的模拟动作 <span className="tiny-tag">SIMULATION ONLY</span></h3>{selected.action.type === 'adjust_ad_budget' ? <div className="budget-preview"><div><span>参考日预算</span><strong>{money(selected.action.baseline_daily_budget)}</strong></div><ArrowRight size={18} /><div><span>模拟新预算</span><strong>{money(selected.action.proposed_daily_budget)}</strong></div></div> : <p>为 {selected.action.sku} 创建成本核查任务预览。</p>}<p className="muted">目标 SKU：{selected.action.sku}。该动作只写入模拟记录，不会调用广告、采购或支付系统。</p></div><div className="detail-columns"><div><h3><TriangleAlert size={16} />风险与假设</h3><ul>{[...selected.body.risks, ...selected.body.assumptions].map(value => <li key={value}>{value}</li>)}</ul></div><div><h3><Database size={16} />待补充信息</h3><ul>{selected.body.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div></div><div className="approval-actions"><div className="approval-title"><ShieldCheck size={18} /><strong>人工审批与模拟执行</strong><span className="tiny-tag">SIMULATION ONLY</span></div>{!isApprover && <p className="muted">当前为经营分析师。请在右上角切换“审批负责人”进行审批与模拟执行。</p>}{selected.status === 'pending_approval' && isApprover && <><label className="reason-label">审批意见<textarea aria-label="审批意见" value={reason} onChange={event => setReason(event.target.value)} rows={2} /></label><div className="action-row"><button className="button danger" onClick={() => decide('reject')} disabled={!!busy || reason.trim().length < 2}><X size={15} />拒绝建议</button><button className="button primary" onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2}><Check size={15} />批准建议</button></div></>}{selected.approval_reason && <p className="decision-note">审批意见：{selected.approval_reason}</p>}{isApprover && ['approved', 'executed', 'execution_failed'].includes(selected.status) && <button className="button primary" onClick={execute} disabled={!!busy}>{busy === 'execute' ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{selected.status === 'approved' ? '模拟执行已批准动作' : '再次请求 · 验证幂等'}</button>}<div className="state-flow">{['pending_approval', 'approved', 'executing', 'executed'].map((value, index) => <span key={value} className={selected.status === value ? 'current' : ''}>{index > 0 && <ArrowRight size={12} />}{statusLabels[value]}</span>)}</div></div>{(selected.execution || execution?.recommendation_id === selected.id) && <ExecutionResult result={execution?.recommendation_id === selected.id ? execution : selected.execution!} />}</section> : <section className="panel"><Empty title="选择一条建议" text="建议会展示统计范围、证据、影响情景与审批状态。" /></section>}</div>}
+          {page === 'approvals' && <div className='grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]'>
+            <Card className='gap-0 self-start overflow-hidden py-0'>
+              <SectionHeading title='经营建议' description={`${pending} 项等待人工复核`} action={<Badge variant='secondary' className='tabular-nums'>{recommendations.length}</Badge>} />
+              {!recommendations.length ? <div className='p-4'><Empty title='还没有待处理建议' text='先启动 Profit Agent，异常分析通过证据核验后会生成建议。' /></div> : recommendations.map(item => <button key={item.id} type='button' className={cn('block w-full border-t px-4 py-4 text-left transition-colors first:border-t-0 hover:bg-muted/50', selected?.id === item.id && 'bg-muted')} onClick={() => { setSelectedId(item.id); setExecution(null); setNotice('') }}>
+                <Status value={item.status} />
+                <strong className='mt-2 block text-sm font-medium leading-snug'>{item.title}</strong>
+                <p className='mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground'>{item.body.recommendation}</p>
+                <small className='mt-2 block text-[11px] text-muted-foreground/70'>{dateTime(item.created_at)}</small>
+              </button>)}
+            </Card>
 
-        {page === 'knowledge' && <div className="knowledge-layout">
-          <section className="panel knowledge-search-panel">
-            <div className="panel-heading"><div><h2><BookOpen size={18} />运营知识库</h2><p>{demo?.knowledge ? `${demo.knowledge.documents} 篇文档 · ${demo.knowledge.embedding_model} · ${demo.knowledge.embedding_provider}` : '离线哈希向量 + 词法混合检索'}</p></div><span className="tiny-tag">RAG</span></div>
-            <form className="knowledge-search" onSubmit={searchKnowledge}>
-              <label>检索问题<input aria-label="知识库检索" value={knowledgeQuery} onChange={event => setKnowledgeQuery(event.target.value)} placeholder="例如：广告预算下调需要谁审批？" /></label>
-              <button className="button primary" type="submit" disabled={!!busy || knowledgeQuery.trim().length < 2}>{busy === 'knowledge-search' ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />}检索知识</button>
-            </form>
-            {knowledgeResults ? <KnowledgeHits knowledge={knowledgeResults} /> : <Empty title="从运营规则里找答案" text="检索结果会返回可引用的 chunk_id；低于阈值的查询明确显示“无可靠答案”。" />}
-          </section>
-          <section className="panel knowledge-documents">
-            <div className="panel-heading"><div><h2>知识文档</h2><p>审批负责人可新增或停用；停用不清理审计历史</p></div><span className="count-circle">{documents.length}</span></div>
-            {!documents.length ? <Empty title="知识库为空" text="以审批负责人身份添加第一篇 SOP。" /> : <div className="knowledge-doc-list">{documents.map(doc => <article key={doc.id}><div><strong>{doc.title}</strong><small>{doc.source} · {doc.version} · {doc.chunk_count} 个片段</small></div>{isApprover && <button className="text-button danger-text" onClick={() => removeKnowledgeDocument(doc.id)} disabled={!!busy}>停用</button>}</article>)}</div>}
-            {isApprover && <form className="knowledge-form" onSubmit={addKnowledgeDocument}>
-              <h3>添加知识文档 <span className="tiny-tag">APPROVER ONLY</span></h3>
-              <div className="knowledge-form-row">
-                <label>标题<input aria-label="知识标题" value={knowledgeDraft.title} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, title: event.target.value })} placeholder="例如：广告预算调整规则" /></label>
-                <label>版本<input aria-label="知识版本" value={knowledgeDraft.version} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, version: event.target.value })} /></label>
+            {selected ? <Card className='gap-0 py-0'>
+              <div className='flex items-start justify-between gap-3 border-b px-5 py-4'>
+                <div className='min-w-0 space-y-1'>
+                  <span className='text-[11px] font-medium tracking-wide text-muted-foreground'>RECOMMENDATION / {selected.id.slice(0, 8)}</span>
+                  <h2 className='text-lg font-semibold tracking-tight'>{selected.title}</h2>
+                </div>
+                <Status value={selected.status} />
               </div>
-              <label>来源<input aria-label="知识来源" value={knowledgeDraft.source} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, source: event.target.value })} /></label>
-              <label>正文<textarea aria-label="知识正文" rows={5} value={knowledgeDraft.content} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, content: event.target.value })} placeholder="# 适用范围&#10;...（支持 Markdown 标题分段）" /></label>
-              <button className="button primary" type="submit" disabled={!!busy || knowledgeDraft.title.trim().length < 2 || knowledgeDraft.content.trim().length < 10}>添加知识文档</button>
-            </form>}
-          </section>
-        </div>}
 
-        {page === 'audit' && <section className="panel audit-panel"><div className="panel-heading"><div><h2>决策与执行轨迹</h2><p>最近 {audits.length} 条事件 · 记录批准、拒绝、模拟、失败与重复请求</p></div><span className="tiny-tag"><Fingerprint size={13} />请求级追踪</span></div><form className="filter-bar audit-filter" onSubmit={event => { event.preventDefault(); setAuditFilter(auditQuery.trim()) }}><div><label>请求 ID<input aria-label="按请求 ID 过滤" placeholder="精确匹配请求 ID" value={auditQuery} onChange={event => setAuditQuery(event.target.value)} /></label><button className="button secondary" type="submit">筛选</button>{auditFilter && <button className="text-button" type="button" onClick={() => { setAuditQuery(''); setAuditFilter('') }}>清除筛选</button>}</div><span>{auditFilter ? `当前筛选：${auditFilter}` : '显示最近 100 条；可按请求 ID 精确追踪'}</span></form>{!audits.length ? <Empty title={auditFilter ? '没有匹配的事件' : '审计日志为空'} text={auditFilter ? `请求 ID ${auditFilter} 没有对应审计事件，请检查后重试。` : '启动一次分析，系统会自动记录后续决策与执行事件。'} /> : <div className="table-wrap"><table><thead><tr><th>时间 / 本地显示</th><th>操作人</th><th>动作</th><th>对象</th><th>结果</th><th>关联请求 ID</th></tr></thead><tbody>{audits.map(item => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><span className="actor-cell">{item.actor === 'demo-approver' ? <ShieldCheck size={14} /> : <Activity size={14} />}{item.actor}</span></td><td><strong>{item.action}</strong><details><summary>事件详情</summary><pre>{JSON.stringify(item.details, null, 2)}</pre></details></td><td><span className="mono" title={item.object_id}>{item.object_id.slice(0, 12)}</span><small>{item.object_type}</small></td><td><span className={`audit-outcome ${item.outcome}`}>{item.outcome === 'success' ? '✓ 成功' : item.outcome === 'replayed' ? '↻ 幂等返回' : item.outcome === 'denied' ? '⊘ 已拦截' : item.outcome === 'degraded' ? '⚠ 已降级' : item.outcome === 'failure' ? '× 失败' : item.outcome}</span></td><td><code className="request-id">{item.request_id}</code></td></tr>)}</tbody></table></div>}</section>}
-        <footer className="page-footer"><span>ProfitOps AI <span className="muted">/</span> 从数据到决策的完整闭环</span><span><ShieldCheck size={12} />所有执行均为模拟 · {demo?.data_range ? '数据已接入' : '等待初始化'}</span></footer>
-      </div>
-    </main>
+              <div className='border-b px-5 py-4'>
+                <h3 className='text-sm font-medium'>问题与建议</h3>
+                <p className='mt-2 text-sm leading-relaxed text-muted-foreground'>{selected.body.problem}</p>
+                <div className='mt-3 flex items-start gap-2 rounded-lg bg-muted/60 p-3 text-sm font-medium'>
+                  <Sparkles className='mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400' />
+                  <strong className='font-medium'>{selected.body.recommendation}</strong>
+                </div>
+              </div>
+
+              <div className='border-b px-5 py-4'>
+                <div className='flex items-center gap-2'><h3 className='text-sm font-medium'>数据证据</h3><Badge variant='outline' className='text-[10px]'>可核对</Badge></div>
+                <p className='mt-1 text-xs text-muted-foreground'>{selected.body.period.start_date} — {selected.body.period.end_date} 对比 {selected.body.previous_period.start_date} — {selected.body.previous_period.end_date} · {selected.body.store_id ?? '全部店铺'} · USD</p>
+                <div className='mt-3 overflow-hidden rounded-lg border'>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>指标 / 数据来源</TableHead><TableHead>上一周期</TableHead><TableHead>当前周期</TableHead><TableHead>利润贡献</TableHead></TableRow></TableHeader>
+                    <TableBody>{selected.body.evidence.map(item => <TableRow key={item.id}>
+                      <TableCell>{item.label}<small className='block text-xs text-muted-foreground'>{item.source}</small></TableCell>
+                      <TableCell className='tabular-nums'>{money(item.previous)}</TableCell>
+                      <TableCell className='tabular-nums'>{money(item.current)}</TableCell>
+                      <TableCell className='tabular-nums'>{signedMoney(item.contribution)}</TableCell>
+                    </TableRow>)}</TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className='border-b px-5 py-4'><KnowledgePanel knowledge={selected.body.knowledge} showCited className='shadow-none' /></div>
+
+              {selected.body.llm && <div className='border-b px-5 py-4'>
+                <div className='flex items-center gap-2'><h3 className='text-sm font-medium'>LLM 根因分析</h3><Badge variant='outline' className='text-[10px]'>{llmStatusLabels[selected.body.llm.status] ?? selected.body.llm.status}</Badge></div>
+                {selected.body.llm.output ? <>
+                  <p className='mt-2 text-sm leading-relaxed text-muted-foreground'>{selected.body.llm.output.summary}</p>
+                  <div className='mt-2 flex flex-wrap gap-1'>{selected.body.llm.output.evidence_references.map(id => <code key={id} className='rounded border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>{id}</code>)}</div>
+                  {(selected.body.llm.output.knowledge_references?.length ?? 0) > 0 && <div className='mt-1.5 flex flex-wrap gap-1'>{selected.body.llm.output.knowledge_references!.map(id => <code key={id} className='rounded border border-emerald-600/30 bg-emerald-600/5 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-400'>{id}</code>)}</div>}
+                  <ul className='mt-3 space-y-2'>{selected.body.llm.output.root_causes.map(cause => <li key={cause.cause} className='border-l-2 pl-3'><strong className='text-sm font-medium'>{cause.cause}</strong><span className='mt-0.5 block text-xs leading-relaxed text-muted-foreground'>{cause.reasoning}</span></li>)}</ul>
+                </> : <p className='mt-2 text-xs text-muted-foreground'>本次建议由确定性规则生成，LLM 未参与（{llmReasonLabels[selected.body.llm.reason ?? ''] ?? selected.body.llm.reason ?? '未调用'}）。</p>}
+              </div>}
+
+              <div className='border-b px-5 py-4'>
+                <div className='rounded-lg border bg-muted/40 p-4'>
+                  <span className='block text-xs text-muted-foreground'>条件性利润改善情景</span>
+                  <strong className='mt-1 block text-2xl font-semibold tracking-tight'>{money(selected.body.expected_impact.profit_improvement_min)} — {money(selected.body.expected_impact.profit_improvement_max)}</strong>
+                  <small className='text-xs text-muted-foreground'>未来 {selected.body.expected_impact.horizon_days} 天 · 非实际收益或保证值</small>
+                  <p className='mt-2 border-t pt-2 text-xs leading-relaxed text-muted-foreground'>{selected.body.expected_impact.explanation}</p>
+                </div>
+              </div>
+
+              <div className='border-b px-5 py-4'>
+                <div className='flex items-center gap-2'><h3 className='text-sm font-medium'>待执行的模拟动作</h3><Badge variant='outline' className='text-[10px]'>SIMULATION ONLY</Badge></div>
+                {selected.action.type === 'adjust_ad_budget' ? <div className='mt-3 flex items-center gap-6 rounded-lg border bg-muted/30 p-4'>
+                  <div><span className='text-xs text-muted-foreground'>参考日预算</span><strong className='mt-1 block text-xl font-semibold tabular-nums'>{money(selected.action.baseline_daily_budget)}</strong></div>
+                  <ArrowRight className='size-4 text-muted-foreground' />
+                  <div><span className='text-xs text-muted-foreground'>模拟新预算</span><strong className='mt-1 block text-xl font-semibold tabular-nums'>{money(selected.action.proposed_daily_budget)}</strong></div>
+                </div> : <p className='mt-2 text-sm text-muted-foreground'>为 {selected.action.sku} 创建成本核查任务预览。</p>}
+                <p className='mt-2 text-xs text-muted-foreground'>目标 SKU：{selected.action.sku}。该动作只写入模拟记录，不会调用广告、采购或支付系统。</p>
+              </div>
+
+              <div className='grid grid-cols-1 gap-6 border-b px-5 py-4 sm:grid-cols-2'>
+                <div><h3 className='flex items-center gap-1.5 text-sm font-medium'><TriangleAlert className='size-3.5' />风险与假设</h3><ul className='mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground'>{[...selected.body.risks, ...selected.body.assumptions].map(value => <li key={value}>{value}</li>)}</ul></div>
+                <div><h3 className='flex items-center gap-1.5 text-sm font-medium'><Database className='size-3.5' />待补充信息</h3><ul className='mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground'>{selected.body.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div>
+              </div>
+
+              <div className='px-5 py-4'>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <ShieldCheck className='size-4' />
+                  <strong className='text-sm font-medium'>人工审批与模拟执行</strong>
+                  <Badge variant='outline' className='text-[10px]'>SIMULATION ONLY</Badge>
+                </div>
+                {!isApprover && <p className='mt-2 text-xs text-muted-foreground'>当前为经营分析师。请在右上角切换“审批负责人”进行审批与模拟执行。</p>}
+                {selected.status === 'pending_approval' && isApprover && <>
+                  <label className='mt-3 flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>审批意见
+                    <Textarea aria-label='审批意见' value={reason} onChange={event => setReason(event.target.value)} rows={2} />
+                  </label>
+                  <div className='mt-3 flex justify-end gap-2'>
+                    <Button variant='destructive' onClick={() => decide('reject')} disabled={!!busy || reason.trim().length < 2}><X className='size-4' />拒绝建议</Button>
+                    <Button onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2}><Check className='size-4' />批准建议</Button>
+                  </div>
+                </>}
+                {selected.approval_reason && <p className='mt-2 text-xs text-muted-foreground'>审批意见：{selected.approval_reason}</p>}
+                {isApprover && ['approved', 'executed', 'execution_failed'].includes(selected.status) && <Button className='mt-3' onClick={execute} disabled={!!busy}>{busy === 'execute' ? <LoaderCircle className='size-4 animate-spin' /> : <Play className='size-4' />}{selected.status === 'approved' ? '模拟执行已批准动作' : '再次请求 · 验证幂等'}</Button>}
+                <div className='mt-4 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground'>{['pending_approval', 'approved', 'executing', 'executed'].map((value, index) => <span key={value} className={cn('flex items-center gap-1.5', selected.status === value && 'font-medium text-foreground')}>{index > 0 && <ArrowRight className='size-3' />}{statusLabels[value]}</span>)}</div>
+              </div>
+
+              {(selected.execution || execution?.recommendation_id === selected.id) && <ExecutionResult result={execution?.recommendation_id === selected.id ? execution : selected.execution!} />}
+            </Card> : <Card className='p-5'><Empty title='选择一条建议' text='建议会展示统计范围、证据、影响情景与审批状态。' /></Card>}
+          </div>}
+
+          {page === 'knowledge' && <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]'>
+            <Card className='gap-0 self-start py-0'>
+              <SectionHeading title='运营知识库' icon={<BookOpen className='size-4' />} description={demo?.knowledge ? `${demo.knowledge.documents} 篇文档 · ${demo.knowledge.embedding_model} · ${demo.knowledge.embedding_provider}` : '离线哈希向量 + 词法混合检索'} action={<Badge variant='outline'>RAG</Badge>} />
+              <CardContent className='px-5 py-4'>
+                <form className='flex flex-col gap-2 sm:flex-row sm:items-end' onSubmit={searchKnowledge}>
+                  <label className='flex flex-1 flex-col gap-1.5 text-xs font-medium text-muted-foreground'>检索问题
+                    <Input aria-label='知识库检索' value={knowledgeQuery} onChange={event => setKnowledgeQuery(event.target.value)} placeholder='例如：广告预算下调需要谁审批？' />
+                  </label>
+                  <Button type='submit' disabled={!!busy || knowledgeQuery.trim().length < 2}>{busy === 'knowledge-search' ? <LoaderCircle className='size-4 animate-spin' /> : <Search className='size-4' />}检索知识</Button>
+                </form>
+                <div className='mt-4'>{knowledgeResults ? <KnowledgeHits knowledge={knowledgeResults} /> : <Empty title='从运营规则里找答案' text='检索结果会返回可引用的 chunk_id；低于阈值的查询明确显示“无可靠答案”。' />}</div>
+              </CardContent>
+            </Card>
+
+            <Card className='gap-0 self-start py-0'>
+              <SectionHeading title='知识文档' description='审批负责人可新增或停用；停用不清理审计历史' action={<Badge variant='secondary' className='tabular-nums'>{documents.length}</Badge>} />
+              <CardContent className='px-5 py-4'>
+                {!documents.length ? <Empty title='知识库为空' text='以审批负责人身份添加第一篇 SOP。' /> : <div className='knowledge-doc-list space-y-2'>{documents.map(doc => <article key={doc.id} className='flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5'>
+                  <div className='min-w-0'><strong className='block truncate text-sm font-medium'>{doc.title}</strong><small className='mt-0.5 block break-all text-xs text-muted-foreground'>{doc.source} · {doc.version} · {doc.chunk_count} 个片段</small></div>
+                  {isApprover && <button type='button' className='shrink-0 text-xs font-medium text-destructive underline-offset-4 hover:underline' onClick={() => removeKnowledgeDocument(doc.id)} disabled={!!busy}>停用</button>}
+                </article>)}</div>}
+                {isApprover && <form className='mt-4 space-y-3 border-t pt-4' onSubmit={addKnowledgeDocument}>
+                  <h3 className='flex items-center gap-2 text-sm font-medium'>添加知识文档<Badge variant='outline' className='text-[10px]'>APPROVER ONLY</Badge></h3>
+                  <div className='grid gap-3 sm:grid-cols-[1fr_100px]'>
+                    <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>标题<Input aria-label='知识标题' value={knowledgeDraft.title} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, title: event.target.value })} placeholder='例如：广告预算调整规则' /></label>
+                    <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>版本<Input aria-label='知识版本' value={knowledgeDraft.version} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, version: event.target.value })} /></label>
+                  </div>
+                  <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>来源<Input aria-label='知识来源' value={knowledgeDraft.source} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, source: event.target.value })} /></label>
+                  <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>正文<Textarea aria-label='知识正文' rows={5} value={knowledgeDraft.content} onChange={event => setKnowledgeDraft({ ...knowledgeDraft, content: event.target.value })} placeholder={'# 适用范围\n...（支持 Markdown 标题分段）'} /></label>
+                  <Button type='submit' disabled={!!busy || knowledgeDraft.title.trim().length < 2 || knowledgeDraft.content.trim().length < 10}>添加知识文档</Button>
+                </form>}
+              </CardContent>
+            </Card>
+          </div>}
+
+          {page === 'audit' && <Card className='gap-0 overflow-hidden py-0'>
+            <SectionHeading title='决策与执行轨迹' description={`最近 ${audits.length} 条事件 · 记录批准、拒绝、模拟、失败与重复请求`} action={<Badge variant='outline' className='gap-1'><Fingerprint className='size-3' />请求级追踪</Badge>} />
+            <form className='flex flex-wrap items-end gap-2 border-b px-5 py-4' onSubmit={event => { event.preventDefault(); setAuditFilter(auditQuery.trim()) }}>
+              <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>请求 ID<Input aria-label='按请求 ID 过滤' placeholder='精确匹配请求 ID' value={auditQuery} onChange={event => setAuditQuery(event.target.value)} /></label>
+              <Button variant='secondary' type='submit'>筛选</Button>
+              {auditFilter && <Button variant='ghost' type='button' onClick={() => { setAuditQuery(''); setAuditFilter('') }}>清除筛选</Button>}
+              <span className='ml-auto text-xs text-muted-foreground'>{auditFilter ? `当前筛选：${auditFilter}` : '显示最近 100 条；可按请求 ID 精确追踪'}</span>
+            </form>
+            {!audits.length ? <div className='p-5'><Empty title={auditFilter ? '没有匹配的事件' : '审计日志为空'} text={auditFilter ? `请求 ID ${auditFilter} 没有对应审计事件，请检查后重试。` : '启动一次分析，系统会自动记录后续决策与执行事件。'} /></div> : <Table>
+              <TableHeader><TableRow><TableHead>时间 / 本地显示</TableHead><TableHead>操作人</TableHead><TableHead>动作</TableHead><TableHead>对象</TableHead><TableHead>结果</TableHead><TableHead>关联请求 ID</TableHead></TableRow></TableHeader>
+              <TableBody>{audits.map(item => <TableRow key={item.id}>
+                <TableCell>{dateTime(item.created_at)}</TableCell>
+                <TableCell><span className='flex items-center gap-1.5'>{item.actor === 'demo-approver' ? <ShieldCheck className='size-3.5' /> : <Activity className='size-3.5' />}{item.actor}</span></TableCell>
+                <TableCell className='whitespace-normal'><strong className='font-medium'>{item.action}</strong><details className='mt-1'><summary className='cursor-pointer text-xs text-muted-foreground'>事件详情</summary><pre className='mt-1 max-h-60 max-w-[360px] overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[11px] leading-relaxed'>{JSON.stringify(item.details, null, 2)}</pre></details></TableCell>
+                <TableCell><span className='block max-w-[140px] break-all font-mono text-[11px] text-muted-foreground' title={item.object_id}>{item.object_id.slice(0, 12)}</span><small className='text-xs text-muted-foreground'>{item.object_type}</small></TableCell>
+                <TableCell><span className={cn('text-xs font-medium', item.outcome === 'success' ? 'text-emerald-600 dark:text-emerald-400' : item.outcome === 'denied' || item.outcome === 'failure' ? 'text-destructive' : 'text-muted-foreground')}>{item.outcome === 'success' ? '✓ 成功' : item.outcome === 'replayed' ? '↻ 幂等返回' : item.outcome === 'denied' ? '⊘ 已拦截' : item.outcome === 'degraded' ? '⚠ 已降级' : item.outcome === 'failure' ? '× 失败' : item.outcome}</span></TableCell>
+                <TableCell><code className='block max-w-[140px] break-all font-mono text-[11px] text-muted-foreground'>{item.request_id}</code></TableCell>
+              </TableRow>)}</TableBody>
+            </Table>}
+          </Card>}
+        </div>
+      </main>
+
+      <footer className='mx-auto flex w-full max-w-[1600px] flex-col gap-2 border-t px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between md:px-6'>
+        <span>ProfitOps AI <span className='text-border'>/</span> 从数据到决策的完整闭环</span>
+        <span className='flex items-center gap-1.5'><ShieldCheck className='size-3' />所有执行均为模拟 · {demo?.data_range ? '数据已接入' : '等待初始化'}</span>
+      </footer>
+    </div>
   </div>
 }
 
 function LLMPanel({ llm, config }: { llm?: LLMRun | null; config?: LLMConfig }) {
   const status = llm?.status
   const output = llm?.output
-  return <section className="panel llm-panel">
-    <div className="panel-heading"><div><h2><Sparkles size={17} />DeepSeek 根因分析</h2><p>{config?.configured ? `真实模型 ${config.model}` : '未配置 API Key · 确定性规则'}</p></div><span className={`llm-badge ${status ?? 'pending'}`}>{status ? llmStatusLabels[status] ?? status : '等待分析'}</span></div>
-    {!llm ? <p className="llm-empty">启动一次异常分析后，这里会显示模型解释、证据引用与经营建议。{config?.configured ? '当前已配置 DeepSeek。' : '当前未配置 LLM，将使用确定性规则。'}</p> : <>
-      <div className="llm-meta">
-        <span>模型<strong>{llm.model}</strong></span>
-        <span>耗时<strong>{llm.latency_ms == null ? '—' : `${llm.latency_ms.toFixed(1)} ms`}</strong></span>
-        {llm.usage && <span>Token<strong>{llm.usage.total_tokens ?? '—'}{llm.usage.prompt_tokens != null && <small>输入 {llm.usage.prompt_tokens} / 输出 {llm.usage.completion_tokens ?? '—'}</small>}</strong></span>}
-        <span>尝试<strong>{llm.attempts}</strong></span>
+  const variant = status === 'llm_success' ? 'success' : status === 'deterministic_fallback' ? 'warning' : status === 'llm_failed' ? 'danger' : 'secondary'
+  return <Card className='gap-0 py-0'>
+    <SectionHeading title='DeepSeek 根因分析' icon={<Sparkles className='size-4' />} description={config?.configured ? `真实模型 ${config.model}` : '未配置 API Key · 确定性规则'} action={<Badge variant={variant}>{status ? llmStatusLabels[status] ?? status : '等待分析'}</Badge>} />
+    {!llm ? <p className='px-5 py-4 text-sm leading-relaxed text-muted-foreground'>启动一次异常分析后，这里会显示模型解释、证据引用与经营建议。{config?.configured ? '当前已配置 DeepSeek。' : '当前未配置 LLM，将使用确定性规则。'}</p> : <>
+      <div className='grid grid-cols-2 gap-3 px-5 py-4 sm:grid-cols-4'>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>模型<strong className='break-words text-sm font-medium text-foreground'>{llm.model}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>耗时<strong className='text-sm font-medium text-foreground'>{llm.latency_ms == null ? '—' : `${llm.latency_ms.toFixed(1)} ms`}</strong></span>
+        {llm.usage && <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>Token<strong className='text-sm font-medium text-foreground'>{llm.usage.total_tokens ?? '—'}<small className='block text-[11px] font-normal text-muted-foreground'>输入 {llm.usage.prompt_tokens} / 输出 {llm.usage.completion_tokens ?? '—'}</small></strong></span>}
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>尝试<strong className='text-sm font-medium text-foreground'>{llm.attempts}</strong></span>
       </div>
       {output ? <>
-        <div className="llm-summary"><span className="small-label">LLM SUMMARY</span><p>{output.summary}</p><span className="llm-confidence">置信度 {(output.confidence * 100).toFixed(0)}%</span></div>
-        <div className="llm-section"><h3>根因分析</h3>{output.root_causes.map(cause => <div className="llm-cause" key={cause.cause}><strong>{cause.cause}</strong><p>{cause.reasoning}</p><div className="llm-refs">{cause.evidence_ids.map(id => <code key={id}>{id}</code>)}</div></div>)}</div>
-        <div className="llm-section"><h3>经营建议</h3>{output.recommendations.map(item => <div className="llm-recommendation" key={item.action}><div><strong>{item.action}</strong><span className={`llm-priority ${item.priority}`}>{item.priority}</span></div><p>{item.rationale}</p><div className="llm-refs">{item.evidence_ids.map(id => <code key={id}>{id}</code>)}</div></div>)}</div>
-        <div className="llm-section"><h3>预期影响</h3><p>{output.expected_impact.explanation}</p><span className="muted">{output.expected_impact.horizon_days} 天 · 条件情景，不是收益承诺</span></div>
-        {(output.risks.length > 0 || output.missing_information.length > 0) && <div className="llm-section"><h3>风险与待补充</h3><ul className="llm-notes">{output.risks.map(value => <li key={value}>{value}</li>)}{output.missing_information.map(value => <li key={value}>{value}</li>)}</ul></div>}
-        <div className="llm-section"><h3>证据引用</h3><div className="llm-refs">{output.evidence_references.map(id => <code key={id}>{id}</code>)}</div></div>
-        {(output.knowledge_references?.length ?? 0) > 0 && <div className="llm-section"><h3>知识引用</h3><div className="llm-refs knowledge-refs">{output.knowledge_references!.map(id => <code key={id}>{id}</code>)}</div></div>}
-      </> : <div className="llm-fallback"><p><strong>{status ? llmStatusLabels[status] ?? status : 'LLM 未参与'}</strong>{llm.reason ? `：${llmReasonLabels[llm.reason] ?? llm.reason}` : ''}</p>{llm.error && <p className="muted">错误码 {llm.error.code} · {llm.error.message}</p>}<p className="muted">{status === 'not_requested' ? '本次分析未调用 LLM；展示的是确定性计算结果。' : '本次结论、证据与建议由确定性规则引擎生成，不是 LLM 输出。'}</p></div>}
+        <div className='relative mx-5 rounded-lg bg-muted/60 p-4'>
+          <span className='text-[11px] font-medium tracking-wide text-muted-foreground'>LLM SUMMARY</span>
+          <p className='mt-1.5 pr-20 text-sm leading-relaxed'>{output.summary}</p>
+          <Badge variant='outline' className='absolute top-3 right-3 bg-background'>置信度 {(output.confidence * 100).toFixed(0)}%</Badge>
+        </div>
+        <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>根因分析</h3>
+          <div className='mt-2 space-y-2'>{output.root_causes.map(cause => <div className='rounded-lg border p-3' key={cause.cause}>
+            <strong className='text-sm font-medium'>{cause.cause}</strong>
+            <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>{cause.reasoning}</p>
+            <div className='mt-2 flex flex-wrap gap-1'>{cause.evidence_ids.map(id => <code key={id} className='rounded border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>{id}</code>)}</div>
+          </div>)}</div>
+        </div>
+        <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>经营建议</h3>
+          <div className='mt-2 space-y-2'>{output.recommendations.map(item => <div className='rounded-lg border p-3' key={item.action}>
+            <div className='flex items-start justify-between gap-2'>
+              <strong className='text-sm font-medium leading-snug'>{item.action}</strong>
+              <Badge variant={item.priority === 'high' ? 'danger' : item.priority === 'medium' ? 'warning' : 'secondary'} className='text-[10px] uppercase'>{item.priority}</Badge>
+            </div>
+            <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>{item.rationale}</p>
+            <div className='mt-2 flex flex-wrap gap-1'>{item.evidence_ids.map(id => <code key={id} className='rounded border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>{id}</code>)}</div>
+          </div>)}</div>
+        </div>
+        <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>预期影响</h3>
+          <p className='mt-1 text-sm leading-relaxed text-muted-foreground'>{output.expected_impact.explanation}</p>
+          <span className='mt-1 block text-xs text-muted-foreground/80'>{output.expected_impact.horizon_days} 天 · 条件情景，不是收益承诺</span>
+        </div>
+        {(output.risks.length > 0 || output.missing_information.length > 0) && <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>风险与待补充</h3>
+          <ul className='mt-1 list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground'>{output.risks.map(value => <li key={value}>{value}</li>)}{output.missing_information.map(value => <li key={value}>{value}</li>)}</ul>
+        </div>}
+        <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>证据引用</h3>
+          <div className='mt-1.5 flex flex-wrap gap-1'>{output.evidence_references.map(id => <code key={id} className='rounded border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>{id}</code>)}</div>
+        </div>
+        {(output.knowledge_references?.length ?? 0) > 0 && <div className='border-t px-5 py-4'>
+          <h3 className='text-xs font-medium text-muted-foreground'>知识引用</h3>
+          <div className='mt-1.5 flex flex-wrap gap-1'>{output.knowledge_references!.map(id => <code key={id} className='rounded border border-emerald-600/30 bg-emerald-600/5 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-400'>{id}</code>)}</div>
+        </div>}
+      </> : <div className='border-t px-5 py-4 text-sm text-muted-foreground'>
+        <p><strong className='font-medium text-foreground'>{status ? llmStatusLabels[status] ?? status : 'LLM 未参与'}</strong>{llm.reason ? `：${llmReasonLabels[llm.reason] ?? llm.reason}` : ''}</p>
+        {llm.error && <p className='mt-1 text-xs'>错误码 {llm.error.code} · {llm.error.message}</p>}
+        <p className='mt-1 text-xs'>{status === 'not_requested' ? '本次分析未调用 LLM；展示的是确定性计算结果。' : '本次结论、证据与建议由确定性规则引擎生成，不是 LLM 输出。'}</p>
+      </div>}
     </>}
-  </section>
+  </Card>
 }
 
 function bounded(value: string, limit: number): string {
@@ -436,64 +904,90 @@ function AgentTrace({ llm }: { llm?: LLMRun | null }) {
   const rounds = llm.rounds ?? []
   const calls = llm.tool_calls ?? []
   const native = llm.native_tools === true
-  return <section className="panel trace-panel" aria-label="Agent 执行轨迹">
-    <div className="panel-heading"><div><h2><Activity size={17} />Agent 执行轨迹</h2><p>{native ? '原生 Function Calling · 只读工具循环' : '本次未使用原生工具循环'}</p></div><span className={`llm-badge trace-status ${llm.status}`}>{llmStatusLabels[llm.status] ?? llm.status}</span></div>
-    {!native ? <p className="trace-empty">{llm.status === 'not_requested' ? '本次分析未触发 LLM，因此没有模型轮次或工具调用。' : '本次分析走单次 JSON 路径，未产生原生工具轮次。'}</p> : <>
-      <div className="trace-meta">
-        <span>模型<strong>{llm.model}</strong></span>
-        <span>轮次<strong>{rounds.length}</strong></span>
-        <span>工具调用<strong>{calls.length}</strong></span>
-        <span>总 Token<strong>{llm.usage?.total_tokens ?? '—'}</strong></span>
-        <span>总耗时<strong>{llm.latency_ms == null ? '—' : `${llm.latency_ms.toFixed(1)} ms`}</strong></span>
-        <span>终止原因<strong>{terminationLabels[llm.termination_reason ?? ''] ?? llm.termination_reason ?? '—'}</strong></span>
+  const variant = llm.status === 'llm_success' ? 'success' : llm.status === 'deterministic_fallback' ? 'warning' : llm.status === 'llm_failed' ? 'danger' : 'secondary'
+  return <Card role='region' aria-label='Agent 执行轨迹' className='gap-0 py-0'>
+    <SectionHeading title='Agent 执行轨迹' icon={<Activity className='size-4' />} description={native ? '原生 Function Calling · 只读工具循环' : '本次未使用原生工具循环'} action={<Badge variant={variant}>{llmStatusLabels[llm.status] ?? llm.status}</Badge>} />
+    {!native ? <p className='px-5 py-4 text-sm text-muted-foreground'>{llm.status === 'not_requested' ? '本次分析未触发 LLM，因此没有模型轮次或工具调用。' : '本次分析走单次 JSON 路径，未产生原生工具轮次。'}</p> : <>
+      <div className='grid grid-cols-2 gap-3 border-b px-5 py-4 sm:grid-cols-3 xl:grid-cols-6'>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>模型<strong className='break-words text-sm font-medium text-foreground'>{llm.model}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>轮次<strong className='text-sm font-medium text-foreground'>{rounds.length}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>工具调用<strong className='text-sm font-medium text-foreground'>{calls.length}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>总 Token<strong className='text-sm font-medium text-foreground'>{llm.usage?.total_tokens ?? '—'}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>总耗时<strong className='text-sm font-medium text-foreground'>{llm.latency_ms == null ? '—' : `${llm.latency_ms.toFixed(1)} ms`}</strong></span>
+        <span className='flex flex-col gap-0.5 text-xs text-muted-foreground'>终止原因<strong className='text-sm font-medium text-foreground'>{terminationLabels[llm.termination_reason ?? ''] ?? llm.termination_reason ?? '—'}</strong></span>
       </div>
-      {!rounds.length ? <p className="trace-empty">没有可展示的模型轮次。</p> : <ol className="trace-rounds">
+      {!rounds.length ? <p className='px-5 py-4 text-sm text-muted-foreground'>没有可展示的模型轮次。</p> : <ol className='space-y-3 px-5 py-4'>
         {rounds.map(round => {
           const roundCalls = calls.filter(call => call.round === round.round)
-          return <li className="trace-round" key={round.round}>
-            <div className="trace-round-head">
-              <span className="trace-round-no">ROUND {round.round}</span>
-              <span className="trace-finish">{round.finish_reason ?? '—'}</span>
+          return <li className='overflow-hidden rounded-lg border bg-muted/30' key={round.round}>
+            <div className='flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs text-muted-foreground'>
+              <span className='font-semibold tracking-wide text-foreground'>ROUND {round.round}</span>
+              <span className='rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]'>{round.finish_reason ?? '—'}</span>
               <span>{round.tool_call_count} 次工具</span>
               <span>{round.latency_ms.toFixed(1)} ms</span>
               <span>{round.usage?.total_tokens == null ? 'Token —' : `${round.usage.total_tokens} tokens`}</span>
             </div>
-            {roundCalls.length ? <div className="trace-calls">{roundCalls.map(call => <div className={`trace-call ${call.ok ? 'ok' : 'failed'}`} key={call.tool_call_id}>
-              <div className="trace-call-head"><code>{call.name}</code><span className={`trace-outcome ${call.ok ? 'ok' : 'failed'}`}>{call.ok ? '✓ 成功' : '× 失败'}</span><span>{call.latency_ms.toFixed(1)} ms</span></div>
-              <p className="trace-args"><span>参数</span>{toolArgumentSummary(call.arguments)}</p>
-              <p className="trace-result"><span>结果</span>{bounded(call.result_summary, 160)}</p>
-              {!call.ok && <p className="trace-error">错误码：{call.error_code ?? '未记录'}</p>}
-            </div>)}</div> : <p className="trace-no-call">本轮无工具调用</p>}
+            {roundCalls.length ? <div className='space-y-2 p-2.5'>{roundCalls.map(call => <div className={cn('rounded-md border-l-2 bg-background p-2.5', call.ok ? 'border-l-muted-foreground/30' : 'border-l-destructive bg-destructive/5')} key={call.tool_call_id}>
+              <div className='flex flex-wrap items-center gap-2'>
+                <code className='rounded border bg-muted px-1.5 py-0.5 text-[11px]'>{call.name}</code>
+                <span className={cn('text-[11px] font-medium', call.ok ? 'text-emerald-600 dark:text-emerald-400' : 'font-semibold text-destructive')}>{call.ok ? '✓ 成功' : '× 失败'}</span>
+                <span className='text-[11px] text-muted-foreground'>{call.latency_ms.toFixed(1)} ms</span>
+              </div>
+              <p className='mt-1.5 flex gap-2 text-xs text-muted-foreground'><span className='shrink-0 text-[11px]'>参数</span><span className='break-words'>{toolArgumentSummary(call.arguments)}</span></p>
+              <p className='mt-1 flex gap-2 text-xs text-muted-foreground'><span className='shrink-0 text-[11px]'>结果</span><span className='break-words'>{bounded(call.result_summary, 160)}</span></p>
+              {!call.ok && <p className='mt-1 text-xs text-destructive'>错误码：{call.error_code ?? '未记录'}</p>}
+            </div>)}</div> : <p className='px-3 py-2 text-xs text-muted-foreground'>本轮无工具调用</p>}
           </li>
         })}
       </ol>}
-      {llm.error && <p className="trace-error">本次运行错误：{llm.error.code} · {bounded(llm.error.message, 180)}</p>}
+      {llm.error && <p className='border-t px-5 py-3 text-xs text-destructive'>本次运行错误：{llm.error.code} · {bounded(llm.error.message, 180)}</p>}
     </>}
-  </section>
+  </Card>
 }
 
 function KnowledgeHits({ knowledge, showCited = false }: { knowledge: KnowledgeSearch | KnowledgeContext; showCited?: boolean }) {
-  if (knowledge.no_answer) return <div className="knowledge-no-answer"><TriangleAlert size={18} /><div><strong>无可靠答案</strong><p>没有片段达到相似度阈值；系统没有把低相关结果交给模型引用。</p></div></div>
-  return <div className="knowledge-hits">{knowledge.hits.map(hit => {
+  if (knowledge.no_answer) return <div className='flex gap-3 rounded-lg border border-amber-200 bg-amber-50/60 p-4 text-sm dark:border-amber-900/50 dark:bg-amber-950/20'><TriangleAlert className='mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400' /><div><strong className='font-medium'>无可靠答案</strong><p className='mt-0.5 text-xs leading-relaxed text-muted-foreground'>没有片段达到相似度阈值；系统没有把低相关结果交给模型引用。</p></div></div>
+  return <div className='space-y-2'>{knowledge.hits.map(hit => {
     const cited = 'cited' in hit && hit.cited
-    return <article className="knowledge-hit" key={hit.chunk_id}>
-      <div className="knowledge-hit-head"><strong>{hit.title}</strong>{showCited && <span className={`citation-badge ${cited ? 'cited' : ''}`}>{cited ? '✓ LLM 已引用' : '仅检索参考'}</span>}<span className="knowledge-score">{hit.score.toFixed(3)}</span></div>
-      <div className="knowledge-hit-meta"><span>{hit.source}</span><span>{hit.version}</span>{hit.heading && <span>{hit.heading}</span>}</div>
-      <p>{bounded(hit.content, 360)}</p>
-      <code>{hit.chunk_id}</code>
+    return <article className='rounded-lg border bg-muted/30 p-4' key={hit.chunk_id}>
+      <div className='flex flex-wrap items-center gap-2'>
+        <strong className='text-sm font-medium'>{hit.title}</strong>
+        {showCited && <Badge variant={cited ? 'success' : 'outline'} className='text-[10px]'>{cited ? '✓ LLM 已引用' : '仅检索参考'}</Badge>}
+        <span className='ml-auto text-xs tabular-nums text-muted-foreground'>{hit.score.toFixed(3)}</span>
+      </div>
+      <div className='mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground'><span>{hit.source}</span><span>{hit.version}</span>{hit.heading && <span>{hit.heading}</span>}</div>
+      <p className='mt-2 text-sm leading-relaxed text-muted-foreground'>{bounded(hit.content, 360)}</p>
+      <code className='mt-1 block break-all text-[11px] text-muted-foreground/80'>{hit.chunk_id}</code>
     </article>
   })}</div>
 }
 
-function KnowledgePanel({ knowledge, showCited = false }: { knowledge?: KnowledgeSearch | KnowledgeContext | null; showCited?: boolean }) {
+function KnowledgePanel({ knowledge, showCited = false, className }: { knowledge?: KnowledgeSearch | KnowledgeContext | null; showCited?: boolean; className?: string }) {
   if (!knowledge) return null
-  return <section className="panel knowledge-panel">
-    <div className="panel-heading"><div><h2><BookOpen size={17} />知识库参考</h2><p>{knowledge.no_answer ? '未找到可靠匹配' : `${knowledge.hits.length} 个片段 · ${knowledge.embedding_model} · ${knowledge.retrieval_ms.toFixed(1)} ms`}</p></div><span className={`llm-badge ${knowledge.no_answer ? 'deterministic_fallback' : 'llm_success'}`}>{knowledge.no_answer ? '无可靠答案' : '已检索'}</span></div>
-    <KnowledgeHits knowledge={knowledge} showCited={showCited} />
-    <p className="muted knowledge-note">知识片段作为不可信数据传给模型；只有本次检索结果中的 chunk_id 才能通过引用校验。</p>
-  </section>
+  return <Card className={cn('gap-0 py-0', className)}>
+    <SectionHeading title='知识库参考' icon={<BookOpen className='size-4' />} description={knowledge.no_answer ? '未找到可靠匹配' : `${knowledge.hits.length} 个片段 · ${knowledge.embedding_model} · ${knowledge.retrieval_ms.toFixed(1)} ms`} action={<Badge variant={knowledge.no_answer ? 'warning' : 'success'}>{knowledge.no_answer ? '无可靠答案' : '已检索'}</Badge>} />
+    <div className='px-5 py-4'><KnowledgeHits knowledge={knowledge} showCited={showCited} /></div>
+    <p className='border-t px-5 py-3 text-xs leading-relaxed text-muted-foreground'>知识片段作为不可信数据传给模型；只有本次检索结果中的 chunk_id 才能通过引用校验。</p>
+  </Card>
 }
 
 function ExecutionResult({ result }: { result: Execution }) {
-  return <div className={`execution-result ${result.status === 'execution_failed' ? 'failure' : ''}`}><div><CheckCircle2 size={20} /><h3>{result.status === 'execution_failed' ? '模拟执行失败' : '模拟执行结果'}<span className="tiny-tag">SIMULATION</span></h3></div><p>{result.error?.message ?? result.result?.message}</p>{result.result?.before && <div className="budget-preview"><div><span>参考日预算</span><strong>{money(result.result.before.daily_budget)}</strong></div><ArrowRight size={18} /><div><span>模拟新预算</span><strong>{money(result.result.after!.daily_budget)}</strong></div></div>}<p className="mono">执行 ID：{result.execution_id}</p><div className="result-foot"><span><Check size={13} />外部调用 {result.result?.external_calls ?? 0} 次</span><span><Fingerprint size={13} />{result.replayed ? '命中幂等，复用原执行记录' : '唯一执行记录已保存'}</span></div></div>
+  const failed = result.status === 'execution_failed'
+  return <div className={cn('m-5 rounded-lg border p-4', failed ? 'border-destructive/30 bg-destructive/5' : 'border-emerald-600/20 bg-emerald-600/5')}>
+    <div className='flex items-center gap-2'>
+      <CheckCircle2 className={cn('size-5', failed ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400')} />
+      <h3 className='flex items-center gap-2 text-sm font-medium'>{failed ? '模拟执行失败' : '模拟执行结果'}<Badge variant='outline' className='text-[10px]'>SIMULATION</Badge></h3>
+    </div>
+    <p className='mt-2 text-sm text-muted-foreground'>{result.error?.message ?? result.result?.message}</p>
+    {result.result?.before && <div className='mt-3 flex items-center gap-6 rounded-lg border bg-background/60 p-3'>
+      <div><span className='text-xs text-muted-foreground'>参考日预算</span><strong className='mt-0.5 block text-xl font-semibold tabular-nums'>{money(result.result.before.daily_budget)}</strong></div>
+      <ArrowRight className='size-4 text-muted-foreground' />
+      <div><span className='text-xs text-muted-foreground'>模拟新预算</span><strong className='mt-0.5 block text-xl font-semibold tabular-nums'>{money(result.result.after!.daily_budget)}</strong></div>
+    </div>}
+    <p className='mt-2 font-mono text-[11px] text-muted-foreground'>执行 ID：{result.execution_id}</p>
+    <div className='mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground'>
+      <span className='flex items-center gap-1'><Check className='size-3' />外部调用 {result.result?.external_calls ?? 0} 次</span>
+      <span className='flex items-center gap-1'><Fingerprint className='size-3' />{result.replayed ? '命中幂等，复用原执行记录' : '唯一执行记录已保存'}</span>
+    </div>
+  </div>
 }
