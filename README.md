@@ -1,8 +1,10 @@
 # ProfitOps AI
 
-**跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从真实经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
+**跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 
 LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、BM25 + 向量混合检索（RRF）、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。另提供只读 **MCP Server**，通过 stdio 暴露利润分析、SKU 明细、RAG 检索和审批状态查询，不暴露审批/执行写工具。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
+
+> **数据边界**：仓库内的经营账本、知识库和评测案例均为合成数据，用于验证软件行为与契约，不代表真实商户经营效果；真实发生的是测试、浏览器/API 执行，以及可选的 DeepSeek/embedding 调用。完整清单见 [docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md)。
 
 ![经营总览](docs/screenshots/overview.png)
 
@@ -230,7 +232,7 @@ Windows 11 SSH 部署、首次初始化/迁移、备份恢复、故障排查、�
 
 ### 端到端演示验证（2026-11-07）
 
-在独立端口（后端 8020 / 前端 5190）、临时 SQLite 库、`LLM_PROVIDER=disabled`、`hashing` embedding 下实际执行了总览、Agent 分析、越权拦截、审批、模拟执行、幂等、知识命中/拒答与审计链路（拒绝分支本轮未覆盖）：浏览器操作与 API 断言共 29 项全部通过，无浏览器 console/page error。演示未触碰默认 8010/5180 的本地数据，没有调用付费模型，也没有任何真实外部副作用。原始证据（29 项检查、请求 ID、执行 ID 与响应字段）见 [evidence.json](docs/screenshots/demo-20261107/evidence.json)。
+在独立端口（后端 8020 / 前端 5190）、临时 SQLite 库、`LLM_PROVIDER=disabled`、`hashing` embedding 下实际执行了总览、Agent 分析、越权拦截、审批、模拟执行、幂等、知识命中/拒答与审计链路（拒绝分支本轮未覆盖）：浏览器操作与 API 断言共 29 项全部通过，无浏览器 console/page error。演示未触碰默认 8010/5180 的本地数据，没有调用付费模型，也没有任何真实外部副作用。账本来自 `backend/app/seed.py` 的确定性合成种子（2 店铺 × 3 SKU × 60 天，1,920 条订单），知识库为 6 篇合成 SOP；29 项检查验证的是软件行为与契约，不是真实经营效果。原始证据（29 项检查、请求 ID、执行 ID 与响应字段）见 [evidence.json](docs/screenshots/demo-20261107/evidence.json)。
 
 | 环节 | 实测结果 |
 |---|---|
@@ -376,6 +378,7 @@ TASKS.md             交付与后续任务
 
 ## 交付与验收材料
 
+- [docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md)：合成数据清单、真实执行范围，以及能支撑/不能支撑的结论。
 - [docs/COLLABORATION.md](docs/COLLABORATION.md)：开发方式、AI 协作边界，以及哪些判断由本人负责。
 - [docs/HANDOFF.md](docs/HANDOFF.md)：交付报告、实际验证结果、未完成项与下一步顺序。
 - [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)：云端单机 Compose、初始化/迁移、备份恢复、故障排查与访问控制。
