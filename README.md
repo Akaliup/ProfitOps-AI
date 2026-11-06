@@ -228,6 +228,44 @@ Windows 11 SSH 部署、首次初始化/迁移、备份恢复、故障排查、�
 
 这是演示身份机制，**不是生产级认证**。
 
+### 端到端演示验证（2026-11-07）
+
+在独立端口（后端 8020 / 前端 5190）、临时 SQLite 库、`LLM_PROVIDER=disabled`、`hashing` embedding 下实际执行了总览、Agent 分析、越权拦截、审批、模拟执行、幂等、知识命中/拒答与审计链路（拒绝分支本轮未覆盖）：浏览器操作与 API 断言共 29 项全部通过，无浏览器 console/page error。演示未触碰默认 8010/5180 的本地数据，没有调用付费模型，也没有任何真实外部副作用。原始证据（29 项检查、请求 ID、执行 ID 与响应字段）见 [evidence.json](docs/screenshots/demo-20261107/evidence.json)。
+
+| 环节 | 实测结果 |
+|---|---|
+| 经营总览 | 销售额 `US$45,600.00`（4,560,000 美分）、净利润 `-US$5,703.00`；异常标记与利润桥守恒均为 true |
+| Agent 工作流 | 10 个 LangGraph 步骤全部 completed，状态 `waiting_approval`；LLM 未配置时降级为确定性规则且状态可见 |
+| 建议与证据 | 8 项证据均带 `evidence.id` 与 `source`；知识库检索命中 5 个可引用片段 |
+| 越权拦截 | 分析师界面无「批准建议」按钮；用分析师 token 伪造 `X-Role: approver` 调用 API 返回 `403` |
+| 审批与执行 | 审批负责人批准后模拟执行：`simulation=true`、`external_calls=0`，日预算 `US$255.50 → US$217.17`（25,550 → 21,717 美分） |
+| 执行幂等 | 再次请求返回同一 `execution_id`，页面提示「重复请求已命中原执行记录」 |
+| 知识检索 | 「广告预算下调审批」命中 5 个片段、`no_answer=false`；「如何预订会议室午餐」`no_answer=true` |
+| 审计链路 | 按 `request_id` 过滤得到 `analysis.requested` 等事件；全量审计同时包含 `recommendation.approve`、`execution.executed`、`execution.replayed` |
+
+| 经营总览 | Agent 工作流 |
+|---|---|
+| ![经营总览](docs/screenshots/demo-20261107/01-overview.png) | ![Agent 工作流](docs/screenshots/demo-20261107/02-agent-workflow.png) |
+
+| 待审批建议 | 模拟执行 |
+|---|---|
+| ![待审批建议](docs/screenshots/demo-20261107/03-approval-pending.png) | ![模拟执行](docs/screenshots/demo-20261107/04-execution.png) |
+
+<details>
+<summary>展开其余 4 张截图</summary>
+
+| 幂等回放 | 知识命中 |
+|---|---|
+| ![幂等回放](docs/screenshots/demo-20261107/05-idempotent.png) | ![知识命中](docs/screenshots/demo-20261107/06-knowledge-hit.png) |
+
+| 知识拒答 | 审计过滤 |
+|---|---|
+| ![知识拒答](docs/screenshots/demo-20261107/07-knowledge-no-answer.png) | ![审计过滤](docs/screenshots/demo-20261107/08-audit-filtered.png) |
+
+</details>
+
+> 离线 `hashing` 的拒答阈值使用 `KNOWLEDGE_MIN_SCORE=0.15`（本次演示显式设置）。如果本地 `.env` 是按 BGE-M3 校准的（例如 `0.42`），切回 `hashing` 时必须同步下调，否则知识检索会全部拒答。
+
 ## 核心业务口径
 
 金额以 USD 整数美分存储和传输，避免浮点误差。
@@ -301,6 +339,8 @@ npm --prefix frontend run build
 ```
 
 当前实测结果（2026-11-03，RAG 分支）：后端 277 通过、6 跳过（跳过项均为未设置 `PROFITOPS_TEST_POSTGRES_URL` 的 PostgreSQL 测试）、新增 BM25/融合测试 5 通过、RAG 离线评测（weighted 与 hybrid_rrf）退出码 0、BGE-M3 与 qwen3-embedding 真实检索评测退出码 0、前端生产构建通过；前端单测本轮未重跑（上一轮 17 通过），MCP 专项 9 通过、MCP stdio 检查、HTTP 冒烟 15/15 与云端单机 Compose 十项验收均为既有结果，本轮未重新执行。详见 [docs/TEST_REPORT.md](docs/TEST_REPORT.md)。以下为历史阶段记录：后端 204 通过、4 跳过、前端 15 通过；离线 LLM 回放评测 4/4 通过、网络调用 0 次；RAG 离线评测 hit@3 100%、no-answer 100%、citation validity 100%，网络调用 0 次；HTTP 冒烟 15/15 通过，`/metrics` 实际返回 HTTP、任务、工具和队列指标。Phase 2D 原生 Tool Calling 离线评测 37 次运行：正常 3/3、负向对照 34/34、安全门禁 37/37，真实网络调用 0 次。Phase 2C 历史 HTTP 冒烟 11/11 通过，历史阶段 Docker Compose 下后端直连与 nginx 代理各 11/11、Chromium 真实浏览器 E2E 2 通过。Phase 2C 原生 Function Calling 另执行 3 次真实脚本运行：第 1 次第 2 轮网络错误降级，第 3 次完整成功（`native_tools=true`、`final_answer`、20482.961 ms、10706 tokens、2 个只读工具调用、`all_references_valid=true`）。历史 Phase 2A/2B 真实调用 22 次，均为单次 JSON 路径；`max_tokens=4000` 的三次重复 9/9 `llm_success`、9/9 `finish_reason=stop`，当前评分器重评后广告、履约、退款均 3/3；此前 `max_tokens=3000` 的三次重复重评后为 6/9，3 次截断。Phase 2D 未执行真实 `native --real` 调用。详见 [docs/EVALUATION.md](docs/EVALUATION.md) 和 [docs/LLM_LIVE_CHECK.md](docs/LLM_LIVE_CHECK.md)。
+
+2026-11-07 在 UI 改版与端到端演示中实际执行：前端单测 17 通过、生产构建通过、Playwright e2e 7 通过、HTTP 冒烟 15/15、端到端演示 29/29（8 张截图，见上文）；后端 pytest 本轮未重跑。
 
 ## 项目结构
 
