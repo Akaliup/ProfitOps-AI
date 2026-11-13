@@ -1,5 +1,9 @@
 # ProfitOps AI
 
+## Multi-store weekly intelligence
+
+The data import center now accepts tenant-scoped orders, campaign ads and inventory snapshot CSVs with preview, field mapping, atomic batch history and source-row traceability. Weekly Intelligence reuses the existing deterministic profit bridge, calculates separate store/SKU inventory risks and can request an evidence-checked LLM explanation. Missing feed coverage or model configuration is shown explicitly. Start locally with `python scripts/dev.py`; the web app runs at <http://127.0.0.1:5180> and API docs at <http://127.0.0.1:8010/docs>. CSV examples, migration, API and demo instructions: [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md). Follow-up chat and external platform writes are outside this phase.
+
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 
 LangGraph + 确定性规则引擎，可选接入 **DeepSeek V4.1 Flash** 做根因解释与策略生成；没有 API Key 时自动降级为确定性规则，绝不把规则结果伪装成 LLM 输出。内置可离线运行的 **RAG 运营知识库**：Markdown 切分、BM25 + 向量混合检索（RRF）、`no_answer` 拒答、chunk 引用校验，以及可复现的检索评测。原生 Function Calling 的每一轮、每个工具调用、参数摘要、成功/失败、耗时与 token 都在工作台可见。另提供只读 **MCP Server**，通过 stdio 暴露利润分析、SKU 明细、RAG 检索和审批状态查询，不暴露审批/执行写工具。所有执行都明确标记 `simulation=true`，不调用真实广告、采购或付款系统。
@@ -102,6 +106,25 @@ DeepSeek Harness 里的 API 配置**不会**自动传给 FastAPI 后端，必须
 
 切换 embedding 模型后，旧库可用 `scripts/reindex_knowledge.py` 就地重嵌入：先 `--dry-run` 预览，运行前备份数据库；它保留文档/chunk ID、标题和审计记录，只替换向量与 `embedding_model`。
 
+### 经营数据导入与对账（CSV）
+
+工作台新增 **数据导入** 页面：拖入订单或每日经营 CSV，先看逐行校验结果与金额合计，再由审批负责人确认写入。服务端不信任前端校验，提交时会重新解析同一份文件。
+
+- **金额精确**：十进制字符串经 `Decimal` 转整数美分，拒绝浮点、科学计数法与超过两位小数。
+- **整批原子**：任一行有问题整批不写，返回 409 和行号、字段、原因。
+- **幂等重复**：同一文件重复上传只跳过，不产生第二份记录；字段被改动则按冲突拒绝，不静默覆盖。
+- **写后对账**：flush 后按主键分批回读 `count` 与 `sum`，与文件合计逐项比较，不一致立即回滚。
+- **权限与审计**：analyst 可预览，approver 可提交；记录 `import.committed` / `import.rejected`。
+
+```bash
+TOKEN=demo-approver
+curl -X POST http://127.0.0.1:8010/api/imports/orders/preview \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/csv" \
+  -H "X-Filename: orders-2026-11.csv" --data-binary @data/orders.csv
+```
+
+模板可下载：`GET /api/imports/template/orders` 与 `/api/imports/template/operations`。完整列定义、自然键与对账规则见 [docs/CONTRACT.md](docs/CONTRACT.md)。
+
 ### MCP Server（只读，stdio）
 
 `backend/app/mcp_server.py` 通过 stdio 暴露同一套 Tool Registry 的四个只读工具：`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge` 和 `get_approval_status`。RAG 检索与 HTTP/LangGraph 使用同一套知识库和 `chunk_id`；建议写入、审批和模拟执行不会暴露给 MCP 客户端。角色由 `PROFITOPS_MCP_ROLE` 在服务端决定，默认 `analyst`。
@@ -158,20 +181,29 @@ MCP 进程不建表、不 Seed，使用前需先初始化数据库；默认 hash
 ### RAG 检索评测（默认离线）
 
 ```bash
-# 默认：hashing，一次跑完 weighted（旧）与 hybrid_rrf（新）两种排序
+# 默认：hashing，分别运行校准集与冻结测试集，对比 weighted 与 hybrid_rrf
 .venv/Scripts/python.exe backend/evals/rag.py
 
-# 真实 embedding：同一套 42 条查询、同一组参数
-.venv/Scripts/python.exe backend/evals/rag.py --embedding-provider openai \
-    --embedding-model qwen3-embedding:0.6b --min-score 0.40
+# 只跑其中一个集合；测试集只消费冻结参数，不用于调阈值
+.venv/Scripts/python.exe backend/evals/rag.py --dataset calibration
+.venv/Scripts/python.exe backend/evals/rag.py --dataset test
+
+# 历史 42 条统一集合仅用于回看旧报告
+.venv/Scripts/python.exe backend/evals/rag.py --dataset legacy
+
+# 真实 embedding：先只用 calibration 选阈值，再对 test 使用同一冻结值
+.venv/Scripts/python.exe backend/evals/rag.py --dataset calibration \
+    --embedding-provider openai --embedding-model qwen3-embedding:0.6b --min-score 0.15
+.venv/Scripts/python.exe backend/evals/rag.py --dataset test \
+    --embedding-provider openai --embedding-model qwen3-embedding:0.6b --min-score <校准阈值>
 ```
 
 - 临时 SQLite，不联网、不读写 `data/profitops.db`（默认 hashing）。
-- 6 篇合成 SOP，**42 条固定标注查询**（36 可回答 + 6 不可回答），按 keyword / paraphrase / cross_doc / unanswerable 分层统计。
+- 6 篇合成 SOP；校准集 26 条（22 可回答、4 跨文档、4 不可回答），测试集 24 条（20 可回答、6 跨文档、4 不可回答）。两集合按 `id` 与查询文本双重去重，标签先行固定。
 - 报告 hit@1、hit@3、MRR、nDCG@5、no-answer accuracy、citation validity、延迟，以及阈值校准建议；硬门禁失败时退出码非 0。
-- 本次结果（hashing，`min_score=0.15`）：hit@1 97.22%、hit@3 100%、MRR 0.9815、no-answer 100%、citation validity 100%、网络调用 0。hashing 下 `hybrid_rrf` 与 `weighted` 指标相同：hashing 没有排序能力，不参与稠密路投票，两种排序在这套语料上等价。
-- 真实 embedding（各自按校准阈值）：**BGE-M3**（`min_score=0.42`）hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 50%（旧排序 25%）；`qwen3-embedding:0.6b`（`0.40`）hit@1 100%、跨文档覆盖 75%。两者都证明「换 embedding 必须重算阈值」：0.15 下 6 条不可回答全部误答。
-- 报告写入 `backend/evals/reports/rag-latest.json`；口径与消融见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) 第 5、9 节。
+- 2026-11-13 hashing（`min_score=0.15`）结果：校准集 hit@1/hit@3 `100%`、MRR `1.0000`、no-answer/citation `100%`；测试集 hit@1 `85%`、hit@3 `95%`、MRR `0.8917`、nDCG@5 `0.9065`、no-answer/citation `100%`、跨文档 coverage@3 `66.67%`，网络调用 0。测试集保留 `test-quality-03`、`test-cross-01` 的 top-1 未中与 `test-cross-02` 的 top-3 未中，不修改标签凑分。
+- 真实 embedding 的历史结论仍来自 42 条旧集合：**BGE-M3**（`min_score=0.42`）hit@1 100%、MRR 1.0000、跨文档覆盖 50%；`qwen3-embedding:0.6b`（`0.40`）hit@1 100%、跨文档覆盖 75%。这些结果只作历史对照，新 split 尚未用真实 embedding 重跑；换模型仍必须重新校准阈值。
+- 报告写入 `backend/evals/reports/rag-split-latest.json` 与带日期的 `rag-split-20261113.json`；口径、门禁与失败案例见 [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) 第 9 节和 [docs/EVALUATION.md](docs/EVALUATION.md) 的 R9。
 
 ### Docker Compose（可选 PostgreSQL）
 
@@ -215,7 +247,7 @@ Windows 11 SSH 部署、首次初始化/迁移、备份恢复、故障排查、�
 2. 点击 **启动 Profit Agent**。工作台逐步显示读取数据 → 利润计算 → 异常归因 → 证据核验 → 检索运营知识库 → DeepSeek 根因分析 → LLM 证据引用校验 → 创建建议 → 等待审批，每步有耗时、摘要和请求 ID。未配置 Key 时 LLM 步明确显示“已降级为确定性规则”，但知识检索仍会运行。
 3. 查看 **Agent 执行轨迹**：原生工具循环的每一轮、工具调用、参数摘要、成功/失败、错误码、单轮 token/耗时和终止原因。然后点击 **查看经营建议**，查看 LLM 根因/置信度/证据引用、知识库片段及“✓ LLM 已引用”标记（若真实调用成功）、统计周期、上一周期、8 项利润贡献、预期影响情景、风险与待补充信息。
 4. 以分析师身份尝试批准：页面不提供按钮；直接用 API 伪造 `X-Role` 会返回 403。右上角切换为 **审批负责人**。
-5. 审批页先展示 **待执行的模拟动作**：目标 SKU、参考日预算、模拟新预算。填写审批意见并 **批准建议**；然后 **模拟执行已批准动作**。结果显示 `SIMULATION`、预算预览、外部调用 0 次。
+5. 审批页先展示 **待执行的模拟动作**：目标 SKU、参考日预算、模拟新预算。填写审批意见并 **批准建议**；批准时服务端重新读取账本并写入版本快照，页面显示账本/动作短指纹。若审批后账本或动作参数变化，执行会返回 409 并保持 `approved`。核对快照后 **模拟执行已批准动作**，结果显示 `SIMULATION`、预算预览、外部调用 0 次。
 6. 再次点击 **再次请求 · 验证幂等**。返回同一执行 ID，并提示“命中幂等”，数据库没有第二条执行记录。
 7. 打开 **审计日志**：在“请求 ID”输入框精确过滤，追踪分析、批准、开始执行、成功执行、重复回放和被拦截请求。
 8. 拒绝分支：启动另一次分析，在审批中心填写原因并拒绝；建议进入终态，无法再批准或执行。
@@ -367,7 +399,7 @@ TASKS.md             交付与后续任务
 - 认证是可运行的自建账号 + JWT + 租户隔离，但不是完整生产 IAM：没有 OIDC/SSO、密码重置、MFA、密钥轮换和租户管理后台；限流桶和指标是进程内状态，多副本部署需要共享存储。本地演示工作台使用 `/api/demo` 返回的 demo token 切换身份；云端覆盖把该接口放在 Nginx Basic Auth 之后，token 由不进入 Git 的随机配置生成，但仍不是正式认证。JWT 登录 API 已实现并有后端测试，演示前端未接入登录页，非 demo 模式需要登录客户端。
 - LLM 只负责解释与策略文案，利润、环比、贡献桥和动作参数始终由确定性代码计算；归因是会计贡献项，不是因果证明。真实 DeepSeek 共调用 22 次（首轮 3 次 + 退款重跑 1 次 + 3000 三次重复 9 次 + 4000 三次重复 9 次）。3000 三次重复重评后为履约 3/3、广告 2/3、退款 1/3，3 次失败均为 `finish_reason=length`；提高到 4000 后同一组三次重复为 9/9 `llm_success`，重评后广告/履约/退款均 3/3。评测结果见 [docs/EVALUATION.md](docs/EVALUATION.md)；这是 3 个合成案例上的门禁结果，不是准确率。未配置 Key 时默认走确定性降级。
 - 原生 Function Calling 已用 3 次真实脚本运行验收；第 3 次完整成功，但样本很小，不能据此声明真实调用成功率或多轮稳定性。
-- RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、42 条标注查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。BGE-M3 与 qwen3-embedding 已在同一套合成语料上验证，hit@1 与 MRR 更高，但换模型必须重新校准 `KNOWLEDGE_MIN_SCORE`。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；当前是 SQLite/PostgreSQL 上全量候选打分，知识库规模增大后需要专用向量索引与批处理/缓存。
+- RAG 默认 hashing embedding 是离线工程方案，不是语义模型；6 篇合成 SOP、26/24 条拆分查询的评测只验证检索/拒答/引用链路，不代表真实业务文档或通用语义准确率。测试集是合成回归 holdout，且历史失败案例在拆分前已经已知。BGE-M3 与 qwen3-embedding 的历史结论来自 42 条旧集合，新 split 尚未用真实 embedding 重跑；换模型必须重新校准 `KNOWLEDGE_MIN_SCORE`。未实现文档级 ACL、PDF/OCR、reranker 或专用向量数据库；当前是 SQLite/PostgreSQL 上全量候选打分，知识库规模增大后需要专用向量索引与批处理/缓存。
 - Phase 2D 工具调用评测默认使用脚本化 `FakeToolProvider`，37 次运行只证明生产工具循环和门禁在合成案例上的行为，不是真实模型的工具选择准确率；`native --real` 入口已实现但本阶段未授权执行。
 - 预期影响是明确标注的条件性情景，不构成收益承诺。
 - 模拟执行只写数据库预览，不改变任何真实平台。

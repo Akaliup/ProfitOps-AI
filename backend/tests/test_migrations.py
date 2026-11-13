@@ -194,8 +194,9 @@ def test_stamped_true_legacy_database_upgrades_in_place(tmp_path, monkeypatch):
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM schema_versions")).scalar_one() == 1
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0002_tenant_scoped_idempotency"
+            "0004_intelligence"
         )
+    assert "import_batches" in inspect(engine).get_table_names()
     engine.dispose()
 
 

@@ -142,4 +142,57 @@
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
+
+  .reveal {
+    animation: reveal-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .dropzone {
+    transition:
+      border-color 0.25s ease,
+      background-color 0.25s ease,
+      transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.25s ease;
+  }
+
+  .dropzone[data-dragging='true'] {
+    transform: scale(1.01);
+    box-shadow: 0 8px 24px -12px rgb(2 132 199 / 0.35);
+  }
 }
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+
+  .dropzone {
+    transition: none;
+  }
+}
+
+.intelligence table { width: 100%; text-align: left; border-collapse: collapse; }
+.intelligence th, .intelligence td { padding: .7rem; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+.intelligence input, .intelligence select { border: 1px solid #d1d5db; border-radius: .4rem; padding: .3rem; }
+.intelligence * { transition: color .18s, background-color .18s, opacity .18s, transform .18s; }
+.intelligence :is(table, tr, details, label, select, input, p) { animation: intelligence-enter .3s ease-out both; }
+.intelligence tr { animation-delay: .03s; }
+.intelligence :is(button, select, input):focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.intelligence :is(select, input):hover { border-color: #2563eb; }
+.intelligence button:hover { transform: scale(1.025); }
+.intelligence button:active { transform: scale(.98); }
+.intelligence tr:hover { background: #eff6ff; }
+@keyframes intelligence-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .intelligence * { animation: none !important; transition: none !important; } }

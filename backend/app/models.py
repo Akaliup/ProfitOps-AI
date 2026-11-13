@@ -118,6 +118,30 @@ class DailyOperation(Base):
     complete: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class ImportBatch(Base):
+    __tablename__ = "import_batches"
+    __table_args__ = (
+        Index("ix_import_batches_tenant_created", "tenant_id", "created_at"),
+        Index("ix_import_batches_sha", "tenant_id", "kind", "content_sha256"),
+        CheckConstraint("accepted_rows >= 0 AND skipped_rows >= 0 AND rejected_rows >= 0"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="demo", server_default="demo")
+    kind: Mapped[str] = mapped_column(String(20))
+    filename: Mapped[str] = mapped_column(String(200))
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="committed")
+    total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    accepted_rows: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_rows: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_rows: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[str] = mapped_column(String(80))
+    request_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
     __table_args__ = (
@@ -254,4 +278,28 @@ class AuditLog(Base):
     request_id: Mapped[str] = mapped_column(String(64), index=True)
     outcome: Mapped[str] = mapped_column(String(30))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SourceRecord(Base):
+    """Validated source rows and immutable lineage; amounts in payload are cents."""
+    __tablename__ = "source_records"
+    __table_args__ = (UniqueConstraint("tenant_id", "kind", "natural_key", name="uq_source_natural"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    natural_key: Mapped[str] = mapped_column(String(64))
+    batch_id: Mapped[str] = mapped_column(ForeignKey("import_batches.id"))
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"))
+    date: Mapped[date] = mapped_column(Date, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_number: Mapped[int] = mapped_column(Integer)
+
+
+class WeeklyReport(Base):
+    __tablename__ = "weekly_reports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    body: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

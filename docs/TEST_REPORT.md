@@ -363,6 +363,34 @@ MCP 测试使用临时 SQLite 和 `hashing` embedding，不读写 `data/profitop
 
 新增回归覆盖：工具 `policy` 分类与 `deny` 拒绝、API 时间戳显式 UTC、审计按 `request_id` 过滤、Seed 不删除审批/执行/审计、审批页动作预览与审计过滤 UI。冒烟与浏览器测试使用独立数据库（`data/smoke-takeover-2.db`、`data/e2e.db`），未修改 `data/profitops.db` 中的用户运行数据。
 
+## 2026-11-13 数据导入与对账（Phase 13）
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 导入模块测试 | `.venv/Scripts/python.exe -m pytest backend/tests/test_imports.py -q` | 15 passed |
+| 后端全量测试 | `.venv/Scripts/python.exe -m pytest backend/tests -q` | 292 passed，6 skipped（PostgreSQL 测试库未配置） |
+| 迁移链 | `PROFITOPS_DATABASE_URL=sqlite:///…/mig.db python scripts/migrate.py upgrade head` + `current` | 0001 → 0002 → 0003 通过，`current` 为 `0003_import_batches (head)`；`import_batches` 表已创建 |
+| 前端测试 | `npx vitest run` | 2 个文件、19 passed |
+| 生产构建 | `npm run build` | 通过（CSS 47.55 kB / 主 JS 338.97 kB gzip 99.07 kB） |
+| 实际 HTTP 冒烟 | 临时 SQLite + 8031 端口：`.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:8031` | 21/21 通过；新增 6 项覆盖模板、预览、提交回读、重复 no-op、冲突 409、analyst 403 |
+
+手工核对点：预览返回的整数美分合计为 `sales=11300`、`net_sales=10396`、`net_profit=3321`；提交后 `db_roundtrip.ok=true`；同一文件再次提交返回 `status=noop`、`replayed=true` 且账本行数不变；修改金额后返回 409 `import_rejected`，事务未写入。导入使用独立临时数据库，未修改 `data/profitops.db`。
+
+## 2026-11-13 审批版本保护与 RAG 拆分评测
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 审批专项 | `.venv/Scripts/python.exe -m pytest backend/tests/test_approval.py backend/tests/test_auth_tenant.py -q` | 25 passed |
+| 后端全量 | `.venv/Scripts/python.exe -m pytest backend/tests -q -p no:cacheprovider` | 298 passed，6 skipped（PostgreSQL 测试库未配置），1 个第三方 DeprecationWarning |
+| RAG 真实基线测试 | `.venv/Scripts/python.exe -m pytest backend/tests/test_rag_real.py -q` | 4 passed |
+| RAG 拆分评测 | `.venv/Scripts/python.exe backend/evals/rag.py --dataset split` | `split_validation=PASS`；校准集 hit@1/hit@3 100%、MRR 1.0000；测试集 hit@1 85%、hit@3 95%、MRR 0.8917、nDCG@5 0.9065、no-answer/citation 100%、coverage@3 66.67%；门禁通过 |
+| 前端测试 | `npx vitest run` | 2 个文件、19 passed |
+| 生产构建 | `npm run build` | 通过（CSS 47.76 kB / 主 JS 340.76 kB gzip 99.42 kB） |
+
+审批保护覆盖：批准时账本变化返回 409 `recommendation_stale`；执行时快照缺失返回 409 `approval_snapshot_missing`、动作变化返回 409 `action_changed`、审批后账本变化返回 409 `approval_stale`。失败均不创建 Execution，建议保持 `approved`；审计记录 `recommendation.stale`、`execution.stale`、`execution.action_changed`。已存在 Execution 的重复请求继续返回原记录和 `replayed=true`。
+
+RAG split 的测试集失败如实保留：`test-quality-03`、`test-cross-01` 为 top-1 未命中但 top-3 命中；`test-cross-02` 为 top-3 未命中。报告为 `backend/evals/reports/rag-split-latest.json` 和 `backend/evals/reports/rag-split-20261113.json`。本轮没有在测试集结果出来后调整标签、阈值或排序参数，也没有用真实 embedding 重跑新 split。
+
 ## 尚未验证（环境阻碍）
 
 - Docker Compose 已于 2026-10-31 在本机 Docker Desktop 29.5.3 上完成 PostgreSQL 16、后端和 nginx 前端的实际启动验收；后端直连与 nginx 代理各 11/11 通过。其他机器仍需按本文件复验；本机 Docker Hub 直连受限，重新构建时可能需要代理或镜像加速。
@@ -370,6 +398,10 @@ MCP 测试使用临时 SQLite 和 `hashing` embedding，不读写 `data/profitop
 - Phase 2D 的 `native --real` 真实模型工具评测未执行；当前 37 次结果全部来自 `FakeToolProvider`，只能证明生产工具循环与门禁在合成案例上的行为，不能声明真实模型的工具选择准确率、参数合法率、真实 token 或延迟。
 - RAG 的真实 embedding 服务与真实业务语料未验证：默认 hashing embedding 是离线方案，OpenAI 兼容 Provider 只有 MockTransport 测试；6 篇合成 SOP、8 个查询的评测不能声明通用语义检索准确率。PDF/OCR、reranker、文档级 ACL、大规模向量索引未实现。
 - 本次 RAG 改动未重新运行 Playwright 浏览器 E2E；知识库页面由 Vitest + RTL 和生产构建覆盖，未在真实浏览器中复验。
+- 数据导入的 PostgreSQL 迁移与并发写入未在本机验证（`PROFITOPS_TEST_POSTGRES_URL` 未配置，相关测试跳过）；当前只在 SQLite 上完成测试、迁移和真实 HTTP 冒烟。
+- 导入链路只使用合成 CSV 验证；没有真实商户订单、广告账单或 ERP 导出文件，也没有 Excel、ZIP 批量包或自动同步。
+- 审批过期保护的 HTTP 验证由 FastAPI TestClient 覆盖，未在独立进程上做真实网络冒烟；审批快照针对当前/上一周期订单与每日经营原始行，不覆盖主数据改名或新增无业务行的店铺/SKU。
+- RAG 新 split 只有 hashing 结果；BGE-M3 与 qwen3-embedding 的历史报告仍基于旧 42 条集合，未在新测试集上复验。
 
 浏览器验收不属于未验证项：Playwright + Chromium 真实页面测试 2/2 通过，截图位于 `docs/screenshots/`。
 
@@ -385,3 +417,12 @@ Windows 11、Python 3.12.8（venv）、Node 24.16.0、npm 11.13.0、Git 2.40.0�
 - Docker Desktop 启动在 120 秒限制内未就绪，停止尝试；因此当时的容器运行验证保持未完成状态。2026-10-31 再次启动 Docker Desktop 后成功完成 Compose 验收；Docker Hub 直连仍受限，构建时使用本机代理。
 
 最终结果不包含任何伪造或跳过的测试。
+# 2026-11-14 multi-store intelligence increment
+
+- `.venv/Scripts/python.exe -m pytest backend/tests -q`: 315 passed, 6 skipped (PostgreSQL test URL not configured), 1 Starlette deprecation warning. After the five-row preview and documented-example test were added, focused `backend/tests/test_intelligence.py`: 18 passed; focused intelligence/import/workflow suite before the example test: 42 passed.
+- `npm --prefix frontend test -- --run`: 20 passed in 3 files, including import preview and weekly error handling. `npm --prefix frontend run build`: passed; Vite noted the main bundle is close to/above 500 kB.
+- `.venv/Scripts/python.exe scripts/mcp_check.py`: passed, six read-only tools exposed and write tools absent.
+- `.venv/Scripts/python.exe scripts/smoke.py --base-url http://127.0.0.1:18010`: 21 passed on an isolated SQLite database with offline hashing and an empty LLM key. The first attempt had no server; a second attempt used the local `.env` retrieval threshold and failed `knowledge_search`; the final run pinned `KNOWLEDGE_MIN_SCORE=0.15` and passed.
+- `.venv/Scripts/python.exe -m pytest backend/tests/test_migrations.py -q`: 4 passed; Alembic head is `0004_intelligence`. `git diff --check`: no whitespace errors (Git emitted line-ending notices).
+- Documented `orders.csv`, `ads.csv`, `inventory.csv` are exercised by an API test: two rows each, two-store weekly report, six source rows and verified profit bridge.
+- No live DeepSeek call, PostgreSQL server integration, browser interaction test or production deployment was run. The local demo server uses a separate ignored SQLite database and `LLM_PROVIDER=disabled`.

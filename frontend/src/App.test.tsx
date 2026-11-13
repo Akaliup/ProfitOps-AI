@@ -93,7 +93,25 @@ beforeEach(() => {
     if (path.startsWith('/api/audit-logs')) return respond({ items: [] })
     if (path.endsWith('/approve') || path.endsWith('/reject')) {
       lastActor = actor
-      rows = [{ ...rows[0], status: path.endsWith('/approve') ? 'approved' : 'rejected', approval_reason: JSON.parse(String(options?.body)).reason }]
+      const approved = path.endsWith('/approve')
+      rows = [{
+        ...rows[0],
+        status: approved ? 'approved' : 'rejected',
+        approval_reason: JSON.parse(String(options?.body)).reason,
+        body: approved ? {
+          ...rows[0].body,
+          approval: {
+            version: 1, snapshot_type: 'ledger_and_action', captured_at: '2026-11-13T00:00:00Z',
+            scope: { period: rows[0].body.period, store_id: rows[0].body.store_id },
+            ledger_hash: 'a'.repeat(64), action_hash: 'b'.repeat(64),
+            action: rows[0].action,
+            current_totals: { net_sales: 120000, net_profit: 28000, margin_pct: 23.33 },
+            previous_totals: { net_sales: 110000, net_profit: 32000, margin_pct: 29.09 },
+            data_quality: { complete: true, missing_records: 0, incomplete_records: 0 },
+            sku_breakdown: [],
+          },
+        } : rows[0].body,
+      }]
       return respond(rows[0])
     }
     if (path.endsWith('/execute')) {
@@ -131,6 +149,8 @@ describe('ProfitOps workspace', () => {
     await user.selectOptions(screen.getByLabelText('演示身份'), 'demo-approver')
     await user.click(await screen.findByRole('button', { name: '批准建议' }))
     expect(await screen.findByRole('button', { name: '模拟执行已批准动作' })).toBeVisible()
+    expect(await screen.findByText('审批版本快照')).toBeVisible()
+    expect(screen.getByText('aaaaaaaaaaaa')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '模拟执行已批准动作' }))
     expect(await screen.findByRole('heading', { name: /模拟执行结果/ })).toBeVisible()
     await user.click(screen.getByRole('button', { name: '再次请求 · 验证幂等' }))

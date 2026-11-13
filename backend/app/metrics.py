@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -125,6 +127,75 @@ def fetch_metrics(session, scope: MetricsInput, tenant_id: str = "demo") -> RawM
             missing_records=missing_count, incomplete_records=incomplete, missing_examples=missing_examples, issues=issues,
         ),
     )
+
+
+def ledger_fingerprint(session, scope: MetricsInput, tenant_id: str = "demo") -> str:
+    """Hash every order and daily-operation row that can affect the scoped report.
+
+    The fingerprint covers the current and adjacent previous period, matching
+    ``fetch_metrics``. A totals-only hash would miss compensating edits across
+    SKUs, so the raw row values are included and sorted by primary key.
+    """
+    days = (scope.period.end_date - scope.period.start_date).days + 1
+    previous = Period(
+        start_date=scope.period.start_date - timedelta(days=days),
+        end_date=scope.period.start_date - timedelta(days=1),
+    )
+    store_query = select(Store).where(Store.tenant_id == tenant_id)
+    if scope.store_id:
+        store_query = store_query.where(Store.id == scope.store_id)
+    stores = session.scalars(store_query).all()
+    if scope.store_id and not stores:
+        raise DomainError("store_not_found", "店铺不存在", 404)
+    store_ids = [store.id for store in stores]
+    orders = session.scalars(select(Order).where(
+        Order.tenant_id == tenant_id,
+        Order.date.between(previous.start_date, scope.period.end_date),
+        Order.store_id.in_(store_ids),
+    ).order_by(Order.id)).all()
+    operations = session.scalars(select(DailyOperation).where(
+        DailyOperation.tenant_id == tenant_id,
+        DailyOperation.date.between(previous.start_date, scope.period.end_date),
+        DailyOperation.store_id.in_(store_ids),
+    ).order_by(DailyOperation.id)).all()
+    payload = {
+        "version": 1,
+        "tenant_id": tenant_id,
+        "scope": scope.model_dump(mode="json"),
+        "previous_period": previous.model_dump(mode="json"),
+        "orders": [
+            {
+                "id": row.id,
+                "store_id": row.store_id,
+                "product_id": row.product_id,
+                "date": row.date.isoformat(),
+                "quantity": row.quantity,
+                "sales": row.sales,
+                "discounts": row.discounts,
+                "refunds": row.refunds,
+                "cogs": row.cogs,
+                "fulfillment": row.fulfillment,
+                "platform_fees": row.platform_fees,
+                "other_costs": row.other_costs,
+            }
+            for row in orders
+        ],
+        "operations": [
+            {
+                "id": row.id,
+                "store_id": row.store_id,
+                "product_id": row.product_id,
+                "date": row.date.isoformat(),
+                "ad_spend": row.ad_spend,
+                "inventory": row.inventory,
+                "inbound_inventory": row.inbound_inventory,
+                "complete": row.complete,
+            }
+            for row in operations
+        ],
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_report(raw: RawMetrics) -> MetricsReport:

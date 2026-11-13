@@ -4,6 +4,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date
 from time import perf_counter
+from urllib.parse import unquote
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, Query, Request
@@ -11,11 +12,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import case, select, text, update
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from .audit import record, record_separately
 from .config import Settings, get_settings
 from .db import begin_write, build_engine, initialize_database, make_session_factory
 from .errors import DomainError
+from .imports import (
+    MAX_BYTES as IMPORT_MAX_BYTES, batch_view, commit_import, get_batch,
+    list_batches, preview_import, template_csv,
+)
 from .knowledge import (
     build_embedding_provider, create_document, delete_document, list_documents,
     reindex_document, search_knowledge, seed_knowledge,
@@ -45,6 +51,7 @@ from .tools import build_registry
 from .views import analysis_view, audit_view, recommendation_view
 from .worker import AnalysisWorker, process_analysis_job
 from .workflow import recover_interrupted, run_execution_graph
+from .weekly import WeeklyRequest
 
 
 class JsonFormatter(logging.Formatter):
@@ -72,6 +79,27 @@ def validate_key(key: str | None, required=False):
     if key is None or not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", key):
         raise DomainError("invalid_idempotency_key", "请提供 1–100 位字母、数字、点、下划线、冒号或连字符组成的 Idempotency-Key", 422)
     return key
+
+
+async def read_import_upload(request: Request) -> tuple[str, str]:
+    filename = request.query_params.get("filename")
+    if not filename:
+        header = request.headers.get("X-Filename")
+        filename = unquote(header) if header else "upload.csv"
+    filename = filename.replace("\r", " ").replace("\n", " ").strip()[:200] or "upload.csv"
+    body = await request.body()
+    if len(body) > IMPORT_MAX_BYTES:
+        raise DomainError(
+            "import_file_too_large",
+            f"文件不能超过 {IMPORT_MAX_BYTES // 1024 // 1024} MB", 413,
+        )
+    if not body:
+        raise DomainError("import_empty", "CSV 文件为空", 422)
+    try:
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise DomainError("import_encoding_invalid", "CSV 必须使用 UTF-8 编码", 422) from exc
+    return text, filename or "upload.csv"
 
 
 def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = None):
@@ -214,8 +242,9 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, exc: DomainError):
         if request.method == "POST":
+            action = exc.audit_action or f"request.{request.url.path.rsplit('/', 1)[-1]}.denied"
             record_separately(factory, getattr(request.state, "actor", "anonymous"),
-                              f"request.{request.url.path.rsplit('/', 1)[-1]}.denied", "recommendation" if "recommendations" in request.url.path else "request",
+                              action, "recommendation" if "recommendations" in request.url.path else "request",
                               request.path_params.get("recommendation_id", request.url.path), request.state.request_id, "denied", {"code": exc.code, "message": exc.message})
         return error_response(request, exc.code, exc.message, exc.status, exc.details)
 
@@ -342,6 +371,101 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
     @app.get("/api/tools", tags=["agent"])
     def tools(actor: Actor = Depends(identity)):
         return {"items": registry.catalog()}
+
+    @app.get("/api/imports/template/{kind}", tags=["imports"])
+    def import_template(kind: str, actor: Actor = Depends(identity)):
+        body = template_csv(kind)
+        return PlainTextResponse(
+            body, media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{kind}-template.csv"'},
+        )
+
+    @app.get("/api/imports", tags=["imports"])
+    def import_batches(limit: int = Query(default=50, ge=1, le=200), actor: Actor = Depends(identity)):
+        with factory() as session:
+            return {"items": [batch_view(row) for row in list_batches(session, actor.tenant_id, limit)]}
+
+    @app.get("/api/imports/{batch_id}", tags=["imports"])
+    def import_batch(batch_id: str, actor: Actor = Depends(identity)):
+        with factory() as session:
+            return batch_view(get_batch(session, batch_id, actor.tenant_id))
+
+    @app.post("/api/imports/{kind}/preview", tags=["imports"])
+    async def import_preview(kind: str, request: Request, actor: Actor = Depends(identity)):
+        text, filename = await read_import_upload(request)
+
+        def run():
+            with factory() as session:
+                return preview_import(session, kind, text, filename, actor).model_dump(mode="json")
+
+        return await run_in_threadpool(run)
+
+    @app.post("/api/imports/{kind}", tags=["imports"])
+    async def import_commit(kind: str, request: Request, actor: Actor = Depends(identity)):
+        require_role(actor, "approver")
+        text, filename = await read_import_upload(request)
+
+        def run():
+            with factory.begin() as session:
+                return commit_import(
+                    session, kind, text, filename, actor, request.state.request_id,
+                ).model_dump(mode="json")
+
+        return await run_in_threadpool(run)
+
+    @app.get("/api/data/template/{kind}", tags=["intelligence"])
+    def source_template(kind: str, actor: Actor = Depends(identity)):
+        from .source_imports import COLUMNS
+        if kind not in COLUMNS:
+            return PlainTextResponse(template_csv(kind), media_type="text/csv")
+        return PlainTextResponse(COLUMNS[kind] + "\n", media_type="text/csv")
+
+    @app.post("/api/data/{kind}/preview", tags=["intelligence"])
+    @app.post("/api/data/{kind}/commit", tags=["intelligence"])
+    async def source_upload(kind: str, request: Request, mapping: str | None = None, actor: Actor = Depends(identity)):
+        from .source_imports import ingest, mapped_csv
+        commit = request.url.path.endswith('/commit')
+        if commit:
+            require_role(actor, "approver")
+        body, filename = await read_import_upload(request)
+        body = mapped_csv(body, mapping)
+        def run():
+            with factory.begin() as session:
+                if commit:
+                    begin_write(session, engine)
+                return ingest(session, kind, body, filename, actor, request.state.request_id if commit else None).model_dump(mode="json")
+        return await run_in_threadpool(run)
+
+    @app.get("/api/inventory", tags=["intelligence"])
+    def inventory(as_of: date | None = None, store_id: str | None = None, risk: str | None = None, lookback_days: int = Query(28, ge=1, le=365), actor: Actor = Depends(identity)):
+        from .inventory import InventoryPolicy, inventory_report
+        with factory() as session:
+            result = inventory_report(session, actor.tenant_id, as_of or utcnow().date(), store_id, InventoryPolicy(lookback_days=lookback_days))
+        if risk:
+            result['items'] = [x for x in result['items'] if x['risk'] == risk]
+        return result
+
+    @app.post("/api/weekly-reports", tags=["intelligence"])
+    def weekly_generate(body: WeeklyRequest, request: Request, actor: Actor = Depends(identity)):
+        from .weekly import generate_weekly
+        with factory.begin() as session:
+            return generate_weekly(session, actor, request.state.request_id, body, app.state.llm)
+
+    @app.get("/api/weekly-reports", tags=["intelligence"])
+    def weekly_history(actor: Actor = Depends(identity)):
+        from .models import WeeklyReport
+        with factory() as session:
+            rows = session.scalars(select(WeeklyReport).where(WeeklyReport.tenant_id == actor.tenant_id).order_by(WeeklyReport.created_at.desc()).limit(50))
+            return {'items': [{'id': r.id, 'created_at': r.created_at.isoformat(), 'period': r.body['period']} for r in rows]}
+
+    @app.get("/api/weekly-reports/{report_id}", tags=["intelligence"])
+    def weekly_detail(report_id: str, actor: Actor = Depends(identity)):
+        from .models import WeeklyReport
+        with factory() as session:
+            row = session.scalar(select(WeeklyReport).where(WeeklyReport.tenant_id == actor.tenant_id, WeeklyReport.id == report_id))
+            if row is None:
+                raise DomainError('report_not_found', '周报不存在', 404)
+            return dict(row.body, id=row.id)
 
     @app.get("/api/knowledge/documents", tags=["knowledge"])
     def knowledge_documents(actor: Actor = Depends(identity)):

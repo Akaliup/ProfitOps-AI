@@ -1,0 +1,45 @@
+{
+  "dataset_id": "profitops-rag-calibration-v2",
+  "split": "calibration",
+  "label_version": "2026-11-13",
+  "type_label_version": "2026-11-13",
+  "fixed_before_run": true,
+  "labels_frozen_at": "2026-11-13T00:00:00Z",
+  "source_type": "synthetic",
+  "notes": "Calibration split for retrieval thresholds and ranker comparison. It covers all six synthetic SOPs and is disjoint from rag_test.json by both query id and query text. Two cross-document questions were clarified during calibration before the final report; the test split was not edited after its first run. Calibration may be used to inspect score separation and choose future defaults, but test results must not be written back into tuning.",
+  "queries": [
+    {"id": "cal-ad-01", "query": "广告预算下调超过多少需要重新评估", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-ad-02", "query": "连续几天广告支出上涨会触发预算调整", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "cal-ad-03", "query": "广告预算调整的参考日预算怎么计算", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "keyword"},
+
+    {"id": "cal-refund-01", "query": "退款率异常先按什么维度拆分", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-refund-02", "query": "退款排查要检查商品详情页和尺码表吗", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "cal-refund-03", "query": "退款只扣减收入还是也要重复扣减采购成本", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "paraphrase"},
+
+    {"id": "cal-fulfillment-01", "query": "履约成本环比上涨多少会触发排查", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-fulfillment-02", "query": "燃油附加费和偏远地区附加费怎么核对", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "cal-fulfillment-03", "query": "履约成本异常应该先创建什么任务", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "keyword"},
+
+    {"id": "cal-fees-01", "query": "平台佣金和支付手续费怎么区分", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-fees-02", "query": "结算差异超过百分之一怎么处理", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "cal-fees-03", "query": "平台结算单和银行入账怎么逐笔核对", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "paraphrase"},
+
+    {"id": "cal-quality-01", "query": "每日经营记录缺失时 Agent 应该停在什么状态", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-quality-02", "query": "空集能不能当作零销售处理", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "cal-quality-03", "query": "缺失记录补齐前能不能创建可执行建议", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "paraphrase"},
+
+    {"id": "cal-approval-01", "query": "经营分析师和审批负责人的权限有什么区别", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-approval-02", "query": "审批状态机有哪些状态和转换", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "keyword"},
+    {"id": "cal-approval-03", "query": "重复执行请求会返回新的执行记录吗", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "paraphrase"},
+
+    {"id": "cal-cross-01", "query": "广告预算下调后退款率上升要不要转为成本核查", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["退款率异常排查手册"]},
+    {"id": "cal-cross-02", "query": "退款政策变更是否需要人工审批并只能模拟执行", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["审批、执行与幂等规则"]},
+    {"id": "cal-cross-03", "query": "平台结算差异里的广告费怎么和广告规则核对", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["广告预算调整与审批规则"]},
+    {"id": "cal-cross-04", "query": "承运商临时加价后的方案要不要走人工审批", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["审批、执行与幂等规则"]},
+
+    {"id": "cal-no-01", "query": "如何预订会议室午餐", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "cal-no-02", "query": "今天天气怎么样", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "cal-no-03", "query": "请写一首关于春天的诗", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "cal-no-04", "query": "公司年假有几天", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"}
+  ]
+}

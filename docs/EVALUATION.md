@@ -76,7 +76,7 @@
 ### R6. 复现
 
 ```bash
-.venv/Scripts/python.exe backend/evals/rag.py
+.venv/Scripts/python.exe backend/evals/rag.py --dataset legacy
 # 报告：backend/evals/reports/rag-latest.json
 ```
 
@@ -112,6 +112,25 @@ BGE-M3 阻塞原因是本机 Ollama 未安装该模型，`/v1/embeddings` 返回
 4. **绝对阈值不能跨模型复用**：`min_score=0.15` 在 hashing 下正确（max 不可回答 0.1450 < min 可回答 0.1800），在 qwen3-embedding 下 6 条不可回答全部误答（no-answer 0%）；该 provider 的建议值是 0.3982，取 0.40 后 no-answer 回到 100%。评测现在直接输出这组分布与建议值，换模型不再靠猜。
 
 仍不能声明的事：语料只有 6 篇 SOP / 32 个 chunk，两个 provider 上检索都接近饱和，以上只证明链路、门禁与校准方法有效，不是通用检索准确率。
+
+### R9. 校准集与测试集隔离（2026-11-13）
+
+历史 42 条集合曾同时用于查看失败、调整阈值和汇报结果，不能继续冒充独立测试集。本轮拆成两个标签先行的文件：
+
+- `backend/evals/rag_calibration.json`：26 条，22 条可回答、4 条跨文档、4 条不可回答。用于检查阈值分离、排序回归与未来默认值，不用于最终结论。
+- `backend/evals/rag_test.json`：24 条，20 条可回答、6 条跨文档、4 条不可回答。与校准集按 `id` 和 `query` 文本双重去重，覆盖全部 6 篇 SOP。
+- 测试集保留历史报告已经出现的 `quality-03`（正确文档排第 3）和 `fulfillment-06`（跨文档 top-3 覆盖失败），并在 JSON 的 `known_failures` 中记录来源与失败类型；新增跨文档问题不得在看到结果后改标签。
+- `backend/evals/rag.py --dataset split` 用同一组 `top_k=3`、`candidate_k=20`、`min_score=0.15`、`rrf_k=60`、BM25 参数和 `max_per_document=2` 分别运行两个集合。校准集允许用于调阈值，测试集只消费冻结阈值。报告同时输出 `split_validation`、两边指标、测试失败与 `threshold_policy.test_used_for_tuning=false`。
+- 门禁：校准集 hit@3 全部命中、no-answer 全部正确、无误拒、citation 100%、hybrid MRR 不低于 weighted；测试集 hit@3 ≥ 90%、no-answer 100%、无误拒、citation 100%、hybrid MRR 不低于 weighted。跨文档 `coverage@3` 必须报告，但不为通过而修改测试标签。
+
+2026-11-13 hashing 实测：
+
+| 集合 | 查询 | 可回答 | 跨文档 | 不可回答 | hit@1 | hit@3 | MRR | nDCG@5 | no-answer | citation | cross-doc coverage@3 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 校准集 | 26 | 22 | 4 | 4 | 100% | 100% | 1.0000 | 1.0000 | 100% | 100% | 50% |
+| 测试集 | 24 | 20 | 6 | 4 | 85% | 95% | 0.8917 | 0.9065 | 100% | 100% | 66.67% |
+
+测试集如实保留失败：`test-quality-03` 与 `test-cross-01` 为 top-1 未命中但 top-3 命中；`test-cross-02` 为 top-3 未命中。报告写入 `backend/evals/reports/rag-split-latest.json` 和带日期的 `rag-split-20261113.json`。这仍不是“未见真实客户数据”的泛化证明：测试集是合成回归 holdout，且历史失败案例在拆分前已经已知。
 
 
 ## 离线 LLM 回放评测（2026-11-01）

@@ -1,8 +1,8 @@
 """Real semantic retrieval comparison: BGE-M3 (Ollama) vs hashing baseline.
 
 The six SOP documents are the synthetic seed corpus from ``app.knowledge``.
-Queries and labels are fixed in ``rag_queries.json`` before any embedding is
-generated. Each provider runs against its own disposable SQLite database, so
+Queries and labels are fixed in the independent ``rag_test.json`` split before
+any embedding is generated. Each provider runs against its own disposable SQLite database, so
 the comparison never touches ``data/profitops.db``.
 
 BGE-M3 is used through the existing OpenAI-compatible embedding provider
@@ -41,7 +41,7 @@ from app.knowledge import (  # noqa: E402
 from app.models import KnowledgeChunk  # noqa: E402
 from app.schemas import KnowledgeSearchInput  # noqa: E402
 
-QUERY_FILE = BACKEND / "evals" / "rag_queries.json"
+QUERY_FILE = BACKEND / "evals" / "rag_test.json"
 REPORT_DIR = BACKEND / "evals" / "reports"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 TOP_K = 3
@@ -320,11 +320,13 @@ def run(*, include_bge: bool = True, ollama_base_url: str = OLLAMA_BASE_URL) -> 
         "mode": "real_semantic_retrieval_comparison",
         "dataset": {
             "dataset_id": dataset["dataset_id"],
+            "split": dataset.get("split"),
             "label_version": dataset["label_version"],
             "fixed_before_run": dataset["fixed_before_run"],
             "queries": len(queries),
             "answerable": sum(1 for query in queries if not query["expect_no_answer"]),
             "unanswerable": sum(1 for query in queries if query["expect_no_answer"]),
+            "known_failures": dataset.get("known_failures", []),
             "notes": dataset["notes"],
         },
         "corpus": {

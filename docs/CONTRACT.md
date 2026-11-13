@@ -1,5 +1,9 @@
 # ProfitOps AI v1 契约
 
+## 多店铺经营智能增量契约
+
+订单、广告和库存 CSV 接口 `/api/data/{orders|ads|inventory}/preview|commit` 采用原始 UTF-8 CSV 请求体；预览可读，提交仅 approver。`GET /api/data/template/{kind}` 返回表头。批次与错误行沿用 `/api/imports`；来源行写入新增 `source_records`，按租户、类型、自然键唯一，关联 `import_batches`。`GET /api/inventory` 返回可配置的确定性店铺/SKU 风险与补货量；`POST /api/weekly-reports` 接受已完成 UTC 自然周的周日 `end_date`、可选 `store_id`、`inventory_policy` 与 `use_llm`，`GET /api/weekly-reports` 和 `GET /api/weekly-reports/{id}` 按租户读取已保存快照。周报金额仍为整数美分，复用 `fetch_metrics` / `build_report` 八项利润桥并保留来源批次与行号。LLM 仅产出引用已知 evidence ID 的文字，数据不足、引用无效或 Provider 失败时返回确定性降级，不执行真实采购/广告/调价。详细字段、算法边界、迁移与 CSV 样例见 [INTELLIGENCE.md](INTELLIGENCE.md)。
+
 ## 领域与口径
 
 一个店铺拥有订单和每日经营记录，订单引用 SKU；每日经营记录对 (store_id, product_id, date) 唯一，包含广告费用、期末库存、在途库存、完整性标志。订单中的采购、履约、平台与其他成本均为该订单的独立可变成本，不包含广告；退款为负向收入，采购成本已经反映退货残值，不再对退款重复扣成本。所有演示金额为 USD 整数美分，无汇率和税项。
@@ -18,10 +22,11 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 - tenants、users：租户与登录用户；用户以 `(tenant_id, email)` 唯一，密码只保存 scrypt 哈希，角色由服务端数据库决定。
 - stores、products、orders、daily_operations：业务事实；均带 `tenant_id`，查询必须先按租户过滤；daily_operations 为每日覆盖依据。
 - analyses：请求范围、状态、完整的 JSON 工作流快照、结果、步骤、错误、请求 ID、`tenant_id`、任务执行字段（`attempts`、`max_attempts`、`next_run_at`、`lease_until`、`worker_id`）；idempotency_key 按 `(tenant_id, idempotency_key)` 唯一且绑定请求内容与创建者，存储列宽 200，客户端键最多 100 字符，非 demo 租户在存储时加租户前缀，因此同一客户端键在不同租户互不占用。`result` 包含确定性 `metrics`、`findings`、`llm` 运行元数据和 `engine`。
-- recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。`body.llm` 保存本次 LLM 运行结果（成功时含结构化输出），`body.knowledge` 保存检索片段及 `cited` 标记。
+- recommendations：每次分析至多一条建议；证据、影响区间、假设、风险、模拟动作参数、审批信息。`body.llm` 保存本次 LLM 运行结果（成功时含结构化输出），`body.knowledge` 保存检索片段及 `cited` 标记。批准时写入 `body.approval` 版本快照：`version`、`captured_at`、`scope`、`ledger_hash`、`action_hash`、动作参数副本、当前/上一周期合计、数据质量与 SKU 明细。快照是审批约束，不是可重算的展示字段。
 - knowledge_documents、knowledge_chunks：运营知识文档与 Markdown 分段；文档带 `tenant_id`，正文 SHA-256 用于创建幂等，文档软删除，片段保存 embedding 与模型名；`heading` 最长 200 字符。`knowledge_documents(tenant_id, content_sha256)` 上有部分唯一索引（仅 `active=true`），保证同一租户同一正文最多一个 active 文档；不同租户可以各自拥有相同正文，历史软删除行可保留任意数量。启动时对旧库先按 `(tenant_id, created_at, id)` 保留最早 active 行、其余软删除，再创建索引；不删除任何行。
 - executions：recommendation_id 唯一，idempotency_key 按 `(tenant_id, idempotency_key)` 唯一（列宽 200，客户端键最多 100 字符）；带 `tenant_id`，模拟结果和错误诊断。
 - audit_logs：`tenant_id`、操作人、动作、对象、时间、请求 ID、结果与详情；列表按租户过滤。
+- import_batches：每次成功提交的 CSV 批次，记录 `kind`（orders / operations）、文件名、正文 SHA-256、写入/跳过行数、金额合计、操作人与请求 ID。批次只追加，不修改订单或每日经营事实。
 - schema_versions、seed_versions：可重复初始化版本记录。
 
 ## 身份与状态机
@@ -31,6 +36,8 @@ UTC 日期区间为闭区间。当前区间长度 N，上一周期紧邻、同�
 建议：proposed → pending_approval → approved → executing → executed；pending_approval → rejected；executing → execution_failed。审批结果不可反转。只有 approver 可以审批、拒绝和模拟执行。analyst 可发起分析、读指标和审计。
 
 条件 UPDATE 抢占审批或执行；执行在单个数据库事务中将 approved 变为 executing、插入唯一执行记录、模拟修改并存结果，最终 executed / execution_failed。等待竞争事务后重复调用返回同一 execution 且 replayed=true，不产生第二条模拟变更。不同建议不能复用执行 Idempotency-Key。拒绝的请求和失败同样审计。
+
+审批与执行之间的版本保护：批准前重新读取当前范围账本，若数据质量不完整或当前证据与建议中的证据不一致，返回 409 `recommendation_stale`，建议保持 `pending_approval`。批准成功后，账本原始行指纹和动作参数指纹写入 `body.approval`。执行时先完成 approved→executing 的条件抢占，再核对快照：快照缺失返回 409 `approval_snapshot_missing`，动作指纹不一致返回 409 `action_changed`，审批后订单或每日经营记录任意变化返回 409 `approval_stale`。失败时整个事务回滚，不创建 Execution，建议保持 `approved`，需重新分析并审批。已存在 Execution 的幂等重放优先返回原记录，不因之后账本变化而失败。审计动作分别为 `recommendation.stale`、`execution.stale`、`execution.action_changed`。
 
 LangGraph 分析图（异常路径）：receive_request → get_sales_metrics → calculate_profit → analyze_profit_drivers → verify_evidence → retrieve_knowledge → llm_root_cause_analysis → verify_llm_evidence → create_recommendation → wait_for_approval → END。无异常或数据不完整时从 verify_evidence 直接进入 wait_for_approval，不检索知识库，也不调用 LLM。每个节点将状态快照提交到数据库；等待为持久化业务暂停点。审批后从数据库加载同一快照进入 LangGraph 执行图：get_approval_status → simulate_execute_approved_action → save_execution_result。不使用仅内存 checkpoint 冒充可恢复性。读快照不重跑已经完成的建议生成。节点超时预算在每次步骤前后检查，失败记录 failed/timeout；不强行终止 Python 阻塞线程。LLM 节点使用 Provider 自身的 `LLM_TIMEOUT` 与有界重试，不叠加步骤超时。分析是持久化任务：POST 先写入 queued 行，worker 用条件 UPDATE 抢占（status=queued → running）并写入 attempts、worker_id 和 lease_until；工作流执行期间心跳续租。`PROFITOPS_ANALYSIS_WORKER_ENABLED=false` 同时关闭 API 进程内 worker 线程和 POST/retry 的 BackgroundTasks，任务保持 queued，直到 `python -m app.worker`（或 `--once`）在同一个数据库上消费；两种执行路径共用同一套条件 UPDATE、租约与重试规则。租约过期的 running 行在启动或轮询时重新排队（lease_expired），不会因为进程重启永久卡住；已用完 `max_attempts` 的过期租约行保持 failed 并标记 `dead_letter`，不会无限重新入队。worker 的每次写入——创建建议、持久化步骤/结果（`write_job`）、写审计前的所有权确认（`assert_owned`）以及心跳续租（`LeaseHeartbeat`）——都在同一条条件 UPDATE 中校验 `status='running'`、`worker_id`、`attempts` 和 `lease_until > 当前时间`。时间比较在数据库侧执行（SQLite 返回无时区值，Python 侧比较会出错或与存储值不一致）；`lease_until == now` 视为已到期，与恢复扫描的 `lease_until <= now` 一致。租约到期后，即使尚未被新 worker 接管，旧 worker 也不能创建建议、持久化新结果或延长租约；心跳发现租约丢失后停止。已被回收的旧 worker 写入会回滚并停止工作流。`workflow_failed`、`step_timeout`、`database_locked`、`worker_crashed` 按指数退避重试，达到 `max_attempts` 后保持 failed 并标记 `dead_letter`；`source_failed`、`llm_failed` 等确定性失败不自动重试。失败行可由认证用户调用 retry 接口手动重新排队。`run_analysis` 已写入 failed 但进程在 `finalize_job` 之前退出时，该行仍保留 `worker_id` 与过期租约；启动或轮询的恢复扫描会用同一重试/死信规则处理这些行，并在错误详情标记 `recovered_before_finalize=true`，不会永久卡在 failed。
 
@@ -73,6 +80,25 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 
 `backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 四个 `effect=read|pure`、`policy=safe` 的工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
 
+## 数据导入与对账（CSV）
+
+导入是经营事实的唯一人工入口：`orders` 写订单明细，`operations` 写每日经营记录。请求体是原始 CSV（`Content-Type: text/csv`）；文件名优先使用 `?filename=` 查询参数（URL 编码，支持中文），也接受百分号编码的 `X-Filename` 头作为回退，缺省为 `upload.csv`。文件必须是 UTF-8（接受 BOM），单次不超过 5 MB、5000 行、100 个错误明细。
+
+列定义固定且区分大小写不敏感：
+
+- orders：`order_id,store_id,sku,date,quantity,sales,discounts,refunds,cogs,fulfillment,platform_fees,other_costs`
+- operations：`store_id,sku,date,ad_spend,inventory,inbound_inventory,complete`
+
+金额列为十进制美元字符串，最多两位小数，服务端用 `Decimal` 精确转换为整数美分，不接受浮点、科学计数法或超过两位的小数；单值绝对值上限 1000 亿美元分。`date` 为 `YYYY-MM-DD`，范围 2000-01-01 至今天（UTC）。`quantity` 为 1–1,000,000 的整数；库存为非负整数；`complete` 接受 `true/false` 或 `1/0`。订单额外要求 `discounts + refunds <= sales`。
+
+自然键为 orders 的 `order_id` 与 operations 的 `(store_id, product_id, date)`。同一文件内重复自然键直接拒绝；与账本已存在的行逐字段比较，完全一致则跳过（重复上传是 no-op，不产生第二条记录），任一字段不同则作为冲突拒绝。导入不覆盖、不删除已有事实，冲突必须由人处理。`store_id` 必须属于当前租户，`sku` 必须已存在于主数据；导入不隐式创建店铺或 SKU。
+
+整批原子：任一行未通过校验，整批不写入任何业务行，返回 409 `import_rejected` 与逐行问题摘要。校验项包括表头完整、未知店铺/SKU、日期范围、金额格式与范围、折扣退款上限、整数范围、文件内重复与账本冲突。预览与提交使用同一套校验函数，预览不写库。
+
+对账分两层：先在内存中按整数美分逐行加总销售额、净销售额、各项成本与贡献利润；写入并 flush 后再按主键分批回读 `count` 与 `sum`，与文件合计逐项比较。回读不一致时抛出 `import_reconciliation_failed` 并回滚整个事务，不会留下半批数据。成功响应包含 `checks`（`parse_complete`、`money_exact`、`row_balance`、`duplicate_policy`、`db_roundtrip`）及每项结果。
+
+权限：analyst 与 approver 都可以预览；只有 approver 可以提交。成功与拒绝分别写审计 `import.committed`、`import.rejected`，不记录完整文件内容，只记录文件名、SHA-256、行数与金额合计。批次列表按租户隔离，跨租户返回 404。
+
 ## API
 
 全部 JSON；`/health` 与 `/metrics` 无认证，`/api/demo` 可匿名读取 demo 租户概览（带 Bearer 时返回该租户自己的店铺与数据范围），其余 API 需 Bearer。`POST /api/auth/login` 返回 `{access_token,token_type,expires_in,user}`；`GET /api/auth/me` 返回当前用户、角色与租户。金额字段为整数美分，currency=USD。错误：`{error:{code,message,details},request_id}`；响应含 X-Request-ID。登录、创建分析和其他 API 分别按 IP + token 哈希限流，超限返回 429 `rate_limited` 与 `Retry-After`；`/health`、`/metrics` 不限流。限流身份只接受 demo token 或签名有效的 JWT；缺失、伪造或过期 Bearer 共用匿名桶，轮换无效 token 不能绕过基础限额。TokenBucketLimiter 的 bucket 数量是硬上限，达到上限时先清理一小时未更新的桶，再按最旧时间淘汰，唯一 key 突发不会突破 `max_buckets`。
@@ -87,14 +113,19 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 - GET /api/analyses、GET /api/analyses/{id}：执行步骤、工具摘要、证据、错误、`result.engine`、`result.llm`、`result.knowledge`，以及 `attempts`、`max_attempts`、`next_run_at`；原生路径的 `result.llm` 另含 `native_tools`、`termination_reason`、`rounds` 和 `tool_calls`。检索失败时保留 `result.knowledge_error`，不阻断确定性分析。GET 列表支持 `status` 过滤。
 - POST /api/analyses/{id}/retry：仅 failed 分析可重试；用单条条件 UPDATE（`status='failed'`）原子地重置为 queued、清除租约并增加一次允许尝试，返回 202。并发重试或重试与 worker 交错时只有一个请求成功，其余返回 409 `analysis_not_retryable`；running/completed 不会被改回 queued。
 - GET /api/tools：工具输入输出 JSON Schema、权限和副作用分类。
+- GET /api/imports/template/{orders|operations}：下载 UTF-8 CSV 模板。
+- GET /api/imports：当前租户的导入批次，最新在前，`limit` 1..200，默认 50。
+- GET /api/imports/{id}：单个批次；跨租户按不存在处理（404）。
+- POST /api/imports/{orders|operations}/preview：原始 CSV，返回逐行问题、合计与校验项；不写业务表。
+- POST /api/imports/{orders|operations}：仅 approver；校验通过后单事务写入并回读对账，返回批次 ID、`status=committed|noop` 与 `db_roundtrip` 结果；任一拒绝行返回 409 且不写入。
 - GET /api/knowledge/documents：当前 active 知识文档及 chunk 数。
 - POST /api/knowledge/documents：仅 approver；`{title,source,version,effective_date?,content,metadata?}`；新建返回 201，相同正文幂等返回已有文档 200（`created=false`），并发重复上传也返回同一文档；若当前 embedding model 或向量维度不同则重嵌入并返回 `reindexed=true`。
 - POST /api/knowledge/documents/{id}/reindex：仅 approver；用当前 embedding provider 重嵌入该文档现有 chunk，保留文档 ID、source、version、effective_date、active 与 chunk ID/正文；返回 200，已是最新模型与维度时 `reindexed=false`；文档不存在或已停用返回 404。
 - DELETE /api/knowledge/documents/{id}：仅 approver；软删除，保留片段与审计。
 - POST /api/knowledge/search：`{query,top_k?}`；返回 `{query,hits,no_answer,embedding_model,retrieval_ms}`，`hits[{chunk_id,document_id,title,source,version,heading,content,score,rank}]`。
 - GET /api/recommendations、GET /api/recommendations/{id}：建议及 simulation 动作与执行记录；`body.knowledge` 保存本次检索片段和 LLM 是否引用（`cited`）。
-- POST /api/recommendations/{id}/approve 或 /reject：`{reason}`，仅 pending_approval；409 表示状态冲突。
-- POST /api/recommendations/{id}/execute：必须 Idempotency-Key；批准后执行，仅模拟。
+- POST /api/recommendations/{id}/approve 或 /reject：`{reason}`，仅 pending_approval；409 表示状态冲突。批准时重新校验证据并写入 `body.approval`，分析后账本变化返回 409 `recommendation_stale`。
+- POST /api/recommendations/{id}/execute：必须 Idempotency-Key；批准后执行，仅模拟。执行前校验审批快照，错误码为 `approval_snapshot_missing`、`action_changed`、`approval_stale`；已知执行记录的重放仍返回同一 execution。
 - GET /api/audit-logs：最新在前，limit 1..200；支持 object_id 与 request_id 精确过滤（request_id 最长 64 字符）。
 - GET /api/ops/summary：仅 approver；`window_hours` 1..168，默认 24。按 JWT 租户聚合持久化的 `analyses`、`recommendations`、`executions` 和 `audit_logs`：任务状态（queued/running/waiting_approval/completed/insufficient_data/failed/approved/rejected/executed/execution_failed，`jobs.by_status` 始终包含全部状态且各项之和等于 `jobs.total`）、死信、重试、错误码、LLM 状态、工具调用/失败/轮次、token 用量、按版本化单价估算的成本、审批/执行当前状态和最近失败任务。任务总数、状态分布和重试次数由 SQL 聚合；失败明细与 LLM 审计按必要字段分批读取，最近失败最多 10 条，不加载窗口内全部 Analysis ORM 对象，也不静默截断统计窗口。LLM 历史以持久化审计事件 `analysis.llm_succeeded`、`analysis.llm_fallback`、`analysis.llm_failed` 为准；同一分析没有窗口内 LLM 审计时才回退读取 `result.llm`，避免同一运行从两处重复计数。`verify_llm_evidence` 对同一次成功调用随后写入的降级/失败事件按调用特征合并为一次，保留最终状态和实际 Usage。`not_requested`、`configured=false`（含 `reason=not_configured`）以及无模型调用的记录计入 `llm.runs`/`llm.no_model_call_runs`，但不进入 token 和成本分母。`llm.model_calls` 是逻辑模型调用数：native Function Calling 每轮 Provider 请求计一次，非 native 每次逻辑调用计一次；`llm.provider_requests` 是包含 Provider 内部重试的实际 HTTP 请求数，`llm.provider_retries` 为实际请求数减逻辑调用数。成本按每次逻辑调用（native 为每轮）的 Usage 独立估算；native 多轮只有各轮都有完整 Usage 且模型有版本化单价时才给出 `complete`，任一轮缺失返回 `partial` 且 `amount_usd=null`，不得用一个成功轮次的 Usage 代表整次运行。`cost.priced_calls`/`unpriced_calls` 按逻辑调用计数，`priced_runs`/`unpriced_runs` 按运行计数（任一轮缺失则该运行未定价）；已知的可定价小计只放在独立字段 `known_subtotal_usd`，不得冒充总额。无实际调用时返回 `no_data`。不返回原始提示词、工具参数或 API Key；进程内 Prometheus 指标不作为持久历史。analyst 返回 403，跨租户记录不可见。
 

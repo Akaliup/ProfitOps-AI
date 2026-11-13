@@ -1,0 +1,3 @@
+store_id,date,sku,campaign_id,campaign_name,ad_spend,attributed_sales,attributed_orders,clicks,impressions
+us-store,2020-01-08,TRAVEL-BAG-01,DEMO-ADS-A,Search,5.01,35.00,1,40,1000
+us-store,2020-01-08,TRAVEL-BAG-01,DEMO-ADS-B,Retargeting,2.00,10.00,1,20,500

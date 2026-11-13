@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 
@@ -31,7 +31,12 @@ def add_acme_tenant(client):
         session.add(Store(id="acme-store", tenant_id=ACME_TENANT, name="Acme Store", marketplace="Acme"))
         session.add(Product(id="acme-product", tenant_id=ACME_TENANT, sku="ACME-SKU-01", name="Acme Product"))
         session.flush()
-        for day in (PERIOD_START, PERIOD_END):
+        for day in (
+            PERIOD_START - timedelta(days=2),
+            PERIOD_START - timedelta(days=1),
+            PERIOD_START,
+            PERIOD_END,
+        ):
             session.add(Order(
                 id=f"acme-order-{day}", tenant_id=ACME_TENANT, store_id="acme-store",
                 product_id="acme-product", date=day, quantity=1, sales=1000,
@@ -45,7 +50,7 @@ def add_acme_tenant(client):
 
 
 def add_acme_approved_recommendation(client):
-    """Insert a deterministic approved recommendation without running rules."""
+    """Insert a complete-ledger recommendation and approve it through the API."""
     action = {
         "type": "create_review_task", "simulation": True,
         "product_id": "acme-product", "sku": "ACME-SKU-01",
@@ -61,10 +66,18 @@ def add_acme_approved_recommendation(client):
         ))
         session.add(Recommendation(
             id="acme-execution-recommendation", tenant_id=ACME_TENANT,
-            analysis_id="acme-execution-analysis", status="approved",
-            title="Acme 模拟执行", body={}, action=action,
-            approved_by="acme-approver",
+            analysis_id="acme-execution-analysis", status="pending_approval",
+            title="Acme 模拟执行", body={
+                "period": {"start_date": str(PERIOD_START), "end_date": str(PERIOD_END)},
+                "store_id": "acme-store",
+            }, action=action,
         ))
+    token = login(client, ACME_APPROVER_EMAIL, ACME_APPROVER_PASSWORD, ACME_TENANT)
+    approved = client.post(
+        "/api/recommendations/acme-execution-recommendation/approve",
+        json={"reason": "Acme 集成审批"}, headers=bearer(token),
+    )
+    assert approved.status_code == 200, approved.text
     return "acme-execution-recommendation"
 
 
@@ -121,7 +134,7 @@ def test_tenant_metrics_and_store_isolation(client):
     assert report.status_code == 200, report.text
     body = report.json()
     assert [row["sku"] for row in body["sku_breakdown"]] == ["ACME-SKU-01"]
-    assert body["data_quality"]["observed_records"] == 2
+    assert body["data_quality"]["observed_records"] == 4
     assert body["current"]["sales"] == 2000
 
     demo_token = login(client, "analyst@demo.local", "demo-analyst")
@@ -362,6 +375,9 @@ def test_demo_endpoint_scopes_stores_for_authenticated_tenant(client):
     acme_token = login(client, ACME_EMAIL, ACME_PASSWORD, ACME_TENANT)
     body = client.get("/api/demo", headers=bearer(acme_token)).json()
     assert [store["id"] for store in body["stores"]] == ["acme-store"]
-    assert body["data_range"] == {"start_date": str(PERIOD_START), "end_date": str(PERIOD_END)}
+    assert body["data_range"] == {
+        "start_date": str(PERIOD_START - timedelta(days=2)),
+        "end_date": str(PERIOD_END),
+    }
     demo_body = client.get("/api/demo").json()
     assert {store["id"] for store in demo_body["stores"]} == {"us-store", "eu-store"}

@@ -1,9 +1,13 @@
 class DomainError(Exception):
-    def __init__(self, code: str, message: str, status: int = 400, details=None):
+    def __init__(
+        self, code: str, message: str, status: int = 400, details=None,
+        audit_action: str | None = None,
+    ):
         self.code = code
         self.message = message
         self.status = status
         self.details = details
+        self.audit_action = audit_action
         super().__init__(message)
 
 

@@ -3,7 +3,7 @@ from threading import Barrier
 
 from sqlalchemy import func, select
 
-from app.models import AuditLog, Execution, Recommendation
+from app.models import AuditLog, Execution, Order, Recommendation
 
 
 def test_auth_and_unapproved_execution(client, analyst, approver, recommendation):
@@ -18,7 +18,14 @@ def test_auth_and_unapproved_execution(client, analyst, approver, recommendation
 
 def test_approve_execute_replay_and_audit(client, analyst, approver, recommendation):
     path = f"/api/recommendations/{recommendation}"
-    assert client.post(f"{path}/approve", json={"reason": "已复核证据，仅批准模拟"}, headers=approver).status_code == 200
+    approved = client.post(f"{path}/approve", json={"reason": "已复核证据，仅批准模拟"}, headers=approver)
+    assert approved.status_code == 200
+    snapshot = approved.json()["body"]["approval"]
+    assert snapshot["version"] == 1
+    assert snapshot["snapshot_type"] == "ledger_and_action"
+    assert snapshot["action"] == approved.json()["action"]
+    assert len(snapshot["ledger_hash"]) == len(snapshot["action_hash"]) == 64
+    assert snapshot["scope"]["period"] == approved.json()["body"]["period"]
     assert client.post(f"{path}/approve", json={"reason": "重复审批"}, headers=approver).status_code == 409
     assert client.post(f"{path}/reject", json={"reason": "不可逆转审批"}, headers=approver).status_code == 409
     execution_headers = {**approver, "Idempotency-Key": "execution-test", "X-Request-ID": "test-exec-request"}
@@ -38,6 +45,71 @@ def test_approve_execute_replay_and_audit(client, analyst, approver, recommendat
     assert any(row["request_id"] == "test-exec-request" and row["action"] == "execution.executed" for row in logs)
     with client.app.state.factory() as session:
         assert session.scalar(select(func.count()).select_from(Execution)) == 1
+
+
+def test_execution_rejects_changed_ledger_after_approval(client, approver, analyst, recommendation):
+    path = f"/api/recommendations/{recommendation}"
+    approved = client.post(f"{path}/approve", json={"reason": "批准后修改账本"}, headers=approver)
+    assert approved.status_code == 200
+    with client.app.state.factory.begin() as session:
+        row = session.scalar(select(Order).where(Order.tenant_id == "demo").order_by(Order.date.desc()))
+        row.sales += 100
+    response = client.post(f"{path}/execute", headers={**approver, "Idempotency-Key": "stale-ledger"})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "approval_stale"
+    detail = client.get(path, headers=analyst).json()
+    assert detail["status"] == "approved"
+    with client.app.state.factory() as session:
+        assert session.scalar(select(func.count()).select_from(Execution)) == 0
+    logs = client.get(f"/api/audit-logs?object_id={recommendation}", headers=analyst).json()["items"]
+    stale = next(row for row in logs if row["action"] == "execution.stale")
+    assert stale["outcome"] == "denied"
+    assert stale["details"]["code"] == "approval_stale"
+
+
+def test_execution_rejects_changed_action_after_approval(client, approver, analyst, recommendation):
+    path = f"/api/recommendations/{recommendation}"
+    assert client.post(f"{path}/approve", json={"reason": "批准后篡改动作"}, headers=approver).status_code == 200
+    with client.app.state.factory.begin() as session:
+        row = session.get(Recommendation, recommendation)
+        row.action = {**row.action, "baseline_daily_budget": row.action["baseline_daily_budget"] + 1}
+    response = client.post(f"{path}/execute", headers={**approver, "Idempotency-Key": "changed-action"})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "action_changed"
+    assert client.get(path, headers=analyst).json()["status"] == "approved"
+    with client.app.state.factory() as session:
+        assert session.scalar(select(func.count()).select_from(Execution)) == 0
+    logs = client.get(f"/api/audit-logs?object_id={recommendation}", headers=analyst).json()["items"]
+    assert any(row["action"] == "execution.action_changed" for row in logs)
+
+
+def test_approval_rejects_evidence_changed_after_analysis(client, approver, analyst, recommendation):
+    path = f"/api/recommendations/{recommendation}"
+    with client.app.state.factory.begin() as session:
+        row = session.scalar(select(Order).where(Order.tenant_id == "demo").order_by(Order.date.desc()))
+        row.sales += 100
+    response = client.post(f"{path}/approve", json={"reason": "账本已变化"}, headers=approver)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recommendation_stale"
+    assert client.get(path, headers=analyst).json()["status"] == "pending_approval"
+    logs = client.get(f"/api/audit-logs?object_id={recommendation}", headers=analyst).json()["items"]
+    assert any(row["action"] == "recommendation.stale" for row in logs)
+
+
+def test_execution_requires_approval_snapshot(client, approver, recommendation):
+    with client.app.state.factory.begin() as session:
+        row = session.get(Recommendation, recommendation)
+        row.status = "approved"
+        row.approved_by = "demo-approver"
+    response = client.post(
+        f"/api/recommendations/{recommendation}/execute",
+        headers={**approver, "Idempotency-Key": "missing-snapshot"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "approval_snapshot_missing"
+    with client.app.state.factory() as session:
+        assert session.scalar(select(func.count()).select_from(Execution)) == 0
+        assert session.get(Recommendation, recommendation).status == "approved"
 
 
 def test_rejected_terminal(client, approver, analyst, recommendation):

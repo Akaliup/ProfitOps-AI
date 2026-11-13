@@ -204,8 +204,26 @@ def build_registry(embeddings=None, settings=None):
         context.knowledge_hits.extend(hit.model_dump(mode="json") for hit in result.hits)
         return result
 
+    from .weekly import WeeklyRequest, weekly_data
+    from .inventory import inventory_report
+    from .schemas import StrictModel
+
+    class IntelligenceResult(StrictModel):
+        body: dict
+
+    def read_weekly(payload, context):
+        with context.factory() as session:
+            return IntelligenceResult(body=weekly_data(session, context.actor.tenant_id, payload))
+
+    def read_inventory(payload, context):
+        from .models import utcnow
+        with context.factory() as session:
+            return IntelligenceResult(body=inventory_report(session, context.actor.tenant_id, payload.end_date or utcnow().date(), payload.store_id, payload.inventory_policy))
+
     registry = ToolRegistry()
     specs = [
+        ToolSpec(name="get_weekly_intelligence", description="只读计算多店铺周报 不调用模型 不保存", input_model=WeeklyRequest, output_model=IntelligenceResult, roles=("analyst", "approver"), effect="read", policy="safe", handler=read_weekly),
+        ToolSpec(name="get_inventory_risks", description="只读库存风险与确定性补货量", input_model=WeeklyRequest, output_model=IntelligenceResult, roles=("analyst", "approver"), effect="read", policy="safe", handler=read_inventory),
         ToolSpec(name="get_sales_metrics", description="读取订单与每日经营记录，报告数据覆盖", input_model=MetricsInput, output_model=RawMetrics, roles=("analyst", "approver"), effect="read", policy="safe", handler=get_metrics),
         ToolSpec(name="calculate_profit", description="按整数美分计算利润、环比与贡献桥", input_model=CalculateInput, output_model=MetricsReport, roles=("analyst", "approver"), effect="pure", policy="safe", handler=lambda p, c: build_report(p.metrics)),
         ToolSpec(name="analyze_profit_drivers", description="识别利润异常及可追溯会计贡献项", input_model=DriversInput, output_model=DriverReport, roles=("analyst", "approver"), effect="pure", policy="safe", handler=lambda p, c: analyze_drivers(p.report)),

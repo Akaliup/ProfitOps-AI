@@ -64,7 +64,19 @@ def tool_data(registry, name, arguments, context):
     result = registry.invoke(name, arguments, context)
     if not result.ok:
         error = result.error
-        raise DomainError(error.code, error.message, 409 if error.code in {"not_approved", "idempotency_conflict"} else 500, error.details)
+        stale_codes = {
+            "approval_stale", "approval_snapshot_missing", "approval_scope_invalid",
+        }
+        status = 409 if error.code in {"not_approved", "idempotency_conflict", *stale_codes, "action_changed"} else 500
+        audit_action = {
+            "action_changed": "execution.action_changed",
+            "approval_stale": "execution.stale",
+            "approval_snapshot_missing": "execution.stale",
+            "approval_scope_invalid": "execution.stale",
+        }.get(error.code)
+        raise DomainError(
+            error.code, error.message, status, error.details, audit_action=audit_action,
+        )
     return result.data
 
 

@@ -1,4 +1,4 @@
-import type { Analysis, Audit, Demo, Execution, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, ImportSummary, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public requestId: string, public status: number, public payload?: unknown) { super(message) }
@@ -16,6 +16,22 @@ export async function request<T>(path: string, token?: string, options: RequestI
     throw new ApiError(data?.error?.message ?? '服务暂时不可用', data?.error?.code ?? 'api_error', data?.request_id ?? response.headers.get('X-Request-ID') ?? '', response.status, data)
   }
   return data as T
+}
+
+async function csvRequest(path: string, token: string, body: string, filename: string, mapping = ''): Promise<ImportSummary> {
+  const headers = new Headers({ Authorization: `Bearer ${token}`, 'Content-Type': 'text/csv; charset=utf-8', 'X-Filename': filename })
+  let response: Response
+  const url = `${path}?filename=${encodeURIComponent(filename)}${mapping ? `&mapping=${encodeURIComponent(mapping)}` : ''}`
+  try { response = await fetch(url, { method: 'POST', headers, body }) }
+  catch { throw new ApiError('无法连接服务，请确认后端已启动', 'network_error', '', 0) }
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ApiError(
+      data?.error?.message ?? '导入失败', data?.error?.code ?? 'api_error',
+      data?.request_id ?? response.headers.get('X-Request-ID') ?? '', response.status, data,
+    )
+  }
+  return data as ImportSummary
 }
 
 export function scopeBody(demo: Demo, scope: Scope): Record<string, string> {
@@ -43,4 +59,8 @@ export const api = {
   knowledgeSearch: (token: string, query: string) => request<KnowledgeSearch>('/api/knowledge/search', token, { method: 'POST', body: JSON.stringify({ query, top_k: 5 }) }),
   createKnowledgeDocument: (token: string, payload: KnowledgeDocumentInput) => request<KnowledgeDocument>('/api/knowledge/documents', token, { method: 'POST', body: JSON.stringify(payload) }),
   deleteKnowledgeDocument: (token: string, id: string) => request<KnowledgeDocument>(`/api/knowledge/documents/${id}`, token, { method: 'DELETE' }),
+  imports: (token: string) => request<{ items: ImportSummary[] }>('/api/imports?limit=50', token),
+  previewImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}/preview` : `/api/data/${kind}/preview`, token, text, filename, mapping),
+  commitImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}` : `/api/data/${kind}/commit`, token, text, filename, mapping),
+  importTemplateUrl: (kind: 'orders' | 'operations' | 'ads' | 'inventory') => `/api/data/template/${kind}`,
 }
