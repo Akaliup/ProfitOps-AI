@@ -381,3 +381,23 @@ def test_demo_endpoint_scopes_stores_for_authenticated_tenant(client):
     }
     demo_body = client.get("/api/demo").json()
     assert {store["id"] for store in demo_body["stores"]} == {"us-store", "eu-store"}
+
+
+def test_cross_tenant_products_allow_same_sku(client):
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    add_acme_tenant(client)
+    from app.models import Product
+    with client.app.state.factory.begin() as session:
+        session.add(Product(id="acme-travel-bag", tenant_id="acme", sku="TRAVEL-BAG-01", name="Acme Travel Bag"))
+    with client.app.state.factory() as session:
+        demo_product = session.scalar(select(Product).where(Product.tenant_id == "demo", Product.sku == "TRAVEL-BAG-01"))
+        acme_product = session.scalar(select(Product).where(Product.tenant_id == "acme", Product.sku == "TRAVEL-BAG-01"))
+        assert demo_product is not None
+        assert acme_product is not None
+        assert demo_product.id != acme_product.id
+
+    # Same tenant duplicate SKU is rejected
+    with pytest.raises(IntegrityError):
+        with client.app.state.factory.begin() as session:
+            session.add(Product(id="acme-dup-bag", tenant_id="acme", sku="TRAVEL-BAG-01", name="Duplicate Bag"))

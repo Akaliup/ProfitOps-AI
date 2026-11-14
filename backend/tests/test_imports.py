@@ -204,3 +204,36 @@ def test_csv_export_roundtrip_template(client):
     rows = list(csv.reader(io.StringIO(body)))
     assert rows[0] == ORDER_HEADER.split(",")
     assert len(rows) == 2
+
+
+def test_import_adapters_catalog_and_preview(client, approver):
+    catalog = client.get("/api/data/adapters", headers=approver).json()
+    assert len(catalog["items"]) >= 3
+    ids = {item["id"] for item in catalog["items"]}
+    assert {"amazon-orders", "shopify-orders", "amazon-ads"} <= ids
+
+    # Amazon orders
+    amz_csv = "store_id,order-id,purchase-date,sku,quantity,item-price,refund-amount,cogs,currency\nus-store,AMZ-01,2020-01-08,TRAVEL-BAG-01,2,50.00,0.00,10.00,USD\n"
+    res = client.post("/api/data/orders/preview?adapter=amazon-orders", headers=approver, content=amz_csv.encode("utf-8"))
+    assert res.status_code == 200
+    assert res.json()["accepted_rows"] == 1
+
+    # Shopify orders
+    committed = client.post("/api/data/orders/commit?adapter=amazon-orders", headers=approver, content=amz_csv)
+    assert committed.status_code == 200
+    from app.models import ImportBatch
+    with client.app.state.factory() as session:
+        assert session.get(ImportBatch, committed.json()['id']).summary['adapter'] == 'amazon-orders'
+
+    shop_csv = "store_id,Name,Created at,Lineitem sku,Lineitem quantity,Total,Refunded Amount,Cost,Currency\nus-store,#1001,2020-01-08,TRAVEL-BAG-01,2,50.00,0.00,10.00,USD\n"
+    res = client.post("/api/data/orders/preview?adapter=shopify-orders", headers=approver, content=shop_csv.encode("utf-8"))
+    assert res.status_code == 200
+    assert res.json()["accepted_rows"] == 1
+
+    # Invalid adapter
+    bad = client.post("/api/data/orders/preview?adapter=non-existent", headers=approver, content=shop_csv.encode("utf-8"))
+    assert bad.status_code == 422
+
+    # Adapter kind mismatch
+    mismatch = client.post("/api/data/orders/preview?adapter=amazon-ads", headers=approver, content=shop_csv.encode("utf-8"))
+    assert mismatch.status_code == 422

@@ -194,7 +194,7 @@ def test_stamped_true_legacy_database_upgrades_in_place(tmp_path, monkeypatch):
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM schema_versions")).scalar_one() == 1
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0005_weekly_chat"
+            "0006_tenant_scoped_sku"
         )
     assert "import_batches" in inspect(engine).get_table_names()
     engine.dispose()
@@ -260,4 +260,41 @@ def test_legacy_database_with_duplicate_active_documents_soft_deletes_extras(tmp
         assert len(rows) == 2
         assert sum(1 for _, active in rows if active) == 1
         assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+    engine.dispose()
+
+
+def test_alembic_x_argument_url_override(tmp_path):
+    database = tmp_path / "x-arg.db"
+    config = _alembic_config()
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database}")
+    tables = set(inspect(engine).get_table_names())
+    engine.dispose()
+    assert {"tenants", "users", "analyses", "alembic_version"} <= tables
+
+
+def test_legacy_sku_uniqueness_changes_without_losing_children(tmp_path, monkeypatch):
+    database = tmp_path / "sku-legacy.db"
+    engine = _create_legacy_database(database)
+    before = _row_counts(engine)
+    monkeypatch.setenv("PROFITOPS_DATABASE_URL", f"sqlite:///{database}")
+    config = _alembic_config()
+    command.stamp(config, "0001_baseline")
+    command.upgrade(config, "head")
+    assert _row_counts(engine) == before
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('other-product', 'acme', 'SKU-LEGACY', 'Other')"))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('duplicate-product', 'acme', 'SKU-LEGACY', 'Duplicate')"))
+    with pytest.raises(RuntimeError, match="duplicate SKUs"):
+        command.downgrade(config, "0005_weekly_chat")
+    with engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+        assert conn.execute(text("SELECT product_id FROM orders WHERE id='legacy-order'")).scalar_one() == 'legacy-product'
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM products WHERE id='other-product'"))
+    command.downgrade(config, "0005_weekly_chat")
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('other-product', 'acme', 'SKU-LEGACY', 'Other')"))
     engine.dispose()
