@@ -207,3 +207,14 @@ export interface WeeklyIntelligence {
   source_rows: {id: string; batch_id: string; row: number; kind: string}[];
   limitations: string[];
 }
+
+export interface WeeklyChatMessage {
+  id: string; role: 'user' | 'assistant'; content: string;
+  status: 'llm_success' | 'deterministic_fallback' | 'refused' | null;
+  reason: string | null; claims: {explanation: string; evidence_ids: string[]}[];
+  created_at: string;
+}
+export interface WeeklyChatHistory {
+  thread: {id: string; report_id: string; created_at: string} | null;
+  items: WeeklyChatMessage[];
+}

@@ -303,3 +303,32 @@ class WeeklyReport(Base):
     tenant_id: Mapped[str] = mapped_column(String(40), index=True)
     body: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WeeklyChatThread(Base):
+    __tablename__ = "weekly_chat_threads"
+    __table_args__ = (UniqueConstraint("tenant_id", "report_id", name="uq_weekly_chat_thread_report"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    report_id: Mapped[str] = mapped_column(ForeignKey("weekly_reports.id"))
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WeeklyChatMessage(Base):
+    __tablename__ = "weekly_chat_messages"
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_weekly_chat_role"),
+        Index("ix_weekly_chat_time", "tenant_id", "thread_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("weekly_chat_threads.id"))
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(40))
+    reason: Mapped[str | None] = mapped_column(String(80))
+    claims: Mapped[list] = mapped_column(JSON, default=list)
+    trace: Mapped[dict] = mapped_column(JSON, default=dict)
+    request_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

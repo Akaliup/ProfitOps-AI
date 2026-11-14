@@ -1,0 +1,63 @@
+{
+  "source": "synthetic; not a live model transcript",
+  "network_calls": 0,
+  "passed": true,
+  "cases": [
+    {
+      "case_id": "store_profit",
+      "passed": true,
+      "status": "llm_success",
+      "reason": null,
+      "tool_calls": 1
+    },
+    {
+      "case_id": "inventory",
+      "passed": true,
+      "status": "llm_success",
+      "reason": null,
+      "tool_calls": 1
+    },
+    {
+      "case_id": "incomplete",
+      "passed": true,
+      "status": "refused",
+      "reason": "out_of_scope",
+      "tool_calls": 1
+    },
+    {
+      "case_id": "unknown",
+      "passed": true,
+      "status": "deterministic_fallback",
+      "reason": "unknown_evidence",
+      "tool_calls": 1
+    },
+    {
+      "case_id": "invented_number",
+      "passed": true,
+      "status": "deterministic_fallback",
+      "reason": "unverified_number",
+      "tool_calls": 1
+    },
+    {
+      "case_id": "budget",
+      "passed": true,
+      "status": "refused",
+      "reason": "out_of_scope",
+      "tool_calls": 1
+    },
+    {
+      "case_id": "sku_ad",
+      "passed": true,
+      "status": "llm_success",
+      "reason": null,
+      "tool_calls": 1
+    },
+    {
+      "case_id": "no_tool",
+      "passed": true,
+      "status": "deterministic_fallback",
+      "reason": "invalid_llm_output",
+      "tool_calls": 0
+    }
+  ]
+}

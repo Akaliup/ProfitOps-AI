@@ -154,6 +154,20 @@ BGE-M3 阻塞原因是本机 Ollama 未安装该模型，`/v1/embeddings` 返回
 
 2026-11-01 本地运行：4/4 案例通过，`recording_id=synthetic-native-replay-v1`，网络调用 0 次。报告可用 `--report backend/evals/reports/replay-latest.json` 输出。
 
+## 周报追问离线回放（2026-11-14）
+
+`backend/evals/weekly_chat_replay.py` 用合成周报快照和录制工具回合走生产 `run_tool_loop`、`WeeklyChatAnswer`、引用校验与数字后校验。它不调用真实模型、不联网、不读写运行库，不能代表真实模型准确率。
+
+```bash
+.venv/Scripts/python.exe backend/evals/weekly_chat_replay.py
+```
+
+- 8 个场景：分店利润、库存风险、数据不完整拒绝、未知证据、伪造数字、超范围改预算、SKU 广告告警、无工具直接作答。
+- 任一场景的 status、reason 或成功引用集合不符合预期时退出码非 0。
+- 2026-11-14 本地实际运行：8/8 通过，`network_calls=0`；报告写入 `backend/evals/reports/weekly-chat-latest.json`。
+- 同一链路另有 pytest 覆盖未配置模型、租户隔离、消息上限、并发写入、快照不可变、超限证据降级和审计。
+- 审查回归新增官方三份 CSV 的双店快照（不传 `store_id`）：校验完整工具载荷含不可信数据标记低于 16384 字节，Fake API 追问成功且保存快照不变；库存整数禁止伪造美元小数，已知货币字段仍可换算。独立写库测试验证模型阶段无写锁；12 个并发模型结果验证保存阶段仅接受 10 组问答与审计。
+
 ## Phase 2D：原生 Function Calling 评测（2026-11-01）
 
 本节与第 1–11 节的 Phase 2B 单次 JSON 路径评测**口径分开**。Phase 2B 的结论、运行次数和真实调用次数不因本节改变；本节也不把 Phase 2B 的 22 次真实调用计入工具调用评测。

@@ -1,0 +1,64 @@
+[
+  {
+    "id": "store_profit",
+    "question": "Store profit?",
+    "status": "llm_success",
+    "reason": null,
+    "evidence_ids": [
+      "us-store:store"
+    ]
+  },
+  {
+    "id": "inventory",
+    "question": "Stock risk?",
+    "status": "llm_success",
+    "reason": null,
+    "evidence_ids": [
+      "inventory-demo"
+    ]
+  },
+  {
+    "id": "incomplete",
+    "question": "Complete business conclusion?",
+    "status": "refused",
+    "reason": "out_of_scope",
+    "evidence_ids": []
+  },
+  {
+    "id": "unknown",
+    "question": "Profit?",
+    "status": "deterministic_fallback",
+    "reason": "unknown_evidence",
+    "evidence_ids": []
+  },
+  {
+    "id": "invented_number",
+    "question": "Profit?",
+    "status": "deterministic_fallback",
+    "reason": "unverified_number",
+    "evidence_ids": []
+  },
+  {
+    "id": "budget",
+    "question": "Execute a budget change",
+    "status": "refused",
+    "reason": "out_of_scope",
+    "evidence_ids": []
+  },
+  {
+    "id": "sku_ad",
+    "question": "Ad spend change?",
+    "status": "llm_success",
+    "reason": null,
+    "evidence_ids": [
+      "us-store:sku:TRAVEL-BAG-01"
+    ]
+  },
+  {
+    "id": "no_tool",
+    "question": "Profit?",
+    "status": "deterministic_fallback",
+    "reason": "invalid_llm_output",
+    "evidence_ids": []
+  }
+]
