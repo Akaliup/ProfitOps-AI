@@ -128,7 +128,7 @@ POSIX 环境把 `command` 换成 `.venv/bin/python`，路径使用 `/`。如果�
 - 写/审批工具直接调用返回 `unknown_tool`；
 - 子进程使用 `LLM_PROVIDER=disabled`、`LLM_API_KEY=`，不调用真实模型。
 
-实测：MCP 专项测试 **9 passed**；stdio 检查 `ok=true`，7 个只读工具、净利润 `-570300` 美分、`bridge_verified=true`、SKU 3 行、知识命中 3 条，写/审批工具均为 `unknown_tool`。
+专项测试见 `backend/tests/test_mcp_server.py`，stdio 检查见 `scripts/mcp_check.py`。不要把某一次的通过条数写死在这里。最近一次本地检查确认 7 个只读工具、写/审批工具为 `unknown_tool`；具体通过数以该次命令输出为准。
 
 ## 9. 限制
 

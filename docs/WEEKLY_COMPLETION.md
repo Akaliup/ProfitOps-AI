@@ -42,7 +42,7 @@ $env:PROFITOPS_DATABASE_URL = 'sqlite:///E:/ProfitOps-AI/data/demo-copy.db'
 
 ## 截图与边界
 
-截图来自真实浏览器与独立 SQLite 中的合成样例，不是模型真实分析成功截图。样例上期无销量、观察天数不足，量价或补货结果可能显示数据不足。没有为演示伪造风险或引用。
+截图来自真实浏览器与独立 SQLite 中的合成样例，不是模型真实分析成功截图。订单样例现已包含上一周合成订单，2020-01-12 周报可以展示量价拆解；库存仍可能因观察天数不足显示数据不足。拆解不是已验证的经营因果。没有为演示伪造风险或引用。若截图仍显示上期销量为零时的利润环比，应以重新导入后的页面为准。
 
 ![库存](screenshots/inventory-replenishment.png)
 ![调价](screenshots/pricing-suggestions.png)

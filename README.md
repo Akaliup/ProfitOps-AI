@@ -4,10 +4,10 @@
 
 ### 五分钟本地演示
 
-1. 使用独立演示数据库，运行 `python scripts/dev.py`，打开 `http://127.0.0.1:5180`
+1. 使用独立演示数据库，运行 `python scripts/dev.py --demo-db`，打开 `http://127.0.0.1:5180`。该参数只使用 `data/demo-copy.db`，启动时打印 URL，不会清空或迁移 `data/profitops.db`
 2. 切换审批者身份，在数据导入页依次预览并提交 [订单](docs/examples/intelligence/orders.csv)、[广告](docs/examples/intelligence/ads.csv)、[库存](docs/examples/intelligence/inventory.csv)
 3. 打开经营周报与库存，周期结束日选 `2020-01-12`，生成并保存周报
-4. 查看双店利润、量价拆解、库存和调价建议；样例观察天数不足，部分指标明确显示数据不足
+4. 查看双店利润、量价拆解、库存和调价建议。样例含 2020-01-01 至 2020-01-05 的合成上一周订单，周报给出确定的销量、价格和结构效应；这是合成拆解，不是已验证的经营因果。库存仍可能因观察天数不足显示数据不足
 5. 展开计算证据与导入批次，发送追问；未配置模型时显示确定性降级，不产生假引用
 
 平台风格 CSV 仅做离线字段适配，不连接平台账号。迁移与本轮验证见 [收尾报告](docs/WEEKLY_COMPLETION.md)。
@@ -63,7 +63,9 @@ python scripts/dev.py
 - API 文档：<http://127.0.0.1:8010/docs>
 - 健康检查：<http://127.0.0.1:8010/health>
 
-端口被占用时可指定：`python scripts/dev.py --api-port 8020 --web-port 5190`。依赖已安装时可加 `--skip-install`。数据库位于 `data/profitops.db`；删除它可做全新初始化（会清除审批与审计历史）。
+端口被占用时可指定：`python scripts/dev.py --api-port 8020 --web-port 5190`。依赖已安装时可加 `--skip-install`。
+
+不带 `--demo-db` 时，脚本使用 Settings / `.env` 的 `PROFITOPS_DATABASE_URL`，未配置时写入 `data/profitops.db`。五分钟演示请加上 `--demo-db`，只使用 `data/demo-copy.db`。删除对应数据库文件可做全新初始化（会清除该文件里的审批与审计历史）。脚本不会对运行库执行 Alembic upgrade。
 
 ### 接入 DeepSeek（可选）
 
