@@ -4,6 +4,14 @@
 
 订单、广告和库存 CSV 接口 `/api/data/{orders|ads|inventory}/preview|commit` 采用原始 UTF-8 CSV 请求体；预览可读，提交仅 approver。`GET /api/data/template/{kind}` 返回表头。批次与错误行沿用 `/api/imports`；来源行写入新增 `source_records`，按租户、类型、自然键唯一，关联 `import_batches`。`GET /api/inventory` 返回可配置的确定性店铺/SKU 风险与补货量；`POST /api/weekly-reports` 接受已完成 UTC 自然周的周日 `end_date`、可选 `store_id`、`inventory_policy` 与 `use_llm`，`GET /api/weekly-reports` 和 `GET /api/weekly-reports/{id}` 按租户读取已保存快照。周报金额仍为整数美分，复用 `fetch_metrics` / `build_report` 八项利润桥并保留来源批次与行号。LLM 仅产出引用已知 evidence ID 的文字，数据不足、引用无效或 Provider 失败时返回确定性降级，不执行真实采购/广告/调价。详细字段、算法边界、迁移与 CSV 样例见 [INTELLIGENCE.md](INTELLIGENCE.md)。
 
+## 周报追问（0005）
+
+`GET /api/weekly-reports/{id}/messages` 返回当前租户唯一线程及按时间升序的消息；尚未提问时 `thread=null`、`items=[]`，不自动建线程。`POST /api/weekly-reports/{id}/messages` 只接受 `question`（1–1000 字符，去首尾空白），不信任请求体中的周报、店铺或工具参数。user 与 assistant 消息在同一事务写入；未配置模型、模型失败、引用非法或数字无法核对时仍返回 200，以 `deterministic_fallback` 或 `refused` 明确说明，不把降级伪装成模型成功。周报不存在或跨租户统一返回 404 `report_not_found`；user+assistant 合计超过 20 条返回 422 `weekly_chat_limit`；审计动作 `weekly.chat` 记录线程、消息、状态与原因。
+
+`weekly_chat_threads` 以 `(tenant_id, report_id)` 唯一，`weekly_chat_messages` 仅允许 role 为 `user` / `assistant`，`trace` 不返回前端。已保存 `WeeklyReport.body` 不可变，聊天记录单独持久化。追问只通过只读工具 `get_saved_weekly_report` 读取当前租户的这一份周报，不调用 `weekly_data` 现场重算，也不读取其他周报。读取时可确定性派生 `{store_id}:store` 与 `{store_id}:sku:{sku}` 证据 ID，但不写回历史快照。
+
+成功 claim 的 evidence ID 必须来自本轮完整工具结果；回答中的阿拉伯数字必须能在所引证据中找到，整数美分允许换算为两位小数美元，SKU、日期和证据 ID 等标识符先屏蔽再抽数字。工具结果超过 `LLM_TOOL_RESULT_MAX_BYTES` 时失败并降级，不截断证据或保留残缺引用。该工具不属于全局 `LLM_TOOL_ALLOWLIST`，也不暴露给 MCP；追问路径没有采购、调价、预算或执行工具。
+
 ## 领域与口径
 
 一个店铺拥有订单和每日经营记录，订单引用 SKU；每日经营记录对 (store_id, product_id, date) 唯一，包含广告费用、期末库存、在途库存、完整性标志。订单中的采购、履约、平台与其他成本均为该订单的独立可变成本，不包含广告；退款为负向收入，采购成本已经反映退货残值，不再对退款重复扣成本。所有演示金额为 USD 整数美分，无汇率和税项。

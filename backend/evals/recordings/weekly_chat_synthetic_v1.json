@@ -1,0 +1,193 @@
+{
+  "source": "synthetic, not a live transcript",
+  "snapshot": {
+    "period": {
+      "start_date": "2020-01-06",
+      "end_date": "2020-01-12"
+    },
+    "limitations": [
+      "Partial ledger only"
+    ],
+    "metrics": {
+      "data_quality": {
+        "complete": false
+      },
+      "bridge_verified": true,
+      "current": {
+        "net_profit": 16001
+      },
+      "previous": {
+        "net_profit": 10000
+      },
+      "changes": {
+        "net_profit": {
+          "absolute": 6001
+        }
+      }
+    },
+    "findings": {
+      "conclusion": "Partial ledger"
+    },
+    "stores": [
+      {
+        "store_id": "us-store",
+        "name": "US",
+        "current": {
+          "net_profit": 16001
+        },
+        "previous": {
+          "net_profit": 10000
+        },
+        "profit_delta": 6001,
+        "risk_skus": 1,
+        "data_quality": {
+          "complete": false
+        }
+      }
+    ],
+    "sku_diagnostics": [
+      {
+        "store_id": "us-store",
+        "sku": "TRAVEL-BAG-01",
+        "profit_delta": 6001,
+        "ad_spend_delta": 400,
+        "refund_delta": 0,
+        "ad_growth_alert": true,
+        "bridge": {
+          "sales": 6401,
+          "ad_spend": -400
+        }
+      }
+    ],
+    "inventory": {
+      "items": [
+        {
+          "evidence_id": "inventory-demo",
+          "sku": "TRAVEL-BAG-01",
+          "store_id": "us-store",
+          "risk": "INSUFFICIENT_DATA",
+          "reorder_quantity": null
+        }
+      ]
+    },
+    "analysis": {
+      "status": "not_requested"
+    },
+    "evidence": [
+      {
+        "id": "inventory-demo",
+        "value": {
+          "sku": "TRAVEL-BAG-01",
+          "store_id": "us-store",
+          "risk": "INSUFFICIENT_DATA",
+          "reorder_quantity": null
+        }
+      }
+    ]
+  },
+  "turns": {
+    "store_profit": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"Saved profit is 160.01 USD\", \"claims\": [{\"explanation\": \"Saved profit is 160.01 USD\", \"evidence_ids\": [\"us-store:store\"]}], \"refusal\": null}"
+      }
+    ],
+    "inventory": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"TRAVEL-BAG-01 has insufficient inventory evidence\", \"claims\": [{\"explanation\": \"TRAVEL-BAG-01 has insufficient inventory evidence\", \"evidence_ids\": [\"inventory-demo\"]}], \"refusal\": null}"
+      }
+    ],
+    "incomplete": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"refused\", \"summary\": \"Insufficient ledger coverage\", \"claims\": [], \"refusal\": \"Insufficient ledger coverage\"}"
+      }
+    ],
+    "unknown": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"Saved profit\", \"claims\": [{\"explanation\": \"Saved profit\", \"evidence_ids\": [\"made-up\"]}], \"refusal\": null}"
+      }
+    ],
+    "invented_number": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"Saved profit is 999.99\", \"claims\": [{\"explanation\": \"Saved profit is 999.99\", \"evidence_ids\": [\"us-store:store\"]}], \"refusal\": null}"
+      }
+    ],
+    "budget": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"refused\", \"summary\": \"Execution is outside this report\", \"claims\": [], \"refusal\": \"Execution is outside this report\"}"
+      }
+    ],
+    "sku_ad": [
+      {
+        "tool_calls": [
+          {
+            "id": "read",
+            "name": "get_saved_weekly_report",
+            "arguments": "{\"report_id\": \"synthetic-report\"}"
+          }
+        ]
+      },
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"TRAVEL-BAG-01 ad change is 400\", \"claims\": [{\"explanation\": \"TRAVEL-BAG-01 ad change is 400\", \"evidence_ids\": [\"us-store:sku:TRAVEL-BAG-01\"]}], \"refusal\": null}"
+      }
+    ],
+    "no_tool": [
+      {
+        "content": "{\"status\": \"llm_success\", \"summary\": \"Saved profit is 160.01\", \"claims\": [{\"explanation\": \"Saved profit is 160.01\", \"evidence_ids\": [\"us-store:store\"]}], \"refusal\": null}"
+      }
+    ]
+  }
+}

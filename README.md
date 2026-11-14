@@ -2,7 +2,7 @@
 
 ## Multi-store weekly intelligence
 
-The data import center now accepts tenant-scoped orders, campaign ads and inventory snapshot CSVs with preview, field mapping, atomic batch history and source-row traceability. Weekly Intelligence reuses the existing deterministic profit bridge, calculates separate store/SKU inventory risks and can request an evidence-checked LLM explanation. Missing feed coverage or model configuration is shown explicitly. Start locally with `python scripts/dev.py`; the web app runs at <http://127.0.0.1:5180> and API docs at <http://127.0.0.1:8010/docs>. CSV examples, migration, API and demo instructions: [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md). Follow-up chat and external platform writes are outside this phase.
+The data import center now accepts tenant-scoped orders, campaign ads and inventory snapshot CSVs with preview, field mapping, atomic batch history and source-row traceability. Weekly Intelligence reuses the existing deterministic profit bridge, calculates separate store/SKU inventory risks, can request an evidence-checked LLM explanation, and supports bounded follow-up chat over the saved report snapshot with per-claim citations, numeric verification and explicit deterministic fallback. Missing feed coverage or model configuration stays visible. Start locally with `python scripts/dev.py`; the web app runs at <http://127.0.0.1:5180> and API docs at <http://127.0.0.1:8010/docs>. CSV examples, migrations, APIs and demo instructions: [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md). Chat never recalculates the ledger, reads another report or exposes write tools; external platform writes remain outside this phase.
 
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
 

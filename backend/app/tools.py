@@ -41,6 +41,8 @@ class ToolContext:
     # Worker lease fence for write tools. ``None`` outside a claimed worker run.
     analysis_id: str | None = None
     lease_fence: tuple[str, int] | None = None
+    report_id: str | None = None
+    weekly_evidence: list[dict] = field(default_factory=list)
 
 
 Policy = Literal["safe", "ask", "deny"]
@@ -220,8 +222,10 @@ def build_registry(embeddings=None, settings=None):
         with context.factory() as session:
             return IntelligenceResult(body=inventory_report(session, context.actor.tenant_id, payload.end_date or utcnow().date(), payload.store_id, payload.inventory_policy))
 
+    from .weekly_snapshot import SavedWeeklyReportInput, SavedWeeklyReportOutput, get_saved_weekly_report
     registry = ToolRegistry()
     specs = [
+        ToolSpec(name="get_saved_weekly_report", description="只读当前会话绑定的已保存周报及可引用证据 不重算 不保存", input_model=SavedWeeklyReportInput, output_model=SavedWeeklyReportOutput, roles=("analyst", "approver"), effect="read", policy="safe", handler=get_saved_weekly_report),
         ToolSpec(name="get_weekly_intelligence", description="只读计算多店铺周报 不调用模型 不保存", input_model=WeeklyRequest, output_model=IntelligenceResult, roles=("analyst", "approver"), effect="read", policy="safe", handler=read_weekly),
         ToolSpec(name="get_inventory_risks", description="只读库存风险与确定性补货量", input_model=WeeklyRequest, output_model=IntelligenceResult, roles=("analyst", "approver"), effect="read", policy="safe", handler=read_inventory),
         ToolSpec(name="get_sales_metrics", description="读取订单与每日经营记录，报告数据覆盖", input_model=MetricsInput, output_model=RawMetrics, roles=("analyst", "approver"), effect="read", policy="safe", handler=get_metrics),

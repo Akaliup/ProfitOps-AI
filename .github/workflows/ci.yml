@@ -50,6 +50,9 @@ jobs:
       - name: Run MCP stdio smoke
         run: python scripts/mcp_check.py
 
+      - name: Run offline weekly chat replay
+        run: python backend/evals/weekly_chat_replay.py
+
       - name: Run offline LLM replay evaluation
         env:
           LLM_API_KEY: ""

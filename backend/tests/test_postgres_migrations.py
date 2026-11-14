@@ -160,7 +160,7 @@ def test_postgres_stamped_legacy_database_upgrades_in_place(monkeypatch):
         with engine.connect() as connection:
             assert connection.execute(text("SELECT COUNT(*) FROM schema_versions")).scalar_one() == 1
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-                "0004_intelligence"
+                "0005_weekly_chat"
             )
         assert "import_batches" in inspect(engine).get_table_names()
 

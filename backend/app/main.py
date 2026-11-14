@@ -52,6 +52,7 @@ from .views import analysis_view, audit_view, recommendation_view
 from .worker import AnalysisWorker, process_analysis_job
 from .workflow import recover_interrupted, run_execution_graph
 from .weekly import WeeklyRequest
+from .weekly_chat import WeeklyChatRequest, get_messages, post_message
 
 
 class JsonFormatter(logging.Formatter):
@@ -466,6 +467,15 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
             if row is None:
                 raise DomainError('report_not_found', '周报不存在', 404)
             return dict(row.body, id=row.id)
+
+    @app.get("/api/weekly-reports/{report_id}/messages", tags=["intelligence"])
+    def weekly_messages(report_id: str, actor: Actor = Depends(identity)):
+        return get_messages(factory, actor, report_id)
+
+    @app.post("/api/weekly-reports/{report_id}/messages", tags=["intelligence"])
+    def weekly_ask(report_id: str, body: WeeklyChatRequest, request: Request, actor: Actor = Depends(identity)):
+        return post_message(factory, registry, actor, request.state.request_id, report_id,
+                            body.question, app.state.llm, settings)
 
     @app.get("/api/knowledge/documents", tags=["knowledge"])
     def knowledge_documents(actor: Actor = Depends(identity)):

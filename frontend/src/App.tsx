@@ -632,7 +632,7 @@ export default function App() {
             </>}
           </div>}
 
-          {page === 'weekly' && identity && <IntelligencePage token={identity.token} />}
+          {page === 'weekly' && identity && <IntelligencePage key={identity.token} token={identity.token} stores={demo?.stores ?? []} />}
 
           {page === 'imports' && identity && <ImportPage
             token={identity.token}
