@@ -142,8 +142,22 @@ def verify_answer(answer, evidence):
             "claims": [c.model_dump() for c in answer.claims]}
 
 
+EXECUTION_REFUSAL_PATTERN = re.compile(
+    r"(帮我把预算改成|修改.*预算|调整.*预算|增加.*预算|减少.*预算|"
+    r"下采购单|执行采购|立即下单|帮我下单|提交订单|"
+    r"修改.*价格|执行调价|更改商品价格|调价到|"
+    r"对接真实|连接到?真实|"
+    r"place\s+(a\s+|an\s+)?(purchase\s+)?order|"
+    r"change\s+(the\s+)?(ad\s+)?budget|"
+    r"update\s+(the\s+)?price|"
+    r"execute\s+(the\s+)?(purchase|order)|"
+    r"connect\s+to\s+(amazon|shopify|platform|real))",
+    re.IGNORECASE,
+)
+
+
 def answer_question(factory, registry, actor, request_id, report_id, question, history, provider, settings):
-    if re.search(r"帮我把预算改成|下采购单|执行采购|立即下单|修改广告预算", question):
+    if EXECUTION_REFUSAL_PATTERN.search(question):
         return {"status": "refused", "reason": "out_of_scope", "claims": [], "content": REFUSAL}, {}
     if provider is None or not settings.llm_configured:
         return fallback("not_configured"), {}

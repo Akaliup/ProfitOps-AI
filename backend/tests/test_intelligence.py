@@ -69,6 +69,11 @@ def test_documented_csv_examples_generate_two_store_report(client, approver):
     assert {store['store_id'] for store in body['stores']} == {'us-store', 'eu-store'}
     assert body['metrics']['bridge_verified']
     assert len(body['source_rows']) == 6
+    assert len(body['campaign_diagnostics']) == 2
+    assert sum(c['ad_spend'] for c in body['campaign_diagnostics']) == body['metrics']['current']['ad_spend']
+    assert not body['metrics']['data_quality']['complete']
+    campaign_ids = {c['evidence_id'] for c in body['campaign_diagnostics']}
+    assert campaign_ids <= {e['id'] for e in body['evidence']}
 
 
 @pytest.mark.parametrize('index,value', [(2,'not-date'),(5,'NaN'),(5,'1.001'),(5,'-1.00'),(3,'unknown'),(0,'other-tenant'),(7,'EUR'),(6,'')])

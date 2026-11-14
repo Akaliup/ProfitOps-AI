@@ -24,7 +24,7 @@ def test_langgraph_path_persisted(client, analyst, recommendation):
     assert analysis["result"]["engine"] == "deterministic-rules-v1"
     assert row["action"]["simulation"] is True
     assert row["body"]["primary_driver"]["metric"] == "ad_spend"
-    assert len(row["body"]["evidence"]) == 8
+    assert len(row["body"]["evidence"]) == 12
     with client.app.state.factory() as session:
         assert session.get(Analysis, row["analysis_id"]).snapshot["recommendation_id"] == recommendation
 

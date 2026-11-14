@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,36 @@ from app.tools import build_registry
 from mcp.shared.memory import create_connected_server_and_client_session
 
 PERIOD = {"start_date": "2026-10-01", "end_date": "2026-10-30"}
+
+
+def test_mcp_reads_saved_imported_report_and_rejects_other_tenant(client, approver):
+    examples = Path(__file__).resolve().parents[2] / 'docs/examples/intelligence'
+    for kind in ('orders', 'ads', 'inventory'):
+        response = client.post(f'/api/data/{kind}/commit', headers=approver,
+                               content=(examples / f'{kind}.csv').read_text(encoding='utf-8'))
+        assert response.status_code == 200
+    response = client.post('/api/weekly-reports', headers=approver, json={'end_date': '2020-01-12'})
+    assert response.status_code == 200
+    report = response.json()
+    mcp = build_mcp_server(client.app.state.settings)
+    async def read(session):
+        return await session.call_tool('get_saved_weekly_report', {'report_id': report['id']})
+    try:
+        result = _payload(asyncio.run(_with_session(mcp, read)))
+        assert result['ok']
+        assert result['data']['metrics']['current'] == report['metrics']['current']
+        assert isinstance(result['data']['metrics']['current']['net_profit'], int)
+        assert result['data']['metrics']['decomposition'] == report['metrics']['decomposition']
+        assert len(result['data']['inventory']['items']) == 2
+        from app.models import WeeklyReport
+        with client.app.state.factory() as session:
+            session.get(WeeklyReport, report['id']).tenant_id = 'other-tenant'
+            session.commit()
+        denied = _payload(asyncio.run(_with_session(mcp, read)))
+        assert not denied['ok']
+        assert denied['error']['code'] == 'report_not_found'
+    finally:
+        mcp.close()
 
 
 def _settings(tmp_path) -> Settings:

@@ -135,6 +135,12 @@ def test_scope_and_execution_refusal(client, analyst, report):
     enable_fake(client, report, answer(), report_id='other-report')
     assert ask(client, analyst, report).json()['reason'] == 'llm_tool_scope_mismatch'
     assert ask(client, analyst, report, '帮我把预算改成100').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'Please place a purchase order').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'execute purchase now').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'connect to amazon store').json()['status'] == 'refused'
+    enable_fake(client, report, answer())
+    non_refused = ask(client, analyst, report, '建议补货量是多少').json()
+    assert non_refused['status'] != 'refused'
 
 
 def test_tenant_and_missing_report(client, analyst, report):

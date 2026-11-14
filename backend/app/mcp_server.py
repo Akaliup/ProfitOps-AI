@@ -41,6 +41,7 @@ from .tools import ToolContext, ToolRegistry, build_registry
 # Explicit allowlist. Every name must exist in the registry, be read/pure and
 # use policy=safe. This is a security boundary, not a convenience list.
 EXPOSED_TOOL_NAMES: tuple[str, ...] = (
+    "get_saved_weekly_report",
     "get_weekly_intelligence",
     "get_inventory_risks",
     "get_profit_analysis",

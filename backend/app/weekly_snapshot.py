@@ -50,7 +50,8 @@ def _evidence_value(value):
         "import_batch_id", "product_id", "bridge", "data_quality", "complete",
         "sales", "discounts", "refunds", "cogs", "ad_spend", "fulfillment",
         "platform_fees", "other_costs", "net_sales", "net_profit", "margin_pct",
-        "orders", "units",
+        "orders", "units", "asp", "unit", "formula", "sales_change", "status", "suggested_price", "current_price", "reason_code", "rule_version", "refund_rate_pct", "margin_pct",
+        "campaign_id", "campaign_name", "attributed_sales", "attributed_orders", "clicks", "impressions",
     }
     return {key: _evidence_value(item) for key, item in value.items()
             if key in allowed and not isinstance(item, list)}
@@ -72,11 +73,12 @@ def snapshot_view(report):
                              if key in {"sales", "net_sales", "net_profit", "margin_pct", "ad_spend", "refunds", "orders", "units"}}
         evidence.append({"id": f"{row['store_id']}:store", "source": "snapshot.stores", "value": value})
     for row in body.get("sku_diagnostics", []):
-        evidence.append({"id": f"{row['store_id']}:sku:{row['sku']}", "source": "snapshot.sku_diagnostics", "value": _evidence_value(row)})
+        diag_value = {k: row[k] for k in ("store_id", "sku", "bridge", "profit_delta", "ad_spend_delta", "refund_delta", "ad_growth_alert") if k in row}
+        evidence.append({"id": f"{row['store_id']}:sku:{row['sku']}", "source": "snapshot.sku_diagnostics", "value": diag_value})
     return SavedWeeklyReportOutput(
         report_id=report.id, period=body["period"], limitations=body.get("limitations", []),
         metrics={k: v for k, v in body["metrics"].items() if k in
-                 {"data_quality", "bridge_verified", "current", "previous", "previous_period", "store_id"}},
+                 {"data_quality", "bridge_verified", "current", "previous", "previous_period", "store_id", "decomposition"}},
         findings={"conclusion": body["findings"]["conclusion"]},
         stores=[{k: r[k] for k in ("store_id", "name", "profit_delta", "risk_skus") if k in r}
                 for r in body.get("stores", [])],
@@ -88,7 +90,7 @@ def snapshot_view(report):
 
 
 def get_saved_weekly_report(payload, context):
-    if not context.report_id or payload.report_id != context.report_id:
+    if context.report_id is not None and payload.report_id != context.report_id:
         raise DomainError("llm_tool_scope_mismatch", "工具参数超出本周报范围", 422)
     with context.factory() as session:
         return snapshot_view(require_report(session, context.actor.tenant_id, payload.report_id))

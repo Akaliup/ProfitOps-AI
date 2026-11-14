@@ -98,6 +98,7 @@ class MetricsReport(RawMetrics):
     drivers: list[Driver]
     anomaly: bool
     bridge_verified: bool
+    decomposition: dict[str, Any] = Field(default_factory=dict)
 
 
 class CalculateInput(StrictModel):
