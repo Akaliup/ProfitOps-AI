@@ -1,0 +1,58 @@
+{
+  "dataset_id": "profitops-rag-test-v2",
+  "split": "test",
+  "label_version": "2026-11-13",
+  "type_label_version": "2026-11-13",
+  "fixed_before_run": true,
+  "labels_frozen_at": "2026-11-13T00:00:00Z",
+  "source_type": "synthetic_regression_holdout",
+  "known_failures": [
+    {
+      "id": "test-quality-03",
+      "historical_id": "quality-03",
+      "type": "rank_miss_at_1",
+      "historical_rank": 3,
+      "source_report": "backend/evals/reports/rag-latest.json"
+    },
+    {
+      "id": "test-fulfillment-06",
+      "historical_id": "fulfillment-06",
+      "type": "cross_doc_coverage_at_3_miss",
+      "source_report": "backend/evals/reports/rag-latest.json"
+    }
+  ],
+  "notes": "Frozen regression holdout. It is disjoint from rag_calibration.json by query id and query text and covers all six synthetic SOPs. It deliberately retains two retrieval failures observed in the historical 42-query report and adds multi-document questions. These labels were written before the split evaluation was run; results must be reported honestly and never used to edit labels or tune thresholds. This is a regression holdout, not an unseen real-customer benchmark.",
+  "queries": [
+    {"id": "test-ad-04", "query": "广告预算下调后七天要复核哪些指标", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-ad-05", "query": "上新三十天内的 SKU 能不能降低广告预算", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-ad-06", "query": "广告预算调整需要谁审批", "expected_title": "广告预算调整与审批规则", "expect_no_answer": false, "type": "keyword"},
+
+    {"id": "test-refund-04", "query": "退款率仍高于基线两个百分点怎么办", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-refund-05", "query": "退款异常结论需要引用哪些证据", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "keyword"},
+    {"id": "test-refund-06", "query": "真实退款政策变更能不能在模拟环境直接执行", "expected_title": "退款率异常排查手册", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["审批、执行与幂等规则"]},
+
+    {"id": "test-fulfillment-04", "query": "怎么发现承运商合同价到期或临时加价", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-fulfillment-05", "query": "履约成本要按承运商还是仓库拆分", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "keyword"},
+    {"id": "test-fulfillment-06", "query": "履约方案成本下降但时效恶化怎么办", "expected_title": "履约成本异常排查", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["审批、执行与幂等规则"]},
+
+    {"id": "test-fees-04", "query": "平台手续费能不能把广告费重复计入", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["广告预算调整与审批规则"]},
+    {"id": "test-fees-05", "query": "平台多扣费用后应该怎么申诉", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-fees-06", "query": "平台手续费差异下个结算周期还很高怎么办", "expected_title": "平台手续费与结算核对", "expect_no_answer": false, "type": "paraphrase"},
+
+    {"id": "test-quality-03", "query": "数据完整性检查要覆盖哪些维度和字段", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "keyword", "observed_failure": "rank_miss_at_1"},
+    {"id": "test-quality-04", "query": "数据修复后要不要复用旧快照重新分析", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-quality-05", "query": "数据质量问题要在审计日志记录什么", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["审批、执行与幂等规则"]},
+
+    {"id": "test-approval-04", "query": "执行幂等键能不能跨不同建议复用", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "keyword"},
+    {"id": "test-approval-05", "query": "审批页面必须展示待执行动作的哪些内容", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "paraphrase"},
+    {"id": "test-approval-06", "query": "LLM 能不能调用审批或执行工具", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "keyword"},
+
+    {"id": "test-cross-01", "query": "广告预算调整动作执行时发现审批后账本变化该怎么处理", "expected_title": "审批、执行与幂等规则", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["广告预算调整与审批规则"]},
+    {"id": "test-cross-02", "query": "退款率异常和数据缺失同时出现时先补数据还是先排查退款", "expected_title": "数据完整性与缺失处理", "expect_no_answer": false, "type": "cross_doc", "secondary_titles": ["退款率异常排查手册"]},
+
+    {"id": "test-no-05", "query": "如何更换办公室打印机墨盒", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "test-no-06", "query": "推荐一部科幻电影", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "test-no-07", "query": "附近哪家咖啡店营业到深夜", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"},
+    {"id": "test-no-08", "query": "明天上海到北京的高铁几点发车", "expected_title": null, "expect_no_answer": true, "type": "unanswerable"}
+  ]
+}

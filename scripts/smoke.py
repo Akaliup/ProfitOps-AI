@@ -2,9 +2,15 @@
 import argparse
 import json
 import time
+from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
+
+ORDER_HEADER = (
+    "order_id,store_id,sku,date,quantity,sales,discounts,refunds,cogs,"
+    "fulfillment,platform_fees,other_costs"
+)
 
 
 def main():
@@ -27,6 +33,18 @@ def main():
     def check(name, predicate):
         checks.append({"name": name, "passed": bool(predicate)})
         assert predicate, name
+    def call_csv(path, token, body, filename):
+        headers = {
+            "Content-Type": "text/csv; charset=utf-8",
+            "X-Filename": filename,
+            "Authorization": f"Bearer {token}",
+        }
+        request = Request(args.base_url + path, body.encode("utf-8"), headers)
+        try:
+            with urlopen(request, timeout=20) as response:
+                return response.status, response.read().decode("utf-8")
+        except HTTPError as error:
+            return error.code, error.read().decode("utf-8")
     check("health", call("/health")[0] == 200)
     status, config = call("/api/demo")
     analyst = next(item["token"] for item in config["identities"] if item["role"] == "analyst")
@@ -63,6 +81,35 @@ def main():
     _, no_answer = call("/api/knowledge/search", analyst, {"query": "如何预订会议室午餐", "top_k": 3})
     check("knowledge_no_answer", no_answer["no_answer"] and not no_answer["hits"])
     check("knowledge_role_enforced", call("/api/knowledge/documents", analyst, {"title": "smoke doc", "source": "synthetic://smoke", "content": "# smoke\n\nsmoke content"})[0] == 403)
+    request = Request(
+        args.base_url + "/api/imports/template/orders",
+        headers={"Authorization": f"Bearer {analyst}"},
+    )
+    with urlopen(request, timeout=20) as response:
+        template = response.read().decode("utf-8-sig")
+    check("import_template", template.splitlines()[0] == ORDER_HEADER)
+    order_id = f"SMOKE-{uuid4().hex[:10]}"
+    business_date = datetime.now(timezone.utc).date().isoformat()
+    order_csv = (
+        ORDER_HEADER + "\n"
+        f"{order_id},us-store,TRAVEL-BAG-01,{business_date},1,49.00,3.92,0,16.00,6.50,7.35,0.90\n"
+    )
+    status, raw = call_csv("/api/imports/orders/preview", analyst, order_csv, "smoke-orders.csv")
+    preview = json.loads(raw)
+    check("import_preview", status == 200 and preview["can_commit"] and preview["accepted_rows"] == 1)
+    status, raw = call_csv("/api/imports/orders", approver, order_csv, "smoke-orders.csv")
+    committed = json.loads(raw)
+    check("import_committed", status == 200 and committed["status"] == "committed" and any(
+        item["code"] == "db_roundtrip" and item["ok"] for item in committed["checks"]
+    ))
+    status, raw = call_csv("/api/imports/orders", approver, order_csv, "smoke-orders.csv")
+    check("import_idempotent", status == 200 and json.loads(raw)["status"] == "noop")
+    status, raw = call_csv(
+        "/api/imports/orders", approver, order_csv.replace(",49.00,3.92", ",50.00,3.92"),
+        "smoke-orders.csv",
+    )
+    check("import_conflict_blocked", status == 409 and json.loads(raw)["error"]["code"] == "import_rejected")
+    check("import_role_enforced", call_csv("/api/imports/orders", analyst, order_csv, "smoke-orders.csv")[0] == 403)
     print(json.dumps({"passed": len(checks), "failed": 0, "checks": checks, "analysis_id": analysis["id"], "recommendation_id": rec_id, "execution_id": executed["execution_id"]}, ensure_ascii=False, indent=2))
 
 

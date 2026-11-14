@@ -1,9 +1,11 @@
-"""Offline RAG retrieval evaluation over the fixed labelled query set.
+"""Offline RAG retrieval evaluation over isolated calibration and test splits.
 
 This evaluates retrieval only, never an LLM. It seeds the six synthetic SOP
-documents into a disposable in-memory SQLite database and runs the fixed 42-query
-labelled set from ``backend/evals/rag_queries.json`` through the production
-``seed_knowledge`` and ``search_knowledge`` code.
+documents into a disposable in-memory SQLite database and runs the fixed query
+sets from ``rag_calibration.json`` and ``rag_test.json`` through the production
+``seed_knowledge`` and ``search_knowledge`` code. Thresholds may be inspected on
+the calibration split, but the test split is evaluated with the same frozen
+thresholds and is not used for tuning.
 
 Two ranking strategies are measured on the same corpus, queries and thresholds:
 
@@ -42,22 +44,105 @@ from sqlalchemy import select  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.db import build_engine, initialize_database, make_session_factory  # noqa: E402
 from app.knowledge import (  # noqa: E402
-    HashingEmbeddingProvider, OpenAIEmbeddingProvider, search_knowledge, seed_knowledge,
+    HashingEmbeddingProvider, OpenAIEmbeddingProvider, SEED_DOCUMENTS,
+    search_knowledge, seed_knowledge,
 )
 from app.models import KnowledgeChunk, KnowledgeDocument  # noqa: E402
 from app.schemas import KnowledgeSearchInput  # noqa: E402
 
-QUERY_FILE = BACKEND / "evals" / "rag_queries.json"
+CALIBRATION_FILE = BACKEND / "evals" / "rag_calibration.json"
+TEST_FILE = BACKEND / "evals" / "rag_test.json"
+LEGACY_QUERY_FILE = BACKEND / "evals" / "rag_queries.json"
+QUERY_FILE = CALIBRATION_FILE
+DATASET_FILES = {
+    "calibration": CALIBRATION_FILE,
+    "test": TEST_FILE,
+    "legacy": LEGACY_QUERY_FILE,
+}
 REPORT_DIR = BACKEND / "evals" / "reports"
 MODES = ("weighted", "hybrid_rrf")
 PRIMARY_MODE = "hybrid_rrf"
 QUERY_TYPES = ("keyword", "paraphrase", "cross_doc", "unanswerable")
 HIT_K = 3
 NDCG_K = 5
+MIN_TEST_CROSS_DOC = 4
+MIN_TEST_UNANSWERABLE = 4
+MIN_TEST_ANSWERABLE = 16
 
 
 def load_dataset(path: Path = QUERY_FILE) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _dataset_summary(data: dict[str, Any]) -> dict[str, Any]:
+    queries = data["queries"]
+    return {
+        "dataset_id": data["dataset_id"],
+        "split": data.get("split"),
+        "label_version": data["label_version"],
+        "type_label_version": data.get("type_label_version"),
+        "fixed_before_run": data["fixed_before_run"],
+        "labels_frozen_at": data.get("labels_frozen_at"),
+        "queries": len(queries),
+        "answerable": sum(1 for query in queries if not query["expect_no_answer"]),
+        "unanswerable": sum(1 for query in queries if query["expect_no_answer"]),
+        "by_type": {
+            query_type: sum(1 for query in queries if query.get("type") == query_type)
+            for query_type in QUERY_TYPES
+        },
+        "known_failures": data.get("known_failures", []),
+        "notes": data["notes"],
+    }
+
+
+def validate_splits(calibration: dict[str, Any], test: dict[str, Any]) -> dict[str, Any]:
+    """Prove that calibration and test are disjoint and that the holdout is usable."""
+    calibration_queries = calibration["queries"]
+    test_queries = test["queries"]
+    calibration_ids = {query["id"] for query in calibration_queries}
+    test_ids = {query["id"] for query in test_queries}
+    calibration_texts = {query["query"].strip() for query in calibration_queries}
+    test_texts = {query["query"].strip() for query in test_queries}
+    corpus_titles = {document["title"] for document in SEED_DOCUMENTS}
+    calibration_titles = {
+        query["expected_title"] for query in calibration_queries
+        if not query["expect_no_answer"]
+    }
+    test_titles = {
+        query["expected_title"] for query in test_queries
+        if not query["expect_no_answer"]
+    }
+    known_failures = test.get("known_failures", [])
+    known_failure_ids = {item["id"] for item in known_failures}
+    test_cross_doc = sum(1 for query in test_queries if query.get("type") == "cross_doc")
+    test_unanswerable = sum(1 for query in test_queries if query["expect_no_answer"])
+    test_answerable = len(test_queries) - test_unanswerable
+    checks = {
+        "ids_disjoint": not (calibration_ids & test_ids),
+        "queries_disjoint": not (calibration_texts & test_texts),
+        "calibration_fixed_before_run": calibration.get("fixed_before_run") is True,
+        "test_fixed_before_run": test.get("fixed_before_run") is True,
+        "calibration_covers_all_documents": calibration_titles == corpus_titles,
+        "test_covers_all_documents": test_titles == corpus_titles,
+        "test_cross_doc_minimum": test_cross_doc >= MIN_TEST_CROSS_DOC,
+        "test_unanswerable_minimum": test_unanswerable >= MIN_TEST_UNANSWERABLE,
+        "test_answerable_minimum": test_answerable >= MIN_TEST_ANSWERABLE,
+        "known_failures_declared": bool(known_failures),
+        "known_failures_in_test": known_failure_ids <= test_ids,
+        "known_failure_ids_unique": len(known_failure_ids) == len(known_failures),
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "calibration_ids": sorted(calibration_ids),
+        "test_ids": sorted(test_ids),
+        "test_counts": {
+            "answerable": test_answerable,
+            "cross_doc": test_cross_doc,
+            "unanswerable": test_unanswerable,
+        },
+        "known_failure_ids": sorted(known_failure_ids),
+    }
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -340,12 +425,74 @@ def _failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return failures
 
 
+def _gates(
+    primary: dict[str, Any], baseline: dict[str, Any] | None, gate_mode: str,
+) -> list[dict[str, Any]]:
+    metrics = primary["metrics"]
+    if gate_mode == "test":
+        gates = [
+            {
+                "name": "hit_at_3_minimum",
+                "passed": metrics["hit_at_3"] >= 0.9,
+                "detail": f"{metrics['hit_at_3']:.4f} (must be >= 0.9)",
+            },
+            {
+                "name": "no_answer_full",
+                "passed": metrics["no_answer_accuracy"] == 1.0,
+                "detail": f"{metrics['no_answer_accuracy']:.4f} (must be 1.0)",
+            },
+            {
+                "name": "no_false_rejection",
+                "passed": metrics["answerable_false_no_answer"] == 0,
+                "detail": f"{metrics['answerable_false_no_answer']} answerable queries refused",
+            },
+            {
+                "name": "citation_validity",
+                "passed": metrics["citation_validity"] == 1.0,
+                "detail": f"{metrics['citation_validity']:.4f} (must be 1.0)",
+            },
+        ]
+    else:
+        gates = [
+            {
+                "name": "hit_at_3_full",
+                "passed": metrics["hit_at_3"] == 1.0,
+                "detail": f"{metrics['hit_at_3']:.4f} (must be 1.0)",
+            },
+            {
+                "name": "no_answer_full",
+                "passed": metrics["no_answer_accuracy"] == 1.0,
+                "detail": f"{metrics['no_answer_accuracy']:.4f} (must be 1.0)",
+            },
+            {
+                "name": "no_false_rejection",
+                "passed": metrics["answerable_false_no_answer"] == 0,
+                "detail": f"{metrics['answerable_false_no_answer']} answerable queries refused",
+            },
+            {
+                "name": "citation_validity",
+                "passed": metrics["citation_validity"] == 1.0,
+                "detail": f"{metrics['citation_validity']:.4f} (must be 1.0)",
+            },
+        ]
+    if baseline is not None:
+        gates.append({
+            "name": "no_rank_regression",
+            "passed": metrics["mrr"] >= baseline["metrics"]["mrr"],
+            "detail": (
+                f"mrr {metrics['mrr']:.4f} vs weighted "
+                f"{baseline['metrics']['mrr']:.4f}"
+            ),
+        })
+    return gates
+
+
 def run_evaluation(
     *, top_k: int = 3, min_score: float = 0.15, candidate_k: int = 20,
     rrf_k: int = 60, bm25_k1: float = 1.5, bm25_b: float = 0.75,
     max_per_document: int = 2,
     modes: tuple[str, ...] = MODES, dataset: dict[str, Any] | None = None,
-    embeddings: Any | None = None,
+    embeddings: Any | None = None, gate_mode: str = "calibration",
 ) -> dict[str, Any]:
     data = dataset or load_dataset()
     queries = data["queries"]
@@ -360,61 +507,19 @@ def run_evaluation(
     primary = runs[PRIMARY_MODE] if PRIMARY_MODE in runs else runs[modes[0]]
     baseline = runs.get("weighted")
 
-    gates = [
-        {
-            "name": "hit_at_3_full",
-            "passed": primary["metrics"]["hit_at_3"] == 1.0,
-            "detail": f"{primary['metrics']['hit_at_3']:.4f} (must be 1.0)",
-        },
-        {
-            "name": "no_answer_full",
-            "passed": primary["metrics"]["no_answer_accuracy"] == 1.0,
-            "detail": f"{primary['metrics']['no_answer_accuracy']:.4f} (must be 1.0)",
-        },
-        {
-            "name": "no_false_rejection",
-            "passed": primary["metrics"]["answerable_false_no_answer"] == 0,
-            "detail": f"{primary['metrics']['answerable_false_no_answer']} answerable queries refused",
-        },
-        {
-            "name": "citation_validity",
-            "passed": primary["metrics"]["citation_validity"] == 1.0,
-            "detail": f"{primary['metrics']['citation_validity']:.4f} (must be 1.0)",
-        },
-    ]
+    gates = _gates(primary, baseline, gate_mode)
     comparison: dict[str, Any] = {}
     if baseline and PRIMARY_MODE in runs:
         for metric in ("hit_at_1", "hit_at_3", "mrr", "ndcg_at_5"):
             comparison[f"delta_{metric}"] = round(
                 primary["metrics"][metric] - baseline["metrics"][metric], 4
             )
-        gates.append({
-            "name": "no_rank_regression",
-            "passed": primary["metrics"]["mrr"] >= baseline["metrics"]["mrr"],
-            "detail": (
-                f"mrr {primary['metrics']['mrr']:.4f} vs weighted "
-                f"{baseline['metrics']['mrr']:.4f}"
-            ),
-        })
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "mode": "offline_retrieval_evaluation",
         "network_calls": 0,
-        "dataset": {
-            "dataset_id": data["dataset_id"],
-            "label_version": data["label_version"],
-            "type_label_version": data.get("type_label_version"),
-            "fixed_before_run": data["fixed_before_run"],
-            "queries": len(queries),
-            "answerable": sum(1 for query in queries if not query["expect_no_answer"]),
-            "unanswerable": sum(1 for query in queries if query["expect_no_answer"]),
-            "by_type": {
-                query_type: sum(1 for query in queries if query.get("type") == query_type)
-                for query_type in QUERY_TYPES
-            },
-            "notes": data["notes"],
-        },
+        "dataset": _dataset_summary(data),
         "thresholds": {
             "top_k": top_k,
             "candidate_k": candidate_k,
@@ -449,44 +554,63 @@ def run_evaluation(
     }
 
 
-def main(argv: list[str] | None = None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="ProfitOps offline RAG retrieval evaluation")
-    parser.add_argument("--json", type=Path, default=None, help="write the JSON report here")
-    parser.add_argument("--top-k", type=int, default=3)
-    parser.add_argument("--min-score", type=float, default=0.15)
-    parser.add_argument("--candidate-k", type=int, default=20)
-    parser.add_argument("--rrf-k", type=int, default=60)
-    parser.add_argument("--mode", choices=("both", *MODES), default="both")
-    parser.add_argument("--embedding-provider", choices=("hashing", "openai"), default="hashing")
-    parser.add_argument("--embedding-base-url", default="http://127.0.0.1:11434/v1")
-    parser.add_argument("--embedding-model", default="qwen3-embedding:0.6b")
-    parser.add_argument("--embedding-api-key", default="")
-    args = parser.parse_args(argv)
-
-    modes = MODES if args.mode == "both" else (args.mode,)
-    embeddings: Any = None
-    if args.embedding_provider == "openai":
-        embeddings = OpenAIEmbeddingProvider(
-            base_url=args.embedding_base_url, api_key=args.embedding_api_key,
-            model=args.embedding_model, timeout=60.0,
-        )
-        try:
-            embeddings.embed(["连通性检查"])
-        except Exception as error:  # noqa: BLE001 - report the real environment failure
-            print(f"embedding provider BLOCKED: {type(error).__name__}: {error}")
-            return 2
-    report = run_evaluation(
-        top_k=args.top_k, min_score=args.min_score, candidate_k=args.candidate_k,
-        rrf_k=args.rrf_k, modes=modes, embeddings=embeddings,
+def run_split_evaluation(
+    *, top_k: int = 3, min_score: float = 0.15, candidate_k: int = 20,
+    rrf_k: int = 60, bm25_k1: float = 1.5, bm25_b: float = 0.75,
+    max_per_document: int = 2, modes: tuple[str, ...] = MODES,
+    embeddings: Any | None = None,
+) -> dict[str, Any]:
+    calibration_data = load_dataset(CALIBRATION_FILE)
+    test_data = load_dataset(TEST_FILE)
+    validation = validate_splits(calibration_data, test_data)
+    common = {
+        "top_k": top_k, "min_score": min_score, "candidate_k": candidate_k,
+        "rrf_k": rrf_k, "bm25_k1": bm25_k1, "bm25_b": bm25_b,
+        "max_per_document": max_per_document, "modes": modes,
+        "embeddings": embeddings,
+    }
+    calibration_report = run_evaluation(
+        **common, dataset=calibration_data, gate_mode="calibration",
     )
-    output = args.json or REPORT_DIR / "rag-latest.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    test_report = run_evaluation(**common, dataset=test_data, gate_mode="test")
+    test_primary = test_report["runs"][PRIMARY_MODE]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "mode": "offline_split_retrieval_evaluation",
+        "network_calls": 0,
+        "split_validation": validation,
+        "threshold_policy": {
+            "tuned_on": "calibration",
+            "applied_to_test": True,
+            "test_used_for_tuning": False,
+            "min_score": min_score,
+            "note": (
+                "The same retrieval thresholds are applied to both splits. "
+                "Calibration metrics may inform future defaults; test labels and "
+                "results must not be written back into tuning."
+            ),
+        },
+        "calibration": calibration_report,
+        "test": test_report,
+        "summary": {
+            "calibration": calibration_report["runs"][PRIMARY_MODE]["metrics"],
+            "test": test_primary["metrics"],
+            "test_cross_doc_coverage_at_3": (
+                test_primary["per_type"]["cross_doc"].get("coverage_at_3")
+            ),
+            "test_failures": test_report["failures"],
+        },
+        "passed": (
+            validation["passed"]
+            and calibration_report["passed"]
+            and test_report["passed"]
+        ),
+    }
 
+
+def _print_single_report(report: dict[str, Any], label: str) -> None:
     dataset = report["dataset"]
-    print(f"ProfitOps RAG retrieval evaluation (offline, embeddings={report['corpus']['embedding_model']})")
+    print(f"[{label}] dataset={dataset['dataset_id']} split={dataset['split']}")
     print(f"rankers={report['corpus']['rankers']}")
     print(
         f"documents={report['corpus']['documents']} chunks={report['corpus']['chunks']} "
@@ -538,6 +662,87 @@ def main(argv: list[str] | None = None) -> int:
         print(f"failures ({len(report['failures'])}):")
         for item in report["failures"]:
             print(f"  - {item['type']} {item['id']}: {item.get('expected_title') or ''}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="ProfitOps offline RAG retrieval evaluation")
+    parser.add_argument("--json", type=Path, default=None, help="write the JSON report here")
+    parser.add_argument(
+        "--dataset", choices=("split", *DATASET_FILES), default="split",
+        help="evaluate the frozen calibration/test split, one split, or the legacy 42-query set",
+    )
+    parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument("--min-score", type=float, default=0.15)
+    parser.add_argument("--candidate-k", type=int, default=20)
+    parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument("--mode", choices=("both", *MODES), default="both")
+    parser.add_argument("--embedding-provider", choices=("hashing", "openai"), default="hashing")
+    parser.add_argument("--embedding-base-url", default="http://127.0.0.1:11434/v1")
+    parser.add_argument("--embedding-model", default="qwen3-embedding:0.6b")
+    parser.add_argument("--embedding-api-key", default="")
+    args = parser.parse_args(argv)
+
+    modes = MODES if args.mode == "both" else (args.mode,)
+    embeddings: Any = None
+    if args.embedding_provider == "openai":
+        embeddings = OpenAIEmbeddingProvider(
+            base_url=args.embedding_base_url, api_key=args.embedding_api_key,
+            model=args.embedding_model, timeout=60.0,
+        )
+        try:
+            embeddings.embed(["连通性检查"])
+        except Exception as error:  # noqa: BLE001 - report the real environment failure
+            print(f"embedding provider BLOCKED: {type(error).__name__}: {error}")
+            return 2
+    common = {
+        "top_k": args.top_k,
+        "min_score": args.min_score,
+        "candidate_k": args.candidate_k,
+        "rrf_k": args.rrf_k,
+        "modes": modes,
+        "embeddings": embeddings,
+    }
+    if args.dataset == "split":
+        report = run_split_evaluation(**common)
+        output = args.json or REPORT_DIR / "rag-split-latest.json"
+    else:
+        data = load_dataset(DATASET_FILES[args.dataset])
+        report = run_evaluation(
+            **common, dataset=data,
+            gate_mode="test" if args.dataset == "test" else "calibration",
+        )
+        default_name = "rag-latest.json" if args.dataset == "legacy" else f"rag-{args.dataset}-latest.json"
+        output = args.json or REPORT_DIR / default_name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    if args.dataset == "split":
+        validation = report["split_validation"]
+        print(
+            "ProfitOps RAG split evaluation "
+            f"(offline, embeddings={report['calibration']['corpus']['embedding_model']})"
+        )
+        print(f"split_validation={'PASS' if validation['passed'] else 'FAIL'}")
+        for name, passed in validation["checks"].items():
+            print(f"  {'PASS' if passed else 'FAIL'} {name}")
+        _print_single_report(report["calibration"], "CALIBRATION")
+        _print_single_report(report["test"], "TEST")
+        policy = report["threshold_policy"]
+        print(
+            f"thresholds tuned_on={policy['tuned_on']} "
+            f"test_used_for_tuning={policy['test_used_for_tuning']}"
+        )
+        print(
+            f"test_cross_doc_coverage_at_3="
+            f"{report['summary']['test_cross_doc_coverage_at_3']}"
+        )
+        print(f"report={output}")
+        return 0 if report["passed"] else 1
+
+    print("ProfitOps RAG retrieval evaluation (offline)")
+    _print_single_report(report, args.dataset.upper())
     print(f"report={output}")
     return 0 if report["passed"] else 1
 

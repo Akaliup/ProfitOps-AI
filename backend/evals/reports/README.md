@@ -1,8 +1,10 @@
 # 评测报告目录
 
-- `rag-latest.json`：RAG 检索评测（hashing，42 条标注查询，weighted 与 hybrid_rrf 双策略对比）。2026-11-03：hit@1 97.22%、hit@3 100%、MRR 0.9815、nDCG@5 0.9861、no-answer 100%、citation validity 100%，网络调用 0。由 `backend/evals/rag.py` 生成，每次运行覆盖。
-- `rag-bge-m3.json`：同一套 42 条查询、`bge-m3`（本机 Ollama，Q8_0 GGUF 导入，1024 维，`min_score=0.42`）：hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 hybrid 50% / weighted 25%；阈值校准建议 0.4164。
-- `rag-qwen3-embedding.json`：同一套 42 条查询、真实 embedding（`qwen3-embedding:0.6b`，`min_score=0.40`）：hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 hybrid 75% / weighted 50%。本机 Ollama，非公网调用。
+- `rag-split-latest.json`：当前 RAG 拆分评测（hashing，校准集 26 条 + 冻结测试集 24 条，weighted 与 hybrid_rrf 双策略对比）。2026-11-13：校准集 hit@1/hit@3 100%、MRR 1.0000；测试集 hit@1 85%、hit@3 95%、MRR 0.8917、nDCG@5 0.9065、no-answer/citation 100%、跨文档 coverage@3 66.67%，网络调用 0。由 `backend/evals/rag.py --dataset split` 生成，每次运行覆盖。
+- `rag-split-20261113.json`：上述拆分评测的带日期冻结副本；测试集保留 `test-quality-03`、`test-cross-01` 的 top-1 未中与 `test-cross-02` 的 top-3 未中。
+- `rag-latest.json`：历史 RAG 检索评测（hashing，42 条旧集合，weighted 与 hybrid_rrf 双策略对比）。2026-11-03：hit@1 97.22%、hit@3 100%、MRR 0.9815、nDCG@5 0.9861、no-answer 100%、citation validity 100%，网络调用 0。仅由 `--dataset legacy` 更新，不再代表当前测试集。
+- `rag-bge-m3.json`：历史同一套 42 条查询、`bge-m3`（本机 Ollama，Q8_0 GGUF 导入，1024 维，`min_score=0.42`）：hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 hybrid 50% / weighted 25%；阈值校准建议 0.4164。
+- `rag-qwen3-embedding.json`：历史同一套 42 条查询、真实 embedding（`qwen3-embedding:0.6b`，`min_score=0.40`）：hit@1 100%、MRR 1.0000、no-answer 100%、跨文档覆盖 hybrid 75% / weighted 50%。本机 Ollama，非公网调用。
 - `offline-20261031-032645.json`：当前评分器下的最终离线报告；25 次运行，正常 4/4，负向对照 21/21，真实网络调用 0。
 - `offline-20261031-032133.json`：评分器最后修正前（订单计数收紧前）的离线报告；25 次运行，正常 4/4，负向 21/21，保留用于对照。
 - `offline-20261031-031638.json`：`max_tokens` 改为 4000 后、评分器修正前的离线报告；25 次运行，正常 4/4，负向 21/21，保留用于对照。

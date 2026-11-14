@@ -7,6 +7,8 @@ import { pages, type Page } from './navigation'
 import { cn } from './lib/utils'
 import { AppSidebar } from './components/layout/app-sidebar'
 import { AppHeader } from './components/layout/app-header'
+import { IntelligencePage } from './components/intelligence-page'
+import { ImportPage } from './components/imports/import-page'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from './components/ui/card'
@@ -333,7 +335,7 @@ export default function App() {
               <Button variant='outline' size='sm' onClick={() => { setError(''); if (page === 'ops') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}>
                 <RefreshCw className={cn('size-4', (loading || opsLoading) && 'animate-spin')} />刷新数据
               </Button>
-              {!['audit', 'knowledge', 'ops'].includes(page) && renderButton()}
+              {!['audit', 'knowledge', 'ops', 'imports'].includes(page) && renderButton()}
             </div>
           </div>
 
@@ -630,6 +632,14 @@ export default function App() {
             </>}
           </div>}
 
+          {page === 'weekly' && identity && <IntelligencePage token={identity.token} />}
+
+          {page === 'imports' && identity && <ImportPage
+            token={identity.token}
+            isApprover={isApprover}
+            onImported={() => { void refresh() }}
+          />}
+
           {page === 'approvals' && <div className='grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]'>
             <Card className='gap-0 self-start overflow-hidden py-0'>
               <SectionHeading title='经营建议' description={`${pending} 项等待人工复核`} action={<Badge variant='secondary' className='tabular-nums'>{recommendations.length}</Badge>} />
@@ -728,6 +738,20 @@ export default function App() {
                   </div>
                 </>}
                 {selected.approval_reason && <p className='mt-2 text-xs text-muted-foreground'>审批意见：{selected.approval_reason}</p>}
+                {selected.body.approval && <div className='reveal mt-3 rounded-lg border bg-muted/25 p-3'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Fingerprint className='size-4 text-primary' />
+                    <strong className='text-xs font-medium'>审批版本快照</strong>
+                    <Badge variant='outline' className='text-[10px] tabular-nums'>v{selected.body.approval.version}</Badge>
+                  </div>
+                  <div className='mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2'>
+                    <div><span className='block text-muted-foreground'>绑定时间</span><strong className='mt-0.5 block font-medium tabular-nums'>{dateTime(selected.body.approval.captured_at)}</strong></div>
+                    <div><span className='block text-muted-foreground'>账本指纹</span><code className='mt-0.5 block font-medium' title={selected.body.approval.ledger_hash}>{selected.body.approval.ledger_hash.slice(0, 12)}</code></div>
+                    <div><span className='block text-muted-foreground'>动作指纹</span><code className='mt-0.5 block font-medium' title={selected.body.approval.action_hash}>{selected.body.approval.action_hash.slice(0, 12)}</code></div>
+                    <div><span className='block text-muted-foreground'>当前净销售额 / 净利润</span><strong className='mt-0.5 block font-medium tabular-nums'>{money(selected.body.approval.current_totals.net_sales)} / {money(selected.body.approval.current_totals.net_profit)}</strong></div>
+                  </div>
+                  <p className='mt-2 border-t pt-2 text-[11px] leading-relaxed text-muted-foreground'>执行前会重新核对账本与动作参数 任一变化都会拒绝模拟执行</p>
+                </div>}
                 {isApprover && ['approved', 'executed', 'execution_failed'].includes(selected.status) && <Button className='mt-3' onClick={execute} disabled={!!busy}>{busy === 'execute' ? <LoaderCircle className='size-4 animate-spin' /> : <Play className='size-4' />}{selected.status === 'approved' ? '模拟执行已批准动作' : '再次请求 · 验证幂等'}</Button>}
                 <div className='mt-4 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground'>{['pending_approval', 'approved', 'executing', 'executed'].map((value, index) => <span key={value} className={cn('flex items-center gap-1.5', selected.status === value && 'font-medium text-foreground')}>{index > 0 && <ArrowRight className='size-3' />}{statusLabels[value]}</span>)}</div>
               </div>

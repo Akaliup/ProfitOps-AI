@@ -1,6 +1,6 @@
-import { Activity, BookOpen, FileCheck2, Fingerprint, LayoutDashboard, Sparkles, type LucideIcon } from 'lucide-react'
+import { Activity, BookOpen, FileCheck2, FileUp, Fingerprint, LayoutDashboard, Sparkles, type LucideIcon } from 'lucide-react'
 
-export type Page = 'overview' | 'agent' | 'approvals' | 'knowledge' | 'audit' | 'ops'
+export type Page = 'overview' | 'weekly' | 'agent' | 'imports' | 'approvals' | 'knowledge' | 'audit' | 'ops'
 
 export type NavItem = {
   id: Page
@@ -11,7 +11,9 @@ export type NavItem = {
 
 export const pages: NavItem[] = [
   { id: 'overview', label: '经营总览', icon: LayoutDashboard, detail: '把增长，变成利润。' },
+  { id: 'weekly', label: '经营周报与库存', icon: Activity, detail: '关联多店铺数据 让建议有据可查' },
   { id: 'agent', label: 'Agent 工作台', icon: Sparkles, detail: '从经营信号，到有据可依的行动。' },
+  { id: 'imports', label: '数据导入', icon: FileUp, detail: '先校验 再入账 让每一分钱都能对上。' },
   { id: 'approvals', label: '审批与执行', icon: FileCheck2, detail: '每一步行动，都由你掌控。' },
   { id: 'knowledge', label: '运营知识库', icon: BookOpen, detail: '让建议有规则可依，让引用可追溯。' },
   { id: 'ops', label: 'Agent 运维', icon: Activity, detail: '任务、模型与成本的运行视图。' },
@@ -19,7 +21,7 @@ export const pages: NavItem[] = [
 ]
 
 export const navGroups: { title: string; items: Page[] }[] = [
-  { title: '工作空间', items: ['overview', 'agent'] },
-  { title: '工作流', items: ['approvals', 'knowledge'] },
+  { title: '工作空间', items: ['overview', 'weekly', 'agent'] },
+  { title: '工作流', items: ['imports', 'approvals', 'knowledge'] },
   { title: '系统', items: ['ops', 'audit'] },
 ]

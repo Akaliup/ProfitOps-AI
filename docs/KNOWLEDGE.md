@@ -191,22 +191,42 @@ curl -X DELETE http://127.0.0.1:8010/api/knowledge/documents/<id> \
 ## 9. 评测
 
 ```bash
-# 默认：hashing + 两种排序策略对比（离线，网络调用 0）
+# 默认：hashing，分别运行校准集与冻结测试集（离线，网络调用 0）
 .venv/Scripts/python.exe backend/evals/rag.py
 
-# 真实 embedding：同一套查询、同一组参数
-.venv/Scripts/python.exe backend/evals/rag.py --embedding-provider openai \
-    --embedding-model qwen3-embedding:0.6b --min-score 0.40
+# 单跑某个集合
+.venv/Scripts/python.exe backend/evals/rag.py --dataset calibration
+.venv/Scripts/python.exe backend/evals/rag.py --dataset test
+
+# 历史 42 条统一集合仅用于回看旧报告
+.venv/Scripts/python.exe backend/evals/rag.py --dataset legacy
+
+# 真实 embedding：先只用 calibration 选阈值，再对 test 使用同一冻结值
+.venv/Scripts/python.exe backend/evals/rag.py --dataset calibration \
+    --embedding-provider openai --embedding-model qwen3-embedding:0.6b --min-score 0.15
+.venv/Scripts/python.exe backend/evals/rag.py --dataset test \
+    --embedding-provider openai --embedding-model qwen3-embedding:0.6b --min-score <校准阈值>
 ```
 
-- 查询集：`backend/evals/rag_queries.json`，**42 条固定标注**（36 可回答 + 6 不可回答），标签在任何 embedding 生成前固定。
-- 辅助分层标签（2026-11-03 新增，不参与门禁）：`keyword` 15 条、`paraphrase` 17 条、`cross_doc` 4 条、`unanswerable` 6 条。`cross_doc` 额外标注 `secondary_titles`，只用于报告 `coverage@3`。
+- 查询集：`backend/evals/rag_calibration.json`（26 条：22 可回答、4 跨文档、4 不可回答）与 `backend/evals/rag_test.json`（24 条：20 可回答、6 跨文档、4 不可回答）。两集合按 `id` 与查询文本双重去重，标签在任何 embedding 生成前固定。
+- 校准集允许查看分数分离、比较排序和选择未来默认值；测试集只消费冻结阈值，结果不得回写调参。报告中的 `threshold_policy.test_used_for_tuning=false` 明确记录这一边界。
 - 指标：hit@1、hit@3、MRR、nDCG@5（二值相关性、单相关文档）、no-answer accuracy、可回答误拒数、citation validity、P50/P95 延迟，以及按查询类型分桶。
-- 硬门禁：hit@3 全中、no-answer 全对、可回答误拒为 0、citation validity 100%，且 `hybrid_rrf` 的 MRR 不低于 `weighted`。任一失败退出码非 0。
+- 硬门禁：校准集 hit@3 全中；测试集 hit@3 ≥ 90%；两边都要求 no-answer 全对、可回答误拒为 0、citation validity 100%，且 `hybrid_rrf` 的 MRR 不低于 `weighted`。任一失败退出码非 0。
 - 临时 SQLite，不读写 `data/profitops.db`；默认 hashing，网络调用 0 次。
-- 报告写入 `backend/evals/reports/rag-latest.json`（真实 embedding 见 `rag-qwen3-embedding.json`）。
+- 报告写入 `backend/evals/reports/rag-split-latest.json` 与带日期的 `rag-split-20261113.json`；`--dataset legacy` 才写 `rag-latest.json`。
 
-### 结果（2026-11-03）
+### 结果（2026-11-13，拆分集）
+
+hashing + `min_score=0.15`：
+
+| 集合 | 查询 | 可回答 | 跨文档 | 不可回答 | hit@1 | hit@3 | MRR | nDCG@5 | no-answer | citation | coverage@3 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 校准集 | 26 | 22 | 4 | 4 | 100% | 100% | 1.0000 | 1.0000 | 100% | 100% | 50% |
+| 测试集 | 24 | 20 | 6 | 4 | 85% | 95% | 0.8917 | 0.9065 | 100% | 100% | 66.67% |
+
+测试集保留历史失败：`test-quality-03`、`test-cross-01` 为 top-1 未命中但 top-3 命中；`test-cross-02` 为 top-3 未命中。`test-fulfillment-06` 作为已知跨文档覆盖失败写入数据集元数据，本轮没有为了通过门禁而修改标签或阈值。
+
+### 历史结果（2026-11-03，42 条旧集合）
 
 hashing + 42 条查询：
 
@@ -261,7 +281,7 @@ BGE-M3 的接入与完整对比（含 GGUF 来源、字节校验、启用步骤�
 - 并发测试覆盖 SQLite 双请求（`BEGIN IMMEDIATE` 串行化）与 PostgreSQL 双请求（唯一索引冲突后 savepoint 恢复）；PostgreSQL 测试使用独立 schema，需设置 `PROFITOPS_TEST_POSTGRES_URL`。
 - 超过 200 字符的 Markdown 标题只保留前 200 字符作为 heading 元数据；正文不受影响，但完整标题不会单独保存。
 - hashing embedding 不是语义模型；同义改写召回有限，生产应换真实 embedding 并重新跑评测。
-- `no_answer` 阈值是**绝对分数**，换 embedding 或换语料都要重新校准（评测会给出建议值）；当前 42 条查询、6 篇合成 SOP，不能据此声明泛化准确率。
+- `no_answer` 阈值是**绝对分数**，换 embedding 或换语料都要重新校准（评测会给出建议值）；当前 26/24 条拆分查询、6 篇合成 SOP，不能据此声明泛化准确率。
 - BM25 索引每次检索在内存构建（与既有全量打分同阶，32 chunk 时 P50 约 10 ms）；语料上到万级 chunk 应换成 FTS5/pgvector，而不是继续全表扫。
 - 三路融合在同文档上限生效时会跳过超额片段，因此返回条数在极端语料（文档数不足）下可能少于 `top_k`；此时不做截断退让，避免用低质量片段凑数。
 - 知识库只影响解释与建议文案，不影响利润、动作参数、审批或执行。

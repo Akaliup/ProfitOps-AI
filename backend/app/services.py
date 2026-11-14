@@ -1,20 +1,27 @@
+import hashlib
+import json
 from dataclasses import dataclass
 from math import ceil
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .audit import record
 from .errors import DomainError, LeaseLost
-from .metrics import verify_evidence
+from .metrics import (
+    analyze_drivers, build_report, fetch_metrics, ledger_fingerprint, verify_evidence,
+)
 from .models import Analysis, Execution, Recommendation, lease_is_live, new_id, utcnow
 from .schemas import (
-    DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsReport,
-    RecommendationInput, RecommendationOutput, StrictModel,
+    DriverReport, ExecuteOutput, KnowledgeCitation, KnowledgeContext, MetricsInput,
+    MetricsReport, Period, RecommendationInput, RecommendationOutput, StrictModel,
 )
 from .security import Actor, require_role, scoped_idempotency_key
+
+
+APPROVAL_SNAPSHOT_VERSION = 1
 
 
 class SimulationAction(StrictModel):
@@ -35,6 +42,88 @@ class ActionPlan:
     days: int
     is_budget: bool
     potential: int
+
+
+def _canonical_hash(value) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _snapshot_scope(value) -> MetricsInput:
+    if not isinstance(value, dict):
+        raise DomainError(
+            "approval_scope_invalid", "审批快照缺少可校验的数据范围", 409,
+            audit_action="execution.stale",
+        )
+    try:
+        return MetricsInput.model_validate(value)
+    except ValidationError as exc:
+        raise DomainError(
+            "approval_scope_invalid", "审批快照的数据范围无效", 409,
+            {"errors": exc.errors(include_url=False)},
+            audit_action="execution.stale",
+        ) from exc
+
+
+def _approval_snapshot(session: Session, recommendation: Recommendation, tenant_id: str) -> dict:
+    body = recommendation.body if isinstance(recommendation.body, dict) else {}
+    if "period" not in body:
+        raise DomainError(
+            "approval_scope_missing", "建议缺少审批所需的数据范围，请重新分析", 409,
+            audit_action="recommendation.stale",
+        )
+    try:
+        scope = MetricsInput.model_validate({
+            "period": body["period"],
+            "store_id": body.get("store_id"),
+        })
+    except ValidationError as exc:
+        raise DomainError(
+            "approval_scope_missing", "建议的数据范围无效，请重新分析", 409,
+            {"errors": exc.errors(include_url=False)},
+            audit_action="recommendation.stale",
+        ) from exc
+    report = build_report(fetch_metrics(session, scope, tenant_id))
+    current_findings = analyze_drivers(report)
+    stored_evidence = body.get("evidence")
+    stored_primary = body.get("primary_driver")
+    if not report.data_quality.complete:
+        raise DomainError(
+            "recommendation_stale", "审批时账本数据已不完整，请补齐后重新分析", 409,
+            {"data_quality": report.data_quality.model_dump(mode="json")},
+            audit_action="recommendation.stale",
+        )
+    if stored_evidence is not None and (
+        stored_evidence != current_findings.evidence
+        or stored_primary != (
+            current_findings.primary_driver.model_dump()
+            if current_findings.primary_driver is not None else None
+        )
+    ):
+        raise DomainError(
+            "recommendation_stale", "分析后账本已变化，请重新分析后再审批", 409,
+            {
+                "stored_period": body.get("period"),
+                "current_period": report.period.model_dump(mode="json"),
+                "current_data_quality": report.data_quality.model_dump(mode="json"),
+            },
+            audit_action="recommendation.stale",
+        )
+    return {
+        "version": APPROVAL_SNAPSHOT_VERSION,
+        "snapshot_type": "ledger_and_action",
+        "captured_at": utcnow().isoformat().replace("+00:00", "Z"),
+        "scope": scope.model_dump(mode="json"),
+        "ledger_hash": ledger_fingerprint(session, scope, tenant_id),
+        "action_hash": _canonical_hash(recommendation.action),
+        "action": recommendation.action,
+        "current_totals": report.current.model_dump(mode="json"),
+        "previous_totals": report.previous.model_dump(mode="json"),
+        "data_quality": report.data_quality.model_dump(mode="json"),
+        "sku_breakdown": report.sku_breakdown,
+    }
 
 
 def plan_action(report: MetricsReport, findings: DriverReport) -> ActionPlan:
@@ -160,15 +249,28 @@ def create_recommendation(
 def decide(session: Session, recommendation_id: str, decision: str, reason: str, actor: Actor, request_id: str):
     require_role(actor, "approver")
     status = "approved" if decision == "approve" else "rejected"
+    recommendation = session.scalar(select(Recommendation).where(
+        Recommendation.id == recommendation_id,
+        Recommendation.tenant_id == actor.tenant_id,
+    ))
+    if recommendation is None:
+        raise DomainError("recommendation_not_found", "建议不存在", 404)
+    if recommendation.status != "pending_approval":
+        raise DomainError("invalid_transition", "只有待审批建议可以批准或拒绝", 409)
+    body = recommendation.body if isinstance(recommendation.body, dict) else {}
+    snapshot = _approval_snapshot(session, recommendation, actor.tenant_id) if status == "approved" else None
+    if snapshot is not None:
+        body = {**body, "approval": snapshot}
     changed = session.execute(update(Recommendation).where(
         Recommendation.id == recommendation_id, Recommendation.status == "pending_approval",
         Recommendation.tenant_id == actor.tenant_id,
-    ).values(status=status, approved_by=actor.id if status == "approved" else None, approval_reason=reason))
+    ).values(
+        status=status,
+        approved_by=actor.id if status == "approved" else None,
+        approval_reason=reason,
+        body=body,
+    ))
     if changed.rowcount != 1:
-        if session.scalar(select(Recommendation).where(
-            Recommendation.id == recommendation_id, Recommendation.tenant_id == actor.tenant_id,
-        )) is None:
-            raise DomainError("recommendation_not_found", "建议不存在", 404)
         raise DomainError("invalid_transition", "只有待审批建议可以批准或拒绝", 409)
     recommendation = session.get(Recommendation, recommendation_id)
     session.refresh(recommendation)
@@ -178,7 +280,14 @@ def decide(session: Session, recommendation_id: str, decision: str, reason: str,
     if analysis is None:
         raise DomainError("analysis_not_found", "分析不存在", 404)
     analysis.status = "approved" if status == "approved" else "rejected"
-    record(session, actor, f"recommendation.{decision}", "recommendation", recommendation_id, request_id, details={"reason": reason, "status": status})
+    details = {"reason": reason, "status": status}
+    if snapshot is not None:
+        details.update({
+            "snapshot_version": snapshot["version"],
+            "ledger_hash": snapshot["ledger_hash"],
+            "action_hash": snapshot["action_hash"],
+        })
+    record(session, actor, f"recommendation.{decision}", "recommendation", recommendation_id, request_id, details=details)
     return recommendation
 
 
@@ -233,6 +342,36 @@ def execute_once(session: Session, recommendation_id: str, key: str, actor: Acto
         raise DomainError("not_approved", "只有已批准的建议可以模拟执行", 409, {"status": recommendation.status})
     recommendation = session.get(Recommendation, recommendation_id)
     session.refresh(recommendation)
+    body = recommendation.body if isinstance(recommendation.body, dict) else {}
+    snapshot = body.get("approval")
+    if not isinstance(snapshot, dict) or snapshot.get("version") != APPROVAL_SNAPSHOT_VERSION:
+        raise DomainError(
+            "approval_snapshot_missing", "审批快照缺失，请重新分析并审批", 409,
+            {"status": recommendation.status},
+            audit_action="execution.stale",
+        )
+    actual_action_hash = _canonical_hash(recommendation.action)
+    if actual_action_hash != snapshot.get("action_hash"):
+        raise DomainError(
+            "action_changed", "审批后动作参数已变化，拒绝执行", 409,
+            {
+                "approved_action_hash": snapshot.get("action_hash"),
+                "current_action_hash": actual_action_hash,
+            },
+            audit_action="execution.action_changed",
+        )
+    scope = _snapshot_scope(snapshot.get("scope"))
+    current_ledger_hash = ledger_fingerprint(session, scope, actor.tenant_id)
+    if current_ledger_hash != snapshot.get("ledger_hash"):
+        raise DomainError(
+            "approval_stale", "审批后账本已变化，请重新分析并审批", 409,
+            {
+                "approved_ledger_hash": snapshot.get("ledger_hash"),
+                "current_ledger_hash": current_ledger_hash,
+                "captured_at": snapshot.get("captured_at"),
+            },
+            audit_action="execution.stale",
+        )
     execution = Execution(
         id=new_id(), tenant_id=actor.tenant_id, recommendation_id=recommendation_id, idempotency_key=key,
         status="executing", actor=actor.id, request_id=request_id, simulation=True,

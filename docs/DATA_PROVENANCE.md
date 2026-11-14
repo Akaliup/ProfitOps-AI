@@ -9,7 +9,8 @@
 | 演示经营账本 | `backend/app/seed.py` | 2 店铺 × 3 SKU × 60 天；1,920 条订单、360 条每日经营记录 | 总览、Agent 分析、审批/执行、审计、截图、演示与 e2e | 否，确定性合成 |
 | 演示身份 | `backend/app/seed.py` `seed_identity` | 1 个租户、2 个账号（analyst / approver） | 本地角色演示 | 否 |
 | 知识库 | `backend/app/knowledge.py` `SEED_DOCUMENTS` | 6 篇合成 SOP、32 个 chunk，来源前缀 `synthetic://` | RAG 检索、拒答、引用校验 | 否，合成 |
-| RAG 评测查询 | `backend/evals/rag_queries.json` | 42 条（36 可回答 + 6 不可回答），标签在生成向量前固定 | 检索/拒答/引用链路与阈值校准 | 否，人工编写的合成查询 |
+| RAG 校准/测试查询 | `backend/evals/rag_calibration.json`、`backend/evals/rag_test.json` | 校准 26 条、测试 24 条；两集合 id 与 query 文本不重叠，测试集含 6 条跨文档和 4 条不可回答 | 校准阈值与排序；测试集冻结回归 | 否，人工编写的合成查询 |
+| 历史 RAG 查询 | `backend/evals/rag_queries.json` | 42 条（36 可回答 + 6 不可回答），旧统一集合 | 历史对照；曾同时用于调参与汇报，不再作为独立测试集 | 否，人工编写的合成查询 |
 | LLM 评测案例 | `backend/evals/fixtures.py` | 4 个合成案例 | Schema、证据、降级与门禁 | 否，程序生成 |
 | 确定性分析用例 | `backend/evals/cases.json` | 5 个用例 | 利润计算与归因回归 | 否 |
 | LLM 回放录制 | `backend/evals/recordings/synthetic_native_v1.json` | 固定 JSON 响应 | 回放/解析/证据链路 | 否，不是真实模型 transcript |
@@ -36,9 +37,9 @@
 
 ## 4. 接入真实数据的路径
 
-1. **账本**：`seed_demo` 只在演示租户且没有订单时写入；已有业务数据时不会混入种子（`backend/app/seed.py`）。真实数据需要额外的导入/同步作业与字段校验，当前未实现。
+1. **账本**：`seed_demo` 只在演示租户且没有订单时写入；已有业务数据时不会混入种子（`backend/app/seed.py`）。`orders` / `operations` CSV 导入提供逐行校验、自然键去重与写后回读对账（见 `docs/CONTRACT.md`）；仓库内仍只附带合成数据，未捆绑任何真实商户报表，也未实现 ERP/广告平台的自动同步。
 2. **知识库**：通过 `POST /api/knowledge/documents` 写入真实 SOP；切换 embedding 后用 `scripts/reindex_knowledge.py` 重嵌入，并按评测建议值重新校准 `KNOWLEDGE_MIN_SCORE`。
-3. **检索评测**：用真实文档和人工标注查询替换 `backend/evals/rag_queries.json`，标签必须在生成向量前固定。
+3. **检索评测**：用真实文档和人工标注查询替换 `backend/evals/rag_calibration.json` 与 `backend/evals/rag_test.json`，先固定标签再生成向量；测试集只用于最终报告，不得回写调参。
 4. **LLM 评测**：用真实案例替换 `backend/evals/fixtures.py`；真实调用必须显式授权，并记录次数与预算。
 5. **上线前仍需**：生产数据库、IAM/SSO、备份恢复、限流与多副本、真实数据质量门禁、安全评审。
 

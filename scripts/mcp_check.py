@@ -23,7 +23,7 @@ from mcp import ClientSession  # noqa: E402
 from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 
 PERIOD = {"start_date": "2026-10-01", "end_date": "2026-10-30"}
-EXPECTED_TOOLS = {
+EXPECTED_TOOLS = {"get_weekly_intelligence", "get_inventory_risks",
     "get_profit_analysis",
     "get_sku_breakdown",
     "search_knowledge",
@@ -65,6 +65,7 @@ async def run() -> dict:
                 "LLM_API_KEY": "",
                 "KNOWLEDGE_EMBEDDING_PROVIDER": "hashing",
                 "KNOWLEDGE_EMBEDDING_MODEL": "hashing-v1",
+                "KNOWLEDGE_MIN_SCORE": "0.15",
             }
         )
         params = StdioServerParameters(

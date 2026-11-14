@@ -31,6 +31,22 @@ export interface KnowledgeSearch {
 export interface KnowledgeContext {
   query: string; hits: KnowledgeCitation[]; no_answer: boolean; embedding_model: string; retrieval_ms: number;
 }
+export interface ImportIssue { row: number; field: string | null; code: string; message: string }
+export interface ImportCheck { code: string; ok: boolean; detail: string }
+export interface ImportTotals {
+  rows: number; sales: number; discounts: number; refunds: number; net_sales: number;
+  cogs: number; ad_spend: number; fulfillment: number; platform_fees: number;
+  other_costs: number; net_profit: number; inventory: number; inbound_inventory: number;
+}
+export interface ImportSummary {
+  id: string | null; kind: 'orders' | 'operations' | 'ads' | 'inventory'; filename: string;
+  status: 'ready' | 'blocked' | 'committed' | 'noop'; can_commit: boolean; replayed: boolean;
+  content_sha256: string; total_rows: number; accepted_rows: number; skipped_rows: number;
+  rejected_rows: number; duplicate_rows: number; totals: ImportTotals;
+  issues: ImportIssue[]; issue_counts: Record<string, number>; checks: ImportCheck[];
+  preview_rows?: Record<string, string>[];
+  created_by: string | null; created_at: string | null;
+}
 export interface Totals {
   sales: number; discounts: number; refunds: number; cogs: number; ad_spend: number;
   fulfillment: number; platform_fees: number; other_costs: number;
@@ -100,6 +116,16 @@ export interface Execution {
   result: { message: string; sku: string; before?: { daily_budget: number }; after?: { daily_budget: number }; external_calls: number; side_effect_count: number } | null;
   error: { code: string; message: string } | null; request_id?: string;
 }
+export interface ApprovalSnapshot {
+  version: number; snapshot_type: string; captured_at: string;
+  scope: { period: Period; store_id: string | null };
+  ledger_hash: string; action_hash: string;
+  action: Record<string, unknown>;
+  current_totals: { net_sales: number; net_profit: number; margin_pct: number | null };
+  previous_totals: { net_sales: number; net_profit: number; margin_pct: number | null };
+  data_quality: { complete: boolean; missing_records: number; incomplete_records: number };
+  sku_breakdown: Array<Record<string, unknown>>;
+}
 export interface Recommendation {
   id: string; analysis_id: string; status: string; title: string;
   body: {
@@ -109,6 +135,7 @@ export interface Recommendation {
     evidence: Evidence[]; primary_driver: Driver; recommendation: string;
     expected_impact: { kind: string; horizon_days: number; profit_improvement_min: number; profit_improvement_max: number; explanation: string };
     risks: string[]; missing_information: string[]; assumptions: string[]; source: string;
+    approval?: ApprovalSnapshot | null;
   };
   action: { type: string; simulation: boolean; sku: string; baseline_daily_budget: number; proposed_daily_budget: number };
   approved_by: string | null; approval_reason: string | null; created_at: string; execution: Execution | null;
@@ -162,4 +189,21 @@ export interface OpsSummary {
   }[];
   pricing: { version: string; source: string };
   notes: string[];
+}
+
+export interface InventoryRow {
+  store_id: string; sku: string; on_hand: number; reserved: number; available: number;
+  daily_sales: string; coverage_days: string | null; lead_time_days: number;
+  risk: string; reorder_quantity: number | null; timely_inbound: number;
+  evidence_id: string; import_batch_id: string; status: string;
+}
+export interface WeeklyIntelligence {
+  id: string; period: Period; metrics: Metrics; findings: { conclusion: string };
+  stores: {store_id: string; name: string; current: Totals; profit_delta: number; risk_skus: number}[];
+  inventory: {items: InventoryRow[]; coverage_note: string};
+  sku_diagnostics: {store_id: string; sku: string; profit_delta: number; ad_spend_delta: number; refund_delta: number; ad_growth_alert: boolean}[];
+  analysis: {status: string; reason?: string; claims: {explanation: string; evidence_ids: string[]}[]};
+  evidence: {id: string; [key: string]: unknown}[];
+  source_rows: {id: string; batch_id: string; row: number; kind: string}[];
+  limitations: string[];
 }

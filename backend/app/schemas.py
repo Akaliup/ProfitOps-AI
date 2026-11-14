@@ -391,3 +391,54 @@ class ToolResult(StrictModel):
     ok: bool
     data: dict[str, Any] | None = None
     error: ToolFailure | None = None
+
+
+class ImportIssue(StrictModel):
+    row: int
+    field: str | None = None
+    code: str
+    message: str
+
+
+class ImportCheck(StrictModel):
+    code: str
+    ok: bool
+    detail: str
+
+
+class ImportTotals(StrictModel):
+    rows: int = 0
+    sales: int = 0
+    discounts: int = 0
+    refunds: int = 0
+    net_sales: int = 0
+    cogs: int = 0
+    ad_spend: int = 0
+    fulfillment: int = 0
+    platform_fees: int = 0
+    other_costs: int = 0
+    net_profit: int = 0
+    inventory: int = 0
+    inbound_inventory: int = 0
+
+
+class ImportSummary(StrictModel):
+    id: str | None = None
+    kind: Literal["orders", "operations", "ads", "inventory"]
+    filename: str
+    status: Literal["ready", "blocked", "committed", "noop"]
+    can_commit: bool
+    replayed: bool = False
+    content_sha256: str
+    total_rows: int
+    accepted_rows: int
+    skipped_rows: int
+    rejected_rows: int
+    duplicate_rows: int
+    totals: ImportTotals
+    issues: list[ImportIssue]
+    issue_counts: dict[str, int]
+    checks: list[ImportCheck]
+    preview_rows: list[dict[str, str]] = Field(default_factory=list)
+    created_by: str | None = None
+    created_at: datetime | None = None
