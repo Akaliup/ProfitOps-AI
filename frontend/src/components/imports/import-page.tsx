@@ -46,6 +46,8 @@ export function ImportPage({ token, isApprover, onImported }: {
   const [file, setFile] = useState<File | null>(null)
   const [text, setText] = useState('')
   const [mapping, setMapping] = useState('')
+  const [adapter, setAdapter] = useState('')
+  const [adapters, setAdapters] = useState<{id: string; label: string; mapping: Record<string, string>}[]>([])
   const [summary, setSummary] = useState<ImportSummary | null>(null)
   const [batches, setBatches] = useState<ImportSummary[]>([])
   const [busy, setBusy] = useState<'preview' | 'commit' | 'template' | 'list' | ''>('')
@@ -62,7 +64,7 @@ export function ImportPage({ token, isApprover, onImported }: {
     finally { setBusy('') }
   }, [token])
 
-  useEffect(() => { void loadBatches() }, [loadBatches])
+  useEffect(() => { void loadBatches(); void api.adapters(token, kind).then(result => setAdapters(result.items)).catch(() => setAdapters([])) }, [loadBatches, token, kind])
 
   async function pick(next: File | null) {
     if (!next) return
@@ -77,7 +79,7 @@ export function ImportPage({ token, isApprover, onImported }: {
     if (!file || !text) { setError('请先选择 CSV 文件'); return }
     setBusy('preview'); setError(''); setNotice('')
     try {
-      setSummary(await api.previewImport(token, kind, text, file.name, mapping))
+      setSummary(await api.previewImport(token, kind, text, file.name, mapping, adapter))
     } catch (value) {
       if (value instanceof ApiError && value.payload) {
         const body = value.payload as { error?: { details?: { summary?: ImportSummary } } }
@@ -92,7 +94,7 @@ export function ImportPage({ token, isApprover, onImported }: {
     if (!file || !text) return
     setBusy('commit'); setError(''); setNotice('')
     try {
-      const result = await api.commitImport(token, kind, text, file.name, mapping)
+      const result = await api.commitImport(token, kind, text, file.name, mapping, adapter)
       setSummary(result)
       setNotice(result.status === 'blocked' ? '整批未写入 请查看错误行' : result.status === 'noop' ? '该文件已导入过 账本没有重复写入' : `已写入 ${result.accepted_rows} 行 已保存来源与批次`)
       onImported()
@@ -136,7 +138,7 @@ export function ImportPage({ token, isApprover, onImported }: {
       <span className='flex-1 break-words'>{notice}</span>
     </div>}
 
-    {kind !== 'operations' && <label className='block text-sm'>字段映射 可选 JSON 标准字段名对应 CSV 列名<textarea aria-label='字段映射' className='mt-2 block w-full rounded border p-2' placeholder={'{"store_id":"店铺","sku":"商品编号"}'} value={mapping} onChange={e => { setMapping(e.target.value); setSummary(null) }} /></label>}
+    {kind !== 'operations' && <div className='space-y-2'><label className='block text-sm'>平台报表适配器<select aria-label='平台报表适配器' className='mt-2 block rounded border p-2' value={adapter} onChange={e => { const id = e.target.value; setAdapter(id); setSummary(null); const preset = adapters.find(item => item.id === id); setMapping(preset ? JSON.stringify(preset.mapping, null, 2) : '') }}><option value=''>通用字段映射</option>{adapters.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><p className='text-xs text-muted-foreground'>先把不同平台报表规范化进同一账本 再计算利润与周报 适配器只做离线列映射 不连接卖家后台 服务端会再次校验</p><label className='block text-sm'>字段映射 可选 JSON 标准字段名对应 CSV 列名<textarea aria-label='字段映射' className='mt-2 block w-full rounded border p-2' placeholder={'{"store_id":"店铺","sku":"商品编号"}'} value={mapping} onChange={e => { setMapping(e.target.value); setSummary(null) }} /></label></div>}
     <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]'>
       <Card className='reveal gap-0 overflow-hidden py-0'>
         <CardHeader className='border-b bg-muted/30 px-6 py-5'>

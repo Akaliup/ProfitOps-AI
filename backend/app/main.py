@@ -421,20 +421,39 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
             return PlainTextResponse(template_csv(kind), media_type="text/csv")
         return PlainTextResponse(COLUMNS[kind] + "\n", media_type="text/csv")
 
+    @app.get("/api/data/adapters", tags=["intelligence"])
+    def source_adapters(kind: str | None = None, actor: Actor = Depends(identity)):
+        from .import_adapters import adapter_catalog
+        if kind is not None and kind not in {"orders", "ads", "inventory"}:
+            raise DomainError("import_kind_invalid", "不支持的数据类型", 422)
+        return {"items": adapter_catalog(kind)}
+
     @app.post("/api/data/{kind}/preview", tags=["intelligence"])
     @app.post("/api/data/{kind}/commit", tags=["intelligence"])
-    async def source_upload(kind: str, request: Request, mapping: str | None = None, actor: Actor = Depends(identity)):
+    async def source_upload(kind: str, request: Request, mapping: str | None = None, adapter: str | None = None, actor: Actor = Depends(identity)):
         from .source_imports import ingest, mapped_csv
         commit = request.url.path.endswith('/commit')
         if commit:
             require_role(actor, "approver")
         body, filename = await read_import_upload(request)
+        if adapter:
+            from .import_adapters import get_adapter
+            try:
+                preset = get_adapter(adapter, kind)
+            except ValueError:
+                raise DomainError("invalid_adapter", "适配器与数据类型不匹配", 422) from None
+            mapping = json.dumps(preset.mapping) if not mapping else mapping
         body = mapped_csv(body, mapping)
         def run():
             with factory.begin() as session:
                 if commit:
                     begin_write(session, engine)
-                return ingest(session, kind, body, filename, actor, request.state.request_id if commit else None).model_dump(mode="json")
+                result = ingest(session, kind, body, filename, actor, request.state.request_id if commit else None).model_dump(mode="json")
+                if commit and adapter and result.get('id'):
+                    from .models import ImportBatch
+                    batch = session.get(ImportBatch, result['id'])
+                    batch.summary = {**batch.summary, 'adapter': adapter}
+                return result
         return await run_in_threadpool(run)
 
     @app.get("/api/inventory", tags=["intelligence"])

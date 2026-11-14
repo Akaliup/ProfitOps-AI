@@ -47,6 +47,7 @@ export interface ImportSummary {
   preview_rows?: Record<string, string>[];
   created_by: string | null; created_at: string | null;
 }
+export interface ImportAdapter { id: string; label: string; kind: 'orders' | 'ads' | 'inventory'; mapping: Record<string, string>; description: string }
 export interface Totals {
   sales: number; discounts: number; refunds: number; cogs: number; ad_spend: number;
   fulfillment: number; platform_fees: number; other_costs: number;
@@ -65,6 +66,14 @@ export interface Metrics {
   trend: (Totals & { date: string })[];
   sku_breakdown: { product_id: string; sku: string; name: string; current: Totals; previous: Totals; profit_delta: number; ad_spend_delta: number; inventory: number; inbound_inventory: number }[];
   data_quality: { complete: boolean; expected_records: number; observed_records: number; missing_records: number; incomplete_records: number; missing_examples: string[]; issues: string[] };
+  decomposition: {
+    status: 'OK' | 'INSUFFICIENT_DATA'; unit: string; formula: string;
+    current: { sales: number; units: number; asp: number | null };
+    previous: { sales: number; units: number; asp: number | null };
+    contributions: { volume: number | null; price: number | null; mix: number | null; residual: number | null };
+    sales_change?: number | null;
+    sku_movement?: { new_sales: number; discontinued_sales: number; rule: string };
+  };
 }
 export interface Step {
   name: string; label: string; status: string; started_at: string; request_id: string;
@@ -201,6 +210,8 @@ export interface WeeklyIntelligence {
   id: string; period: Period; metrics: Metrics; findings: { conclusion: string };
   stores: {store_id: string; name: string; current: Totals; profit_delta: number; risk_skus: number}[];
   inventory: {items: InventoryRow[]; coverage_note: string};
+  pricing_suggestions: {store_id: string; sku: string; status: string; suggested_price: number | null; current_price: number | null; reason_code: string; evidence_id: string}[];
+  campaign_diagnostics?: {store_id: string; campaign_id: string; campaign_name: string; ad_spend: number; attributed_sales: number; attributed_orders: number; clicks: number; impressions: number; evidence_id: string}[];
   sku_diagnostics: {store_id: string; sku: string; profit_delta: number; ad_spend_delta: number; refund_delta: number; ad_growth_alert: boolean}[];
   analysis: {status: string; reason?: string; claims: {explanation: string; evidence_ids: string[]}[]};
   evidence: {id: string; [key: string]: unknown}[];

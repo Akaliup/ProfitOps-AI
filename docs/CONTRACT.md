@@ -4,13 +4,19 @@
 
 订单、广告和库存 CSV 接口 `/api/data/{orders|ads|inventory}/preview|commit` 采用原始 UTF-8 CSV 请求体；预览可读，提交仅 approver。`GET /api/data/template/{kind}` 返回表头。批次与错误行沿用 `/api/imports`；来源行写入新增 `source_records`，按租户、类型、自然键唯一，关联 `import_batches`。`GET /api/inventory` 返回可配置的确定性店铺/SKU 风险与补货量；`POST /api/weekly-reports` 接受已完成 UTC 自然周的周日 `end_date`、可选 `store_id`、`inventory_policy` 与 `use_llm`，`GET /api/weekly-reports` 和 `GET /api/weekly-reports/{id}` 按租户读取已保存快照。周报金额仍为整数美分，复用 `fetch_metrics` / `build_report` 八项利润桥并保留来源批次与行号。LLM 仅产出引用已知 evidence ID 的文字，数据不足、引用无效或 Provider 失败时返回确定性降级，不执行真实采购/广告/调价。详细字段、算法边界、迁移与 CSV 样例见 [INTELLIGENCE.md](INTELLIGENCE.md)。
 
+`metrics.decomposition` 用整数美分拆销售额变化：`sales_change = volume + price + mix + residual`。它不替换八项净利润桥，也不与 `net_profit` 逐项恒等。任一侧件数为 0 时状态为 `INSUFFICIENT_DATA`，ASP 为 null，不估算价格。仅一侧有件数的 SKU 不丢弃：没有可比 ASP，其全部销售额变化进入 SKU 销量项，与组合销量效应的差额进入 mix。证据 id 为 `ev-volume`、`ev-price`、`ev-mix`、`ev-residual`，分店为 `{store_id}:ev-*`。
+
+调价建议规则版本 `pricing-rules-v1`，只读，不执行改价。件数或净销售额不足，或可变成本合计为 0 且不能证明成本列已导入时，`suggested_price` 为 null、状态为 `INSUFFICIENT_DATA`。证据 id 为 `{store_id}:sku:{sku}:pricing`。
+
+`GET /api/data/adapters` 与 preview/commit 的 `adapter` 参数只做离线列映射，预设为 `amazon-orders`、`shopify-orders`、`amazon-ads`，没有库存适配器，也不连接卖家后台。非法 JSON mapping、未知 adapter、kind 不匹配返回 422，整批不入账。活动诊断 id 为 `{store_id}:campaign:{campaign_id}`；`attributed_sales` 不计入利润桥。
+
 ## 周报追问（0005）
 
 `GET /api/weekly-reports/{id}/messages` 返回当前租户唯一线程及按时间升序的消息；尚未提问时 `thread=null`、`items=[]`，不自动建线程。`POST /api/weekly-reports/{id}/messages` 只接受 `question`（1–1000 字符，去首尾空白），不信任请求体中的周报、店铺或工具参数。user 与 assistant 消息在同一事务写入；未配置模型、模型失败、引用非法或数字无法核对时仍返回 200，以 `deterministic_fallback` 或 `refused` 明确说明，不把降级伪装成模型成功。周报不存在或跨租户统一返回 404 `report_not_found`；user+assistant 合计超过 20 条返回 422 `weekly_chat_limit`；审计动作 `weekly.chat` 记录线程、消息、状态与原因。
 
-`weekly_chat_threads` 以 `(tenant_id, report_id)` 唯一，`weekly_chat_messages` 仅允许 role 为 `user` / `assistant`，`trace` 不返回前端。已保存 `WeeklyReport.body` 不可变，聊天记录单独持久化。追问只通过只读工具 `get_saved_weekly_report` 读取当前租户的这一份周报，不调用 `weekly_data` 现场重算，也不读取其他周报。读取时可确定性派生 `{store_id}:store` 与 `{store_id}:sku:{sku}` 证据 ID，但不写回历史快照。
+`weekly_chat_threads` 以 `(tenant_id, report_id)` 唯一，`weekly_chat_messages` 仅允许 role 为 `user` / `assistant`，`trace` 不返回前端。已保存 `WeeklyReport.body` 不可变，聊天记录单独持久化。追问只通过只读工具 `get_saved_weekly_report` 读取当前租户的这一份周报，不调用 `weekly_data` 现场重算，也不读取其他周报。读取时可确定性派生 `{store_id}:store`、`{store_id}:sku:{sku}`（含当期与上期 `sales` / `units` / `net_profit`）、`{store_id}:sku:{sku}:pricing`、`{store_id}:campaign:{campaign_id}`，以及周报里已有的 `ev-*` / `{store_id}:ev-*`。这些派生 id 不写回历史快照。
 
-成功 claim 的 evidence ID 必须来自本轮完整工具结果；回答中的阿拉伯数字必须能在所引证据中找到，仅已知金额字段及利润桥金额允许由整数美分换算为两位小数美元，库存、件数、天数、MOQ 等不换算。嵌套对象按叶子字段名判断，SKU、日期和证据 ID 等标识符先屏蔽再抽数字。工具结果按不可信数据标记，保留全部引用 ID、来源和必要标量，不携带订单 ID 长列表或重复公式；对比期统一放在 `metrics.previous_period`。工具结果超过 `LLM_TOOL_RESULT_MAX_BYTES` 时失败并降级，不截断证据或保留残缺引用。该工具不属于全局 `LLM_TOOL_ALLOWLIST`，也不暴露给 MCP；追问路径没有采购、调价、预算或执行工具。
+成功 claim 的 evidence ID 必须来自本轮完整工具结果；回答中的阿拉伯数字必须能在所引证据中找到，仅已知金额字段及利润桥金额允许由整数美分换算为两位小数美元。可换算字段包括账本金额、桥金额，以及 `asp`、`suggested_price`、`current_price`、`attributed_sales`、`sales_change`。库存、件数、点击、曝光、归因订单数、天数、MOQ 等不换算。`refund_rate_pct` 与 `margin_pct` 已是百分数，接受 `15` 与 `15.0`，不除以 100。嵌套对象按叶子字段名判断，SKU、日期和证据 ID 等标识符先屏蔽再抽数字。工具结果按不可信数据标记，保留全部引用 ID、来源和必要标量，不携带订单 ID 长列表或重复公式；对比期统一放在 `metrics.previous_period`。工具结果超过 `LLM_TOOL_RESULT_MAX_BYTES` 时失败并降级，不截断证据或保留残缺引用。该工具不属于全局 `LLM_TOOL_ALLOWLIST`。MCP 只读暴露同一个 `get_saved_weekly_report`，仍按服务端租户过滤；追问路径没有采购、调价、预算或执行工具。
 
 创建线程和初次上限检查在短事务内完成；LLM 与工具循环在事务外调用。保存前通过短事务中的线程行锁（SQLite 为 `BEGIN IMMEDIATE`）再次检查 20 条上限，原子写入问答和审计。并发填满时返回 422 `weekly_chat_limit`，不返回未保存的回答。模型调用阶段不持有写事务。
 
@@ -88,7 +94,7 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 
 ## MCP（只读，stdio）
 
-`backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 四个 `effect=read|pure`、`policy=safe` 的工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
+`backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_saved_weekly_report`、`get_weekly_intelligence`、`get_inventory_risks`、`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 7 个 `effect=read|pure`、`policy=safe` 的只读工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
 
 ## 数据导入与对账（CSV）
 

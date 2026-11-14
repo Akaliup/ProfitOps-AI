@@ -1,4 +1,4 @@
-import type { Analysis, Audit, Demo, Execution, ImportSummary, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
+import type { Analysis, Audit, Demo, Execution, ImportAdapter, ImportSummary, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public requestId: string, public status: number, public payload?: unknown) { super(message) }
@@ -18,10 +18,10 @@ export async function request<T>(path: string, token?: string, options: RequestI
   return data as T
 }
 
-async function csvRequest(path: string, token: string, body: string, filename: string, mapping = ''): Promise<ImportSummary> {
+async function csvRequest(path: string, token: string, body: string, filename: string, mapping = '', adapter = ''): Promise<ImportSummary> {
   const headers = new Headers({ Authorization: `Bearer ${token}`, 'Content-Type': 'text/csv; charset=utf-8', 'X-Filename': filename })
   let response: Response
-  const url = `${path}?filename=${encodeURIComponent(filename)}${mapping ? `&mapping=${encodeURIComponent(mapping)}` : ''}`
+  const url = `${path}?${adapter ? `adapter=${encodeURIComponent(adapter)}&` : ''}filename=${encodeURIComponent(filename)}${mapping ? `&mapping=${encodeURIComponent(mapping)}` : ''}`
   try { response = await fetch(url, { method: 'POST', headers, body }) }
   catch { throw new ApiError('无法连接服务，请确认后端已启动', 'network_error', '', 0) }
   const data = await response.json().catch(() => null)
@@ -60,7 +60,8 @@ export const api = {
   createKnowledgeDocument: (token: string, payload: KnowledgeDocumentInput) => request<KnowledgeDocument>('/api/knowledge/documents', token, { method: 'POST', body: JSON.stringify(payload) }),
   deleteKnowledgeDocument: (token: string, id: string) => request<KnowledgeDocument>(`/api/knowledge/documents/${id}`, token, { method: 'DELETE' }),
   imports: (token: string) => request<{ items: ImportSummary[] }>('/api/imports?limit=50', token),
-  previewImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}/preview` : `/api/data/${kind}/preview`, token, text, filename, mapping),
-  commitImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}` : `/api/data/${kind}/commit`, token, text, filename, mapping),
+  adapters: (token: string, kind?: string) => request<{ items: ImportAdapter[] }>(`/api/data/adapters${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`, token),
+  previewImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '', adapter = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}/preview` : `/api/data/${kind}/preview`, token, text, filename, mapping, adapter),
+  commitImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '', adapter = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}` : `/api/data/${kind}/commit`, token, text, filename, mapping, adapter),
   importTemplateUrl: (kind: 'orders' | 'operations' | 'ads' | 'inventory') => `/api/data/template/${kind}`,
 }

@@ -95,3 +95,35 @@ it('posts only the question and renders the API failure without fabricated answe
   expect(fetch).toHaveBeenCalledWith('/api/weekly-reports/report-a/messages', expect.objectContaining({method: 'POST', body: JSON.stringify({question: '利润变化是什么'})}))
   expect(screen.queryByRole('button', {name: '查看证据 ev-sales'})).not.toBeInTheDocument()
 })
+
+const decomposition = {
+  status: 'OK' as const, unit: 'USD cents',
+  formula: 'sales change = volume effect + price effect + mix effect + residual',
+  current: {sales: 16001, units: 10, asp: 1600},
+  previous: {sales: 11000, units: 8, asp: 1375},
+  contributions: {volume: 2750, price: 6001, mix: -3750, residual: 0},
+  sales_change: 5001,
+  sku_movement: {new_sales: 0, discontinued_sales: 5000, rule: 'No ASP is imputed'},
+}
+
+it('highlights decomposition, pricing and campaign evidence', async () => {
+  const report = {...snapshot,
+    metrics: {...snapshot.metrics, decomposition, drivers: [{metric: 'sales', label: '销售额', contribution: 1000}]},
+    pricing_suggestions: [{store_id: 'us-store', sku: 'BAG-01', status: 'OK', suggested_price: 1050, current_price: 1000, reason_code: 'observe', evidence_id: 'us-store:sku:BAG-01:pricing'}],
+    campaign_diagnostics: [{store_id: 'us-store', campaign_id: 'DEMO-ADS-A', campaign_name: 'Search', ad_spend: 501, attributed_sales: 3500, attributed_orders: 1, clicks: 40, impressions: 1000, evidence_id: 'us-store:campaign:DEMO-ADS-A'}],
+  }
+  const cited = {...reply, claims: [{explanation: '查看量价、调价和活动证据', evidence_ids: ['ev-volume', 'ev-price', 'us-store:sku:BAG-01:pricing', 'us-store:campaign:DEMO-ADS-A']}]}
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/messages')
+    ? json({thread: {id: 'thread'}, items: [cited]}) : json(report)))
+  const {container} = render(<IntelligencePage token='demo-analyst'/>)
+  await userEvent.click(screen.getByRole('button', {name: '生成并保存周报'}))
+  expect(await screen.findByText('量价与结构拆解')).toBeInTheDocument()
+  expect(screen.getByText('拆的是销售额变化，不与净利润八项桥逐项恒等。合成拆解，不是已验证的经营因果。')).toBeInTheDocument()
+  expect(screen.getByText('新建或下架 SKU 没有可比 ASP，销售额变化计入销量项后再拆出结构效应，不估算缺失价格。')).toBeInTheDocument()
+  for (const id of cited.claims[0].evidence_ids) {
+    await userEvent.click(await screen.findByRole('button', {name: `查看证据 ${id}`}))
+    const target = container.querySelector(`[data-evidence-id="${id}"]`)
+    expect(target).not.toBeNull()
+    expect(target).toHaveAttribute('data-highlighted', 'true')
+  }
+})

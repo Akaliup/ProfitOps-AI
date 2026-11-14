@@ -71,7 +71,10 @@ class Product(Base):
     __tablename__ = "products"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(40), default="demo", server_default="demo", index=True)
-    sku: Mapped[str] = mapped_column(String(50), unique=True)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "sku", name="uq_products_tenant_sku"),
+    )
+    sku: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(100))
 
 

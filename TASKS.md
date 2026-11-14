@@ -157,6 +157,15 @@
 - [x] 测试集保留历史失败案例；评测输出 `split_validation`、失败列表与 `test_used_for_tuning=false`
 - [x] 后端 298 通过、6 跳过；前端 19 通过；生产构建通过；split 门禁通过
 
+## 周报演示增量收尾（2026-11-14）
+
+- [x] 量价拆解、确定性调价、平台风格 CSV 适配、活动诊断和 MCP 快照读取
+- [x] 租户内 SKU 唯一性迁移，旧库数据/外键与回退保护回归
+- [x] 实际浏览器导入与周报验收，六张真实页面截图
+- [x] 追问执行意图拒绝与迁移 URL 覆盖
+- [x] 交付范围、验证与限制见 `docs/WEEKLY_COMPLETION.md`
+- [ ] 真实模型回答与引用高亮截图、PostgreSQL、容器验证
+
 ## 后续（核心通过后再评估）
 - MCP 生产化：OAuth、网络 transport、多租户、限流、审计与客户端权限管理
 - RAG 生产化：真实 embedding、业务语料与人工标注查询集、reranker、文档级 ACL、PDF/OCR

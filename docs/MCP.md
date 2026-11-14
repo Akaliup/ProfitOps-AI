@@ -102,10 +102,13 @@ POSIX 环境把 `command` 换成 `.venv/bin/python`，路径使用 `/`。如果�
 
 ## 7. 调用链示例
 
-1. `get_profit_analysis`：传 `{"period":{"start_date":"2026-10-01","end_date":"2026-10-30"}}`，得到利润报告、驱动和证据。
-2. `get_sku_breakdown`：传同一 period，得到 SKU 明细。
-3. `search_knowledge`：传 `{"query":"广告预算下调审批","top_k":3}`，得到带 `chunk_id` 的知识片段。
-4. `get_approval_status`：传 `recommendation_id`，只读查询审批状态。
+1. `get_weekly_intelligence`：传 `{"end_date": "2020-01-12"}`，获取包含量价分解、库存覆盖、调价建议的周报情报。
+2. `get_saved_weekly_report`：传 `{"report_id": "<saved-report-id>"}`，获取已保存周报的快照与可引用证据。
+3. `get_inventory_risks`：传 `{"as_of": "2020-01-12"}`，获取各 SKU 库存覆盖天数与断货/补货风险。
+4. `get_profit_analysis`：传 `{"period":{"start_date":"2026-10-01","end_date":"2026-10-30"}}`，得到利润报告、驱动和证据。
+5. `get_sku_breakdown`：传同一 period，得到 SKU 明细。
+6. `search_knowledge`：传 `{"query":"广告预算下调审批","top_k":3}`，得到带 `chunk_id` 的知识片段。
+7. `get_approval_status`：传 `recommendation_id`，只读查询审批状态。
 
 ## 8. 验证
 
@@ -117,14 +120,15 @@ POSIX 环境把 `command` 换成 `.venv/bin/python`，路径使用 `/`。如果�
 `scripts/mcp_check.py` 使用临时 SQLite 和真实 stdio 子进程，验证：
 
 - `initialize`、`tools/list`、`tools/call` 可用；
-- 只列出四个只读工具，`create_recommendation` 与 `simulate_execute_approved_action` 均不在列表中；
+- 暴露 7 个只读工具（`get_saved_weekly_report`、`get_weekly_intelligence`、`get_inventory_risks`、`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status`），`create_recommendation` 与 `simulate_execute_approved_action` 均不在列表中；
 - `get_profit_analysis` 返回整数美分、`bridge_verified=true` 和证据；
+- `get_weekly_intelligence` 返回周报情报；
 - `get_sku_breakdown` 返回 SKU 行；
 - `search_knowledge` 返回非空 `hits`、稳定 `chunk_id` 和 `embedding_model=hashing-v1`；
 - 写/审批工具直接调用返回 `unknown_tool`；
 - 子进程使用 `LLM_PROVIDER=disabled`、`LLM_API_KEY=`，不调用真实模型。
 
-本次实测（2026-11-02）：MCP 专项测试 **9 passed**；stdio 检查 `ok=true`，4 个工具、净利润 `-570300` 美分、`bridge_verified=true`、SKU 3 行、知识命中 3 条，写/审批工具均为 `unknown_tool`。
+专项测试见 `backend/tests/test_mcp_server.py`，stdio 检查见 `scripts/mcp_check.py`。不要把某一次的通过条数写死在这里。最近一次本地检查确认 7 个只读工具、写/审批工具为 `unknown_tool`；具体通过数以该次命令输出为准。
 
 ## 9. 限制
 

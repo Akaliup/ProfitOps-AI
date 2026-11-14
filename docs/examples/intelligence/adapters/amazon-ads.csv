@@ -1,0 +1,3 @@
+store_id,date,advertised-sku,campaign-id,campaign-name,cost,sales,orders,clicks,impressions
+us-store,2020-01-08,TRAVEL-BAG-01,AMZ-SP-01,Sponsored-Products,5.01,35.00,1,40,1000
+us-store,2020-01-08,TRAVEL-BAG-01,AMZ-SB-02,Sponsored-Brands,2.00,10.00,1,20,500

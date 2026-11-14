@@ -216,12 +216,108 @@ def build_report(raw: RawMetrics) -> MetricsReport:
             contribution=delta if field == "sales" else -delta,
             source="daily_operations.ad_spend" if field == "ad_spend" else f"orders.{field}",
         ))
+    decomposition = decompose_profit(raw)
     return MetricsReport(
         **raw.model_dump(exclude={"current", "previous"}), current=now, previous=before,
         changes=changes, drivers=sorted(drivers, key=lambda d: d.contribution),
+        decomposition=decomposition,
         anomaly=now.sales > before.sales and now.net_profit < before.net_profit,
         bridge_verified=sum(d.contribution for d in drivers) == now.net_profit - before.net_profit,
     )
+
+
+def _cents(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+_DECOMPOSITION_FORMULA = "sales change = volume effect + price effect + mix effect + residual"
+_SKU_MOVEMENT_RULE = (
+    "New or discontinued SKUs have no comparable ASP. Their full sales change stays in the "
+    "SKU volume term before mix is separated from the portfolio volume effect. No ASP is imputed."
+)
+
+
+def _sku_amounts(side: dict | None) -> tuple[int, int]:
+    side = side or {}
+    return int(side.get("units") or 0), int(side.get("sales") or 0)
+
+
+def decompose_profit(raw: RawMetrics) -> dict:
+    """Explain the deterministic *sales* change using units, ASP and mix.
+
+    This is deliberately separate from the eight-term net-profit bridge. It
+    answers "did sales move because of volume or price?" without pretending
+    the result is a second profit formula. Every contribution is integer cents
+    and ``volume + price + mix + residual`` equals the gross-sales delta.
+
+    A SKU with units in only one period is not dropped. There is no previous
+    or current ASP to compare, so its entire sales change stays in the SKU
+    volume term and the gap versus the portfolio volume effect becomes mix.
+    Missing ASPs are never imputed.
+    """
+    current, previous = raw.current, raw.previous
+    if current.units == 0 or previous.units == 0:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "unit": "USD cents",
+            "current": {"sales": current.sales, "units": current.units, "asp": None},
+            "previous": {"sales": previous.sales, "units": previous.units, "asp": None},
+            "contributions": {"volume": None, "price": None, "mix": None, "residual": None},
+            "formula": _DECOMPOSITION_FORMULA,
+            "sales_change": None,
+        }
+    cur_asp = Decimal(current.sales) / Decimal(current.units)
+    prev_asp = Decimal(previous.sales) / Decimal(previous.units)
+    sku_volume = Decimal(0)
+    sku_price = Decimal(0)
+    new_sales = 0
+    discontinued_sales = 0
+    active_rows = False
+    for row in raw.sku_breakdown:
+        cur_units, cur_sales = _sku_amounts(row.get("current"))
+        old_units, old_sales = _sku_amounts(row.get("previous"))
+        if cur_units == 0 and old_units == 0 and cur_sales == 0 and old_sales == 0:
+            continue
+        active_rows = True
+        if cur_units > 0 and old_units > 0:
+            old_asp = Decimal(old_sales) / Decimal(old_units)
+            new_asp = Decimal(cur_sales) / Decimal(cur_units)
+            sku_volume += Decimal(cur_units - old_units) * old_asp
+            sku_price += (new_asp - old_asp) * Decimal(cur_units)
+        else:
+            # No comparable ASP on at least one side. Keep the sales change in
+            # the volume term instead of letting it vanish into an unexplained residual.
+            sku_volume += Decimal(cur_sales - old_sales)
+            if old_units == 0 and cur_units > 0:
+                new_sales += cur_sales
+            elif cur_units == 0 and old_units > 0:
+                discontinued_sales += old_sales
+    if not active_rows:
+        volume = Decimal(current.units - previous.units) * prev_asp
+        price = (cur_asp - prev_asp) * Decimal(current.units)
+        mix = Decimal(0)
+    else:
+        volume_total = Decimal(current.units - previous.units) * prev_asp
+        mix = sku_volume - volume_total
+        volume = volume_total
+        price = sku_price
+    sales_delta = Decimal(current.sales - previous.sales)
+    volume_i, price_i, mix_i = _cents(volume), _cents(price), _cents(mix)
+    residual = int(sales_delta) - volume_i - price_i - mix_i
+    return {
+        "status": "OK",
+        "unit": "USD cents",
+        "current": {"sales": current.sales, "units": current.units, "asp": _cents(cur_asp)},
+        "previous": {"sales": previous.sales, "units": previous.units, "asp": _cents(prev_asp)},
+        "contributions": {"volume": volume_i, "price": price_i, "mix": mix_i, "residual": residual},
+        "formula": _DECOMPOSITION_FORMULA,
+        "sales_change": int(sales_delta),
+        "sku_movement": {
+            "new_sales": new_sales,
+            "discontinued_sales": discontinued_sales,
+            "rule": _SKU_MOVEMENT_RULE,
+        },
+    }
 
 
 def analyze_drivers(report: MetricsReport) -> DriverReport:
@@ -243,6 +339,22 @@ def analyze_drivers(report: MetricsReport) -> DriverReport:
             "formula": "current - previous" if driver.metric == "sales" else "-(current - previous)",
         } for driver in report.drivers
     ]
+    decomposition = report.decomposition
+    if decomposition.get("status") == "OK":
+        for key, label in (("volume", "Volume effect"), ("price", "Price effect"), ("mix", "Mix effect"), ("residual", "Residual")):
+            movement = decomposition.get("sku_movement") or {}
+            evidence.append({
+                "id": f"ev-{key}", "metric": key, "label": label,
+                "current": decomposition["current"], "previous": decomposition["previous"],
+                "contribution": decomposition["contributions"][key],
+                "sales_change": decomposition.get("sales_change"),
+                "new_sales": movement.get("new_sales"),
+                "discontinued_sales": movement.get("discontinued_sales"),
+                "period": report.period.model_dump(mode="json"),
+                "previous_period": report.previous_period.model_dump(mode="json"),
+                "store_id": report.store_id, "currency": "USD", "source": "orders.units + orders.sales",
+                "formula": decomposition["formula"], "unit": decomposition["unit"],
+            })
     return DriverReport(
         anomaly=report.anomaly, conclusion=conclusion, primary_driver=primary,
         drivers=report.drivers, evidence=evidence,

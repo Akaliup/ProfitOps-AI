@@ -135,6 +135,12 @@ def test_scope_and_execution_refusal(client, analyst, report):
     enable_fake(client, report, answer(), report_id='other-report')
     assert ask(client, analyst, report).json()['reason'] == 'llm_tool_scope_mismatch'
     assert ask(client, analyst, report, '帮我把预算改成100').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'Please place a purchase order').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'execute purchase now').json()['status'] == 'refused'
+    assert ask(client, analyst, report, 'connect to amazon store').json()['status'] == 'refused'
+    enable_fake(client, report, answer())
+    non_refused = ask(client, analyst, report, '建议补货量是多少').json()
+    assert non_refused['status'] != 'refused'
 
 
 def test_tenant_and_missing_report(client, analyst, report):
@@ -210,6 +216,54 @@ def test_non_currency_integers_never_generate_dollar_values():
     assert_numbers_supported('贡献-12.34美元', [{'bridge': {'ad_spend': -1234}}])
 
 
+def test_new_currency_fields_accept_dollars_and_counts_do_not():
+    price = {
+        'id': 'ev-price',
+        'current': {'sales': 16001, 'units': 10, 'asp': 1600},
+        'previous': {'sales': 11000, 'units': 8, 'asp': 1375},
+        'contribution': 6001,
+        'sales_change': 5001,
+    }
+    pricing = {
+        'id': 'us-store:sku:TRAVEL-BAG-01:pricing',
+        'value': {
+            'suggested_price': 1050, 'current_price': 1000, 'asp': 1000,
+            'refund_rate_pct': 15.0, 'margin_pct': 15, 'units': 10,
+        },
+    }
+    campaign = {
+        'id': 'us-store:campaign:DEMO-ADS-A',
+        'value': {
+            'ad_spend': 501, 'attributed_sales': 3500, 'attributed_orders': 1,
+            'clicks': 40, 'impressions': 1000,
+        },
+    }
+    for evidence, text in (
+        ([price], 'ASP 16.00 美元，销售额变化 50.01 美元'),
+        ([pricing], '建议价 10.50 美元，当前价 10.00 美元，退款率 15% 与 15.0'),
+        ([campaign], '归因销售 35.00 美元'),
+    ):
+        assert_numbers_supported(text, evidence)
+    price_allowed, _ = extract_allowed_numbers([price])
+    pricing_allowed, _ = extract_allowed_numbers([pricing])
+    campaign_allowed, _ = extract_allowed_numbers([campaign])
+    assert {'16.00', '50.01'} <= price_allowed
+    assert '0.10' not in price_allowed
+    assert {'10.50', '10.00', '15', '15.0'} <= pricing_allowed
+    assert '0.15' not in pricing_allowed and '0.10' not in pricing_allowed
+    assert '35.00' in campaign_allowed
+    assert '10.00' not in campaign_allowed and '0.40' not in campaign_allowed and '0.01' not in campaign_allowed
+    for evidence, text in (
+        ([price], '建议价 10.50 美元'),
+        ([pricing], '归因销售 35.00 美元'),
+        ([campaign], 'ASP 16.00 美元'),
+        ([campaign], '点击 0.40 美元'),
+        ([price], '件数 0.10 美元'),
+    ):
+        result = verify_answer(WeeklyChatAnswer.model_validate(answer(text, ids=[evidence[0]['id']])), evidence)
+        assert result['reason'] == 'unverified_number'
+
+
 def test_official_dual_store_snapshot_fits_and_chat_succeeds(client, approver, analyst, imported_examples):
     response = client.post('/api/weekly-reports', headers=approver, json={'end_date': '2020-01-12'})
     assert response.status_code == 200
@@ -235,7 +289,13 @@ def test_official_dual_store_snapshot_fits_and_chat_succeeds(client, approver, a
                 for key in ('source', 'current', 'previous', 'contribution', 'period'):
                     assert compact[key] == original[key]
         for row in before['sku_diagnostics']:
-            assert by_id[f"{row['store_id']}:sku:{row['sku']}"]['value']['bridge'] == row['bridge']
+            value = by_id[f"{row['store_id']}:sku:{row['sku']}"]['value']
+            assert value['bridge'] == row['bridge']
+            assert value['current']['sales'] == row['current']['sales']
+            assert value['current']['units'] == row['current']['units']
+            assert value['current']['net_profit'] == row['current']['net_profit']
+            assert value['previous']['sales'] == row['previous']['sales']
+            assert 'order_ids' not in value
     data = answer('销售额见证据', ids=['ev-sales', 'us-store:store', 'eu-store:store'])
     enable_fake(client, saved, data)
     result = ask(client, analyst, saved)

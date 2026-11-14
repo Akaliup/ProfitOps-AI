@@ -5,6 +5,9 @@
 or durable-job columns, so these tests exercise the path a real old database
 takes: ``stamp 0001_baseline`` followed by ``upgrade head``.
 """
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +36,35 @@ BUSINESS_TABLES = (
 
 def _alembic_config() -> Config:
     return Config(str(ROOT / "backend" / "alembic.ini"))
+
+
+RUNTIME_DATABASE = ROOT / "data" / "profitops.db"
+
+
+def _file_stamp(path: Path):
+    """Identity of a file without opening it. None means the file is absent."""
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def _alembic_ini(path: Path, sqlalchemy_url: str) -> Path:
+    source = (ROOT / "backend" / "alembic.ini").read_text(encoding="utf-8")
+    source = source.replace(
+        "script_location = %(here)s/migrations",
+        f"script_location = {(ROOT / 'backend' / 'migrations').as_posix()}",
+    )
+    source = source.replace(
+        "prepend_sys_path = %(here)s",
+        f"prepend_sys_path = {(ROOT / 'backend').as_posix()}",
+    )
+    source = source.replace(
+        "sqlalchemy.url = sqlite:///./data/profitops.db",
+        f"sqlalchemy.url = {sqlalchemy_url}",
+    )
+    path.write_text(source, encoding="utf-8")
+    return path
 
 
 def test_alembic_baseline_upgrade_and_downgrade(tmp_path, monkeypatch):
@@ -194,7 +226,7 @@ def test_stamped_true_legacy_database_upgrades_in_place(tmp_path, monkeypatch):
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM schema_versions")).scalar_one() == 1
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0005_weekly_chat"
+            "0006_tenant_scoped_sku"
         )
     assert "import_batches" in inspect(engine).get_table_names()
     engine.dispose()
@@ -260,4 +292,74 @@ def test_legacy_database_with_duplicate_active_documents_soft_deletes_extras(tmp
         assert len(rows) == 2
         assert sum(1 for _, active in rows if active) == 1
         assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+    engine.dispose()
+
+
+@pytest.mark.parametrize("argument", ["url", "database_url"])
+def test_alembic_x_argument_url_override(tmp_path, argument):
+    """``alembic -x`` wins over both the ini URL and the process environment."""
+    chosen = tmp_path / "chosen.db"
+    decoy_env = tmp_path / "decoy-env.db"
+    decoy_ini = tmp_path / "decoy-ini.db"
+    before = _file_stamp(RUNTIME_DATABASE)
+    ini = _alembic_ini(tmp_path / "alembic.ini", f"sqlite:///{decoy_ini}")
+    env = os.environ.copy()
+    env["PROFITOPS_DATABASE_URL"] = f"sqlite:///{decoy_env}"
+    env["ALEMBIC_DATABASE_URL"] = f"sqlite:///{decoy_env}"
+    env["PYTHONPATH"] = str(ROOT / "backend")
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", str(ini), "-x", f"{argument}=sqlite:///{chosen}", "upgrade", "head"],
+        cwd=ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert chosen.exists()
+    assert not decoy_env.exists()
+    assert not decoy_ini.exists()
+    assert _file_stamp(RUNTIME_DATABASE) == before
+    engine = create_engine(f"sqlite:///{chosen}")
+    tables = set(inspect(engine).get_table_names())
+    engine.dispose()
+    assert {"tenants", "users", "analyses", "alembic_version"} <= tables
+
+
+def test_alembic_explicit_sqlalchemy_url_overrides_environment(tmp_path, monkeypatch):
+    chosen = tmp_path / "explicit.db"
+    decoy = tmp_path / "env-decoy.db"
+    before = _file_stamp(RUNTIME_DATABASE)
+    monkeypatch.setenv("PROFITOPS_DATABASE_URL", f"sqlite:///{decoy}")
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{decoy}")
+    config = _alembic_config()
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{chosen}")
+    command.upgrade(config, "head")
+    assert chosen.exists()
+    assert not decoy.exists()
+    assert _file_stamp(RUNTIME_DATABASE) == before
+    engine = create_engine(f"sqlite:///{chosen}")
+    assert "alembic_version" in inspect(engine).get_table_names()
+    engine.dispose()
+
+
+def test_legacy_sku_uniqueness_changes_without_losing_children(tmp_path, monkeypatch):
+    database = tmp_path / "sku-legacy.db"
+    engine = _create_legacy_database(database)
+    before = _row_counts(engine)
+    monkeypatch.setenv("PROFITOPS_DATABASE_URL", f"sqlite:///{database}")
+    config = _alembic_config()
+    command.stamp(config, "0001_baseline")
+    command.upgrade(config, "head")
+    assert _row_counts(engine) == before
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('other-product', 'acme', 'SKU-LEGACY', 'Other')"))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('duplicate-product', 'acme', 'SKU-LEGACY', 'Duplicate')"))
+    with pytest.raises(RuntimeError, match="duplicate SKUs"):
+        command.downgrade(config, "0005_weekly_chat")
+    with engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+        assert conn.execute(text("SELECT product_id FROM orders WHERE id='legacy-order'")).scalar_one() == 'legacy-product'
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM products WHERE id='other-product'"))
+    command.downgrade(config, "0005_weekly_chat")
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("INSERT INTO products (id, tenant_id, sku, name) VALUES ('other-product', 'acme', 'SKU-LEGACY', 'Other')"))
     engine.dispose()

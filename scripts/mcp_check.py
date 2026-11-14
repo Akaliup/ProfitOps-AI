@@ -23,7 +23,7 @@ from mcp import ClientSession  # noqa: E402
 from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 
 PERIOD = {"start_date": "2026-10-01", "end_date": "2026-10-30"}
-EXPECTED_TOOLS = {"get_weekly_intelligence", "get_inventory_risks",
+EXPECTED_TOOLS = {"get_saved_weekly_report", "get_weekly_intelligence", "get_inventory_risks",
     "get_profit_analysis",
     "get_sku_breakdown",
     "search_knowledge",
@@ -85,6 +85,11 @@ async def run() -> dict:
                 )
                 analysis_payload = _payload(analysis)
 
+                weekly = await session.call_tool(
+                    "get_weekly_intelligence", {"end_date": "2020-01-12"}
+                )
+                weekly_payload = _payload(weekly)
+
                 sku = await session.call_tool(
                     "get_sku_breakdown", {"period": PERIOD}
                 )
@@ -123,6 +128,7 @@ async def run() -> dict:
                         "bridge_verified": report.get("bridge_verified"),
                         "evidence_count": len(findings.get("evidence") or []),
                     },
+                    "get_weekly_intelligence": {"ok": weekly_payload.get("ok")},
                     "get_sku_breakdown": {
                         "ok": sku_payload.get("ok"),
                         "rows": len(sku_data.get("rows") or []),
