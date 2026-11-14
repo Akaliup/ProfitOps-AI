@@ -88,7 +88,7 @@ Provider 外层由 `CircuitBreakerProvider` 计量并保护：连续可重试错
 
 ## MCP（只读，stdio）
 
-`backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 四个 `effect=read|pure`、`policy=safe` 的工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
+`backend/app/mcp_server.py` 是独立的 stdio MCP Server，复用同一 Tool Registry，只暴露 `get_saved_weekly_report`、`get_weekly_intelligence`、`get_inventory_risks`、`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge`、`get_approval_status` 7 个 `effect=read|pure`、`policy=safe` 的只读工具。`create_recommendation`（database_write）和 `simulate_execute_approved_action`（ask）不在暴露列表，调用返回 `unknown_tool`；MCP 不提供审批、拒绝、执行或用户/租户管理。角色由服务端 `PROFITOPS_MCP_ROLE`（`analyst` 默认 / `approver`）决定，不接受客户端角色头或工具参数中的 `role`。MCP 进程不建表、不 Seed，数据库必须先由主服务或初始化流程准备好；工具调用不写业务表，也不构建 LLM Provider。`search_knowledge` 与 HTTP/LangGraph 共用知识库和 `chunk_id`，返回的正文是不可信数据而非指令；默认 hashing embedding 不联网，只有显式配置远程 embedding 时才访问该网关。MCP 不改变 HTTP 审批状态机，所有审批与模拟执行仍必须通过 HTTP + 人工 approver 完成。
 
 ## 数据导入与对账（CSV）
 

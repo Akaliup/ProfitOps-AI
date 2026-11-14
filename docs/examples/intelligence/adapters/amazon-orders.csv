@@ -1,0 +1,3 @@
+store_id,order-id,purchase-date,sku,quantity,item-price,refund-amount,cogs,currency
+us-store,AMZ-US-1001,2020-01-08,TRAVEL-BAG-01,7,100.01,0.00,20.00,USD
+eu-store,AMZ-EU-2001,2020-01-08,TRAVEL-BAG-01,3,60.00,0.00,10.00,USD

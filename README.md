@@ -2,6 +2,19 @@
 
 ## Multi-store weekly intelligence
 
+### 五分钟本地演示
+
+1. 使用独立演示数据库，运行 `python scripts/dev.py`，打开 `http://127.0.0.1:5180`
+2. 切换审批者身份，在数据导入页依次预览并提交 [订单](docs/examples/intelligence/orders.csv)、[广告](docs/examples/intelligence/ads.csv)、[库存](docs/examples/intelligence/inventory.csv)
+3. 打开经营周报与库存，周期结束日选 `2020-01-12`，生成并保存周报
+4. 查看双店利润、量价拆解、库存和调价建议；样例观察天数不足，部分指标明确显示数据不足
+5. 展开计算证据与导入批次，发送追问；未配置模型时显示确定性降级，不产生假引用
+
+平台风格 CSV 仅做离线字段适配，不连接平台账号。迁移与本轮验证见 [收尾报告](docs/WEEKLY_COMPLETION.md)。
+
+![导入预览](docs/screenshots/import-preview.png)
+![多店铺周报](docs/screenshots/weekly-decomposition.png)
+
 The data import center now accepts tenant-scoped orders, campaign ads and inventory snapshot CSVs with preview, field mapping, atomic batch history and source-row traceability. Weekly Intelligence reuses the existing deterministic profit bridge, calculates separate store/SKU inventory risks, can request an evidence-checked LLM explanation, and supports bounded follow-up chat over the saved report snapshot with per-claim citations, numeric verification and explicit deterministic fallback. Missing feed coverage or model configuration stays visible. Start locally with `python scripts/dev.py`; the web app runs at <http://127.0.0.1:5180> and API docs at <http://127.0.0.1:8010/docs>. CSV examples, migrations, APIs and demo instructions: [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md). Chat never recalculates the ledger, reads another report or exposes write tools; external platform writes remain outside this phase.
 
 **跨境电商利润经营决策 Agent。** 销售额上涨、利润下降时，ProfitOps 从经营账本计算利润变化，定位会计贡献项，核验证据，生成待审批建议，经人工批准后执行**受控模拟**，并留下完整审计记录。
@@ -127,7 +140,7 @@ curl -X POST http://127.0.0.1:8010/api/imports/orders/preview \
 
 ### MCP Server（只读，stdio）
 
-`backend/app/mcp_server.py` 通过 stdio 暴露同一套 Tool Registry 的四个只读工具：`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge` 和 `get_approval_status`。RAG 检索与 HTTP/LangGraph 使用同一套知识库和 `chunk_id`；建议写入、审批和模拟执行不会暴露给 MCP 客户端。角色由 `PROFITOPS_MCP_ROLE` 在服务端决定，默认 `analyst`。
+`backend/app/mcp_server.py` 通过 stdio 暴露 Tool Registry 的 7 个只读工具：`get_saved_weekly_report`、`get_weekly_intelligence`、`get_inventory_risks`、`get_profit_analysis`、`get_sku_breakdown`、`search_knowledge` 和 `get_approval_status`。RAG 检索与 HTTP/LangGraph 使用同一套知识库和 `chunk_id`；建议写入、审批和模拟执行不会暴露给 MCP 客户端。角色由 `PROFITOPS_MCP_ROLE` 在服务端决定，默认 `analyst`。
 
 ```bash
 PYTHONPATH=backend .venv/Scripts/python.exe -m app.mcp_server
@@ -406,7 +419,7 @@ TASKS.md             交付与后续任务
 - 超时在步骤结束后检查，不能强制中断阻塞中的同步工具。
 - 已加入 Alembic 基线和迁移入口；旧库仍依赖启动时的兼容迁移补充租户/任务字段，后续 schema 变更必须新增显式 revision。Alembic 未安装时相关测试会跳过，CI 会安装并执行 upgrade/downgrade。
 - Docker/PostgreSQL 容器已在本机 Docker Desktop 验证；云端单机覆盖也在隔离栈完成十项验收（见 `docs/CLOUD_DEPLOYMENT.md`）。其他机器和真实云服务器仍需按文档复验。
-- MCP 只实现了 stdio 只读服务（4 个工具），没有网络 transport、OAuth、多租户隔离和 MCP 侧审计；写工具永不暴露给客户端。
+- MCP 实现 stdio 七个只读工具，按服务端身份过滤租户，包含周报、库存及已保存周报读取；没有网络 transport、OAuth 或客户端租户切换，写工具永不暴露给客户端。
 
 ## 交付与验收材料
 
