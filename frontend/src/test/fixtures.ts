@@ -84,7 +84,7 @@ export const metrics: Metrics = {
   trend: [{ ...totals, date: '2026-10-01' }],
   sku_breakdown: [{ product_id: 'bag', sku: 'TRAVEL-BAG-01', name: '轻量旅行背包', current: totals, previous: prior, profit_delta: -26000, ad_spend_delta: 35000, inventory: 100, inbound_inventory: 40 }],
   data_quality: { complete: true, expected_records: 60, observed_records: 60, missing_records: 0, incomplete_records: 0, missing_examples: [], issues: [] },
-  decomposition: { status: 'OK', unit: 'USD cents', formula: 'sales change = volume effect + price effect + mix effect + residual', current: { sales: 120000, units: 12, asp: 10000 }, previous: { sales: 100000, units: 12, asp: 8333 }, contributions: { volume: 0, price: 20000, mix: 0, residual: 0 }, sales_change: 20000 },
+  decomposition: { status: 'OK', unit: 'USD cents', formula: 'sales change = volume effect + price effect + mix effect + residual', current: { sales: 120000, units: 12, asp: 10000 }, previous: { sales: 100000, units: 12, asp: 8333 }, contributions: { volume: 0, price: 20000, mix: 0, residual: 0 }, sales_change: 20000, sku_movement: { new_sales: 0, discontinued_sales: 0, rule: 'No ASP is imputed' } },
 }
 export const analysis: Analysis = {
   id: 'analysis-1', status: 'waiting_approval', request: { period: metrics.period, store_id: null },

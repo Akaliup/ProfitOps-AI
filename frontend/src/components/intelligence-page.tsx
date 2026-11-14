@@ -72,6 +72,8 @@ export function IntelligencePage({token, stores = []}: {token: string; stores?: 
       <Card><CardHeader><CardTitle>量价与结构拆解</CardTitle></CardHeader><CardContent>
         {report.metrics.decomposition?.status !== 'OK' ? <p className='text-sm text-muted-foreground'>销量基数不足，暂不计算 ASP 与量价贡献</p> : <>
           <p className='text-sm text-muted-foreground'>{report.metrics.decomposition.formula}</p>
+          <p className='text-sm text-muted-foreground'>拆的是销售额变化，不与净利润八项桥逐项恒等。合成拆解，不是已验证的经营因果。</p>
+          {(report.metrics.decomposition.sku_movement?.new_sales || report.metrics.decomposition.sku_movement?.discontinued_sales) ? <p className='text-xs text-muted-foreground'>新建或下架 SKU 没有可比 ASP，销售额变化计入销量项后再拆出结构效应，不估算缺失价格。</p> : null}
           <div className='mt-3 grid gap-2 sm:grid-cols-4'>{(['volume', 'price', 'mix', 'residual'] as const).map(key => {
             const value = report.metrics.decomposition?.contributions?.[key]
             return <div key={key} {...evidenceProps(`ev-${key}`)} className={`rounded border p-3 transition-colors ${selectedEvidence === `ev-${key}` ? 'bg-blue-100 ring-2 ring-blue-500' : ''}`}>

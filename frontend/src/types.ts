@@ -71,7 +71,8 @@ export interface Metrics {
     current: { sales: number; units: number; asp: number | null };
     previous: { sales: number; units: number; asp: number | null };
     contributions: { volume: number | null; price: number | null; mix: number | null; residual: number | null };
-    sales_change?: number;
+    sales_change?: number | null;
+    sku_movement?: { new_sales: number; discontinued_sales: number; rule: string };
   };
 }
 export interface Step {

@@ -98,4 +98,60 @@ describe('ImportPage', () => {
     expect(screen.getByText('sales 必须是最多两位小数的金额')).toBeVisible()
     expect(screen.getByText('当前身份只读 切换到审批负责人后可写入')).toBeVisible()
   })
+
+  const amazonAdapter = {
+    id: 'amazon-orders', label: 'Amazon 风格订单报表', kind: 'orders' as const,
+    description: '离线字段映射，不连接卖家后台',
+    mapping: {store_id: 'store_id', sku: 'sku', order_id: 'order-id', gross_sales: 'item-price'},
+  }
+
+  it('sends the selected adapter on preview and commit and shows its mapping', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      requests.push({path, init})
+      if (path.startsWith('/api/imports?limit=')) return new Response(JSON.stringify({items: []}), {status: 200})
+      if (path.startsWith('/api/data/adapters')) return new Response(JSON.stringify({items: [amazonAdapter]}), {status: 200})
+      if (path.startsWith('/api/data/orders/preview?')) return new Response(JSON.stringify(preview), {status: 200})
+      if (path.startsWith('/api/data/orders/commit?')) return new Response(JSON.stringify(commit), {status: 200})
+      return new Response(JSON.stringify({error: {code: 'not_found', message: 'missing'}}), {status: 404})
+    }))
+    render(<ImportPage token='demo-approver' isApprover onImported={() => {}} />)
+    expect(await screen.findByRole('option', {name: 'Amazon 风格订单报表'})).toBeVisible()
+    await user.selectOptions(screen.getByLabelText('平台报表适配器'), 'amazon-orders')
+    expect(screen.getByLabelText('字段映射')).toHaveValue(JSON.stringify(amazonAdapter.mapping, null, 2))
+    const file = new File([csv], 'orders.csv', {type: 'text/csv'})
+    Object.defineProperty(file, 'text', {value: async () => csv})
+    await user.upload(screen.getByLabelText('选择 CSV 文件'), file)
+    await user.click(screen.getByRole('button', {name: /校验文件/}))
+    expect(await screen.findByText('校验通过')).toBeVisible()
+    await user.click(screen.getByRole('button', {name: /确认导入 1 行/}))
+    const previewRequest = requests.find(item => item.path.startsWith('/api/data/orders/preview?'))
+    const commitRequest = requests.find(item => item.path.startsWith('/api/data/orders/commit?'))
+    expect(previewRequest?.path).toContain('adapter=amazon-orders')
+    expect(commitRequest?.path).toContain('adapter=amazon-orders')
+    expect(previewRequest?.path).toContain('mapping=')
+  })
+
+  it('does not present a 422 adapter validation failure as success', async () => {
+    const user = userEvent.setup()
+    const onImported = vi.fn()
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path.startsWith('/api/imports?limit=')) return new Response(JSON.stringify({items: []}), {status: 200})
+      if (path.startsWith('/api/data/adapters')) return new Response(JSON.stringify({items: [amazonAdapter]}), {status: 200})
+      if (path.includes('/preview')) return new Response(JSON.stringify({error: {code: 'invalid_adapter', message: '适配器与数据类型不匹配'}}), {status: 422})
+      return new Response(JSON.stringify({error: {code: 'not_found', message: 'missing'}}), {status: 404})
+    }))
+    render(<ImportPage token='demo-approver' isApprover onImported={onImported} />)
+    await screen.findByRole('option', {name: 'Amazon 风格订单报表'})
+    await user.selectOptions(screen.getByLabelText('平台报表适配器'), 'amazon-orders')
+    const file = new File([csv], 'orders.csv', {type: 'text/csv'})
+    Object.defineProperty(file, 'text', {value: async () => csv})
+    await user.upload(screen.getByLabelText('选择 CSV 文件'), file)
+    await user.click(screen.getByRole('button', {name: /校验文件/}))
+    expect(await screen.findByRole('alert')).toHaveTextContent('适配器与数据类型不匹配')
+    expect(screen.queryByText('校验通过')).not.toBeInTheDocument()
+    expect(screen.queryByText('已写入账本')).not.toBeInTheDocument()
+    expect(screen.getByText('还没有校验结果')).toBeVisible()
+    expect(onImported).not.toHaveBeenCalled()
+  })
 })

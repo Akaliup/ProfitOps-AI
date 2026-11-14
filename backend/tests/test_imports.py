@@ -1,6 +1,7 @@
 import csv
 import io
 from datetime import date
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -237,3 +238,57 @@ def test_import_adapters_catalog_and_preview(client, approver):
     # Adapter kind mismatch
     mismatch = client.post("/api/data/orders/preview?adapter=amazon-ads", headers=approver, content=shop_csv.encode("utf-8"))
     assert mismatch.status_code == 422
+
+    invalid_mapping = client.post("/api/data/orders/preview?mapping={", headers=approver, content=shop_csv.encode("utf-8"))
+    assert invalid_mapping.status_code == 422
+    assert invalid_mapping.json()["error"]["code"] == "invalid_mapping"
+
+
+def test_invalid_mapping_writes_nothing(client, approver):
+    from app.models import SourceRecord
+    response = client.post(
+        "/api/data/orders/preview?mapping={",
+        headers=approver,
+        content=b"store_id,order-id,purchase-date,sku,quantity,item-price,cogs,currency\n",
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_mapping"
+    commit = client.post("/api/data/orders/commit?mapping=not-json", headers=approver, content=b"a,b\n1,2\n")
+    assert commit.status_code == 422
+    with client.app.state.factory() as session:
+        assert session.scalar(select(SourceRecord)) is None
+        assert session.scalar(select(ImportBatch)) is None
+
+
+def test_adapter_preview_and_commit_match_official_cents(client, approver):
+    examples = Path(__file__).resolve().parents[2] / "docs" / "examples" / "intelligence"
+    money = ("sales", "discounts", "refunds", "cogs", "fulfillment", "platform_fees", "other_costs", "net_sales", "net_profit", "ad_spend")
+
+    def preview(kind, content, adapter=None):
+        url = f"/api/data/{kind}/preview"
+        if adapter:
+            url += f"?adapter={adapter}"
+        response = client.post(url, headers=approver, content=content.encode("utf-8"))
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def commit(kind, content, adapter):
+        response = client.post(f"/api/data/{kind}/commit?adapter={adapter}", headers=approver, content=content.encode("utf-8"))
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "committed"
+        return response.json()
+
+    official_orders = (examples / "orders.csv").read_text(encoding="utf-8")
+    official_ads = (examples / "ads.csv").read_text(encoding="utf-8")
+    official_order_totals = preview("orders", official_orders)["totals"]
+    official_ad_totals = preview("ads", official_ads)["totals"]
+    for adapter, filename in (("amazon-orders", "adapters/amazon-orders.csv"), ("shopify-orders", "adapters/shopify-orders.csv")):
+        content = (examples / filename).read_text(encoding="utf-8")
+        adapted = preview("orders", content, adapter)["totals"]
+        committed = commit("orders", content, adapter)["totals"]
+        for key in money:
+            assert adapted[key] == official_order_totals[key] == committed[key]
+    ads = (examples / "adapters/amazon-ads.csv").read_text(encoding="utf-8")
+    adapted_ads = preview("ads", ads, "amazon-ads")["totals"]
+    committed_ads = commit("ads", ads, "amazon-ads")["totals"]
+    assert adapted_ads["ad_spend"] == official_ad_totals["ad_spend"] == committed_ads["ad_spend"] == 701

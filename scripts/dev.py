@@ -11,11 +11,25 @@ import venv
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def demo_database_url() -> str:
+    """Isolated demo file. Never the runtime database in data/profitops.db."""
+    return "sqlite:///" + (ROOT / "data" / "demo-copy.db").resolve().as_posix()
+
+
+def service_environment(demo_db: bool) -> dict[str, str]:
+    """Child-process environment. ``--demo-db`` overrides only the database URL."""
+    env = os.environ.copy()
+    if demo_db:
+        env["PROFITOPS_DATABASE_URL"] = demo_database_url()
+    return env
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-install", action="store_true", help="启动已安装的环境")
     parser.add_argument("--api-port", type=int, default=8010)
     parser.add_argument("--web-port", type=int, default=5180)
+    parser.add_argument("--demo-db", action="store_true", help="使用 data/demo-copy.db，不写入 data/profitops.db")
     args = parser.parse_args()
     for port in (args.api_port, args.web_port):
         with socket.socket() as probe:
@@ -38,9 +52,15 @@ def main():
         subprocess.run([npm, "ci", "--prefix", "frontend", "--registry=https://registry.npmjs.org"], check=True)
     processes = []
     try:
-        backend = subprocess.Popen([str(executable), "-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", str(args.api_port)], cwd=ROOT)
+        if args.demo_db:
+            (ROOT / "data").mkdir(exist_ok=True)
+            print(f"演示数据库（独立文件，不会清空或迁移 data/profitops.db）: {demo_database_url()}", flush=True)
+        else:
+            print("数据库: 使用 Settings / .env 的 PROFITOPS_DATABASE_URL；未配置时为 data/profitops.db。五分钟演示请改用 --demo-db。", flush=True)
+        child_env = service_environment(args.demo_db)
+        backend = subprocess.Popen([str(executable), "-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", str(args.api_port)], cwd=ROOT, env=child_env)
         processes.append(backend)
-        web_environment = {**os.environ, "PROFITOPS_WEB_PORT": str(args.web_port), "PROFITOPS_API_TARGET": f"http://127.0.0.1:{args.api_port}"}
+        web_environment = {**child_env, "PROFITOPS_WEB_PORT": str(args.web_port), "PROFITOPS_API_TARGET": f"http://127.0.0.1:{args.api_port}"}
         frontend = subprocess.Popen([npm, "--prefix", "frontend", "run", "dev"], cwd=ROOT, env=web_environment)
         processes.append(frontend)
         print(f"\nProfitOps AI: http://127.0.0.1:{args.web_port} | API: http://127.0.0.1:{args.api_port}/docs\nCtrl+C 停止服务", flush=True)

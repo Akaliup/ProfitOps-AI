@@ -58,8 +58,9 @@ def test_documented_csv_examples_generate_two_store_report(client, approver):
         content = (examples / f'{kind}.csv').read_text(encoding='utf-8')
         preview = client.post(f'/api/data/{kind}/preview', headers=approver, content=content)
         assert preview.status_code == 200, preview.text
-        assert preview.json()['accepted_rows'] == 2
-        assert len(preview.json()['preview_rows']) == 2
+        expected_rows = {'orders': 7, 'ads': 2, 'inventory': 2}[kind]
+        assert preview.json()['accepted_rows'] == expected_rows
+        assert len(preview.json()['preview_rows']) == min(5, expected_rows)
         committed = client.post(f'/api/data/{kind}/commit', headers=approver, content=content)
         assert committed.status_code == 200, committed.text
         assert committed.json()['status'] == 'committed'
@@ -68,12 +69,28 @@ def test_documented_csv_examples_generate_two_store_report(client, approver):
     body = report.json()
     assert {store['store_id'] for store in body['stores']} == {'us-store', 'eu-store'}
     assert body['metrics']['bridge_verified']
-    assert len(body['source_rows']) == 6
+    assert body['metrics']['current']['sales'] == 16001
+    assert len(body['source_rows']) == 11
     assert len(body['campaign_diagnostics']) == 2
     assert sum(c['ad_spend'] for c in body['campaign_diagnostics']) == body['metrics']['current']['ad_spend']
     assert not body['metrics']['data_quality']['complete']
     campaign_ids = {c['evidence_id'] for c in body['campaign_diagnostics']}
     assert campaign_ids <= {e['id'] for e in body['evidence']}
+    decomposition = body['metrics']['decomposition']
+    assert decomposition['status'] == 'OK'
+    assert decomposition['contributions'] == {'volume': 2750, 'price': 6001, 'mix': -3750, 'residual': 0}
+    assert decomposition['sales_change'] == 5001
+    assert sum(decomposition['contributions'].values()) == decomposition['sales_change']
+    evidence = {item['id']: item for item in body['evidence']}
+    assert isinstance(evidence['ev-volume']['contribution'], int)
+    assert isinstance(evidence['ev-price']['contribution'], int)
+    assert evidence['ev-volume']['contribution'] == 2750
+    assert evidence['ev-price']['contribution'] == 6001
+    us_bag = next(item for item in body['pricing_suggestions'] if item['store_id'] == 'us-store' and item['sku'] == 'TRAVEL-BAG-01')
+    assert us_bag['suggested_price'] is not None
+    thermo = next(item for item in body['pricing_suggestions'] if item['sku'] == 'THERMO-02' and item['store_id'] == 'us-store')
+    assert thermo['status'] == 'INSUFFICIENT_DATA'
+    assert thermo['suggested_price'] is None
 
 
 @pytest.mark.parametrize('index,value', [(2,'not-date'),(5,'NaN'),(5,'1.001'),(5,'-1.00'),(3,'unknown'),(0,'other-tenant'),(7,'EUR'),(6,'')])
@@ -154,6 +171,31 @@ def test_weekly_llm_validation():
     assert explain_weekly(body, Fake(valid))['reason'] == 'insufficient_data'
 
 
+def test_explain_weekly_requires_decomposition_ids_without_numbers():
+    captured = {}
+
+    class Capture:
+        def generate_json(self, **kwargs):
+            captured['system'] = kwargs['system']
+            return SimpleNamespace(
+                data={'claims': [{'explanation': '销量价格与结构共同解释了销售额变化 请查看所引证据', 'evidence_ids': ['ev-volume', 'ev-price', 'ev-mix']}]},
+                meta=SimpleNamespace(model='offline-test'),
+            )
+
+    body = {
+        'metrics': {'data_quality': {'complete': True}, 'decomposition': {'status': 'OK'}},
+        'evidence': [{'id': 'ev-volume'}, {'id': 'ev-price'}, {'id': 'ev-mix'}, {'id': 'ev-residual'}],
+    }
+    assert explain_weekly(body, Capture())['status'] == 'llm_success'
+    assert 'ev-volume' in captured['system'] and 'ev-price' in captured['system'] and 'ev-mix' in captured['system']
+    assert 'ev-residual' in captured['system']
+    numbered = Fake({'claims': [{'explanation': '价格效应为 10 美元', 'evidence_ids': ['ev-price']}]})
+    assert explain_weekly(body, numbered)['status'] == 'deterministic_fallback'
+    plain = {'metrics': {'data_quality': {'complete': True}, 'decomposition': {'status': 'INSUFFICIENT_DATA'}}, 'evidence': [{'id': 'ev-sales'}]}
+    explain_weekly(plain, Capture())
+    assert 'ev-volume' not in captured['system']
+
+
 def test_weekly_default_week_and_empty(client, approver):
     result = client.post('/api/weekly-reports', headers=approver, json={'end_date':'2001-01-07','use_llm':True}).json()
     assert result['metrics']['current']['sales'] == 0
@@ -162,6 +204,15 @@ def test_weekly_default_week_and_empty(client, approver):
     assert result['analysis']['status'] == 'deterministic_fallback'
     result = client.post('/api/weekly-reports', headers=approver, json={}).json()
     assert date.fromisoformat(result['period']['end_date']).weekday() == 6
+
+
+def test_weekly_price_suggestion_abstains_when_costs_are_unproven(client, approver):
+    upload(client, approver, 'orders', ORDERS, [['us-store', 'zero-cost', '2020-01-08', 'TRAVEL-BAG-01', 1, '10.00', '0.00', 'USD']])
+    report = client.post('/api/weekly-reports', headers=approver, json={'end_date': '2020-01-12', 'store_id': 'us-store'}).json()
+    suggestion = next(item for item in report['pricing_suggestions'] if item['sku'] == 'TRAVEL-BAG-01')
+    assert suggestion['status'] == 'INSUFFICIENT_DATA'
+    assert suggestion['suggested_price'] is None
+    assert suggestion['reason_code'] == 'missing_cost_basis'
 
 
 def test_weekly_requires_complete_utc_week(client, approver):
