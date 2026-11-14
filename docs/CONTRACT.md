@@ -10,7 +10,9 @@
 
 `weekly_chat_threads` 以 `(tenant_id, report_id)` 唯一，`weekly_chat_messages` 仅允许 role 为 `user` / `assistant`，`trace` 不返回前端。已保存 `WeeklyReport.body` 不可变，聊天记录单独持久化。追问只通过只读工具 `get_saved_weekly_report` 读取当前租户的这一份周报，不调用 `weekly_data` 现场重算，也不读取其他周报。读取时可确定性派生 `{store_id}:store` 与 `{store_id}:sku:{sku}` 证据 ID，但不写回历史快照。
 
-成功 claim 的 evidence ID 必须来自本轮完整工具结果；回答中的阿拉伯数字必须能在所引证据中找到，整数美分允许换算为两位小数美元，SKU、日期和证据 ID 等标识符先屏蔽再抽数字。工具结果超过 `LLM_TOOL_RESULT_MAX_BYTES` 时失败并降级，不截断证据或保留残缺引用。该工具不属于全局 `LLM_TOOL_ALLOWLIST`，也不暴露给 MCP；追问路径没有采购、调价、预算或执行工具。
+成功 claim 的 evidence ID 必须来自本轮完整工具结果；回答中的阿拉伯数字必须能在所引证据中找到，仅已知金额字段及利润桥金额允许由整数美分换算为两位小数美元，库存、件数、天数、MOQ 等不换算。嵌套对象按叶子字段名判断，SKU、日期和证据 ID 等标识符先屏蔽再抽数字。工具结果按不可信数据标记，保留全部引用 ID、来源和必要标量，不携带订单 ID 长列表或重复公式；对比期统一放在 `metrics.previous_period`。工具结果超过 `LLM_TOOL_RESULT_MAX_BYTES` 时失败并降级，不截断证据或保留残缺引用。该工具不属于全局 `LLM_TOOL_ALLOWLIST`，也不暴露给 MCP；追问路径没有采购、调价、预算或执行工具。
+
+创建线程和初次上限检查在短事务内完成；LLM 与工具循环在事务外调用。保存前通过短事务中的线程行锁（SQLite 为 `BEGIN IMMEDIATE`）再次检查 20 条上限，原子写入问答和审计。并发填满时返回 422 `weekly_chat_limit`，不返回未保存的回答。模型调用阶段不持有写事务。
 
 ## 领域与口径
 

@@ -53,6 +53,31 @@ it('restores saved chat and highlights original, store and SKU citations', async
   expect(container.querySelector('details')).toHaveAttribute('open')
 })
 
+it('highlights visible inventory and profit bridge rows for chat citations', async () => {
+  const report = {...snapshot,
+    metrics: {...snapshot.metrics, drivers: [{metric: 'sales', label: '销售额', contribution: 1000}]},
+    inventory: {items: [{evidence_id: 'inventory-test', sku: 'BAG-01', store_id: 'us-store',
+      on_hand: 2, available: 1, daily_sales: '1', coverage_days: '1', lead_time_days: 7,
+      timely_inbound: 0, risk: 'CRITICAL', reorder_quantity: 12}], coverage_note: ''},
+    evidence: [...snapshot.evidence, {id: 'inventory-test', value: {on_hand: 2}}],
+  }
+  const citedReply = {...reply, claims: [{explanation: '参见库存和利润桥', evidence_ids: ['inventory-test', 'ev-sales']}]}
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/messages')
+    ? json({thread: {id: 'thread'}, items: [citedReply]}) : json(report)))
+  const {container} = render(<IntelligencePage token='demo-analyst'/> )
+  await userEvent.click(screen.getByRole('button', {name: '生成并保存周报'}))
+  for (const [id, tag] of [['inventory-test', 'tr'], ['ev-sales', 'p']]) {
+    await userEvent.click(await screen.findByRole('button', {name: `查看证据 ${id}`}))
+    const target = container.querySelector(`[data-evidence-id="${id}"]`)
+    expect(target?.tagName.toLowerCase()).toBe(tag)
+    expect(target).toHaveAttribute('data-highlighted', 'true')
+    expect(target).toHaveFocus()
+    expect(target?.closest('details')).toBeNull()
+  }
+  expect(container.querySelector('details')).not.toHaveAttribute('open')
+  expect(container.querySelector('tr[data-evidence-id="inventory-test"]')).toHaveAttribute('data-highlighted', 'false')
+})
+
 it('posts only the question and renders the API failure without fabricated answers', async () => {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith('/messages') && init?.method === 'POST') return json({error: {message: '追问不可用'}}, 503)

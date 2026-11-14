@@ -436,3 +436,14 @@ Windows 11、Python 3.12.8（venv）、Node 24.16.0、npm 11.13.0、Git 2.40.0�
 - `.venv/Scripts/python.exe scripts/mcp_check.py`: passed; six read-only tools exposed, write tools absent, and the saved-report chat tool not exposed.
 - `git diff --check`: passed with line-ending notices only.
 - No live DeepSeek call, PostgreSQL server integration, browser E2E or deployment was run for this increment. The replay is synthetic and does not establish real-model accuracy.
+
+## 2026-11-14 weekly chat review fixes
+
+- `.venv/Scripts/python.exe -m pytest backend/tests -q` with `LLM_API_KEY` empty: **337 passed, 6 skipped**, 1 Starlette deprecation warning, 167.31s. All skips require `PROFITOPS_TEST_POSTGRES_URL`.
+- Regression coverage adds the official dual-store CSV snapshot with the default 16384-byte tool limit and successful Fake API chat; original evidence IDs, bridge values and saved report remain unchanged.
+- Numeric regression rejects dollar conversions of inventory, days, MOQ, case pack and nested unit counts, while retaining monetary conversion and SKU/date masking.
+- Independent database writes succeed inside the Fake provider callback. Twelve synchronized model results produce ten saved question/answer pairs, two `weekly_chat_limit` responses, one thread and ten audit entries.
+- `npm --prefix frontend test -- --run`: **24 passed** in 3 files, including visible inventory and profit-bridge citation highlighting and focus. jsdom emits CSS parsing diagnostics for Tailwind styles; all tests pass.
+- `npm --prefix frontend run build`: passed, with the existing bundle warning (506.05 kB main chunk).
+- `.venv/Scripts/python.exe backend/evals/weekly_chat_replay.py`: **8/8**, `network_calls=0`. `.venv/Scripts/python.exe scripts/mcp_check.py`: passed; six read-only tools, saved-report chat tool absent.
+- No schema migration is added or run against the demo database. Live DeepSeek, PostgreSQL integration, browser E2E and deployment remain unverified for this fix.
