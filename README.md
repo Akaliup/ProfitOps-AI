@@ -67,6 +67,8 @@ python scripts/dev.py
 
 不带 `--demo-db` 时，脚本使用 Settings / `.env` 的 `PROFITOPS_DATABASE_URL`，未配置时写入 `data/profitops.db`。五分钟演示请加上 `--demo-db`，只使用 `data/demo-copy.db`。删除对应数据库文件可做全新初始化（会清除该文件里的审批与审计历史）。脚本不会对运行库执行 Alembic upgrade。
 
+`PROFITOPS_AUTO_SEED` 默认为 true。空的演示库在 uvicorn 启动时写入 60 天账本和知识库，不需要再调用 `POST /api/demo/seed`；已有种子不会被删除。九页工作台的实现范围、无模型降级和广告 CSV 边界见 [docs/WORKSPACE_DELIVERY.md](docs/WORKSPACE_DELIVERY.md)。
+
 ### 接入 DeepSeek（可选）
 
 不配置任何变量也能完整运行。要启用真实 LLM，在项目根目录的 `.env`（已被 Git 忽略）或后端进程环境中设置：

@@ -11,6 +11,8 @@ python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8010
 npm --prefix frontend run dev
 ```
 
+默认 `PROFITOPS_DEMO_MODE=true` 且 `PROFITOPS_AUTO_SEED=true`。指向一个新的 SQLite 文件时，这次启动就会写入演示身份、`demo-60d-v1` 账本和知识库，不必再调 `POST /api/demo/seed`。重复启动不删除已有审批和审计。不要把 `PROFITOPS_DATABASE_URL` 指到已有的 `data/profitops.db` 来做重置。隔离演示用 `python scripts/dev.py --demo-db`，它只使用 `data/demo-copy.db`。九页范围见 [WORKSPACE_DELIVERY.md](WORKSPACE_DELIVERY.md)。
+
 Docker Compose（PostgreSQL 16 + 后端 + nginx 前端）：
 
 ```bash
