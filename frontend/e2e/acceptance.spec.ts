@@ -108,7 +108,7 @@ test('Agent 运维：角色限制、真实聚合与 Trace 跳转', async ({ page
   await page.goto('/')
   await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
   await page.getByLabel('演示身份').selectOption('demo-approver')
-  await page.getByRole('button', { name: /Agent 运维/ }).click()
+  await page.getByRole('button', { name: /运行与评测/ }).click()
   await expect(page.getByRole('heading', { name: '任务队列' })).toBeVisible()
   await expect(page.getByText('最近失败任务')).toBeVisible()
   // Two Playwright workers seed a failed analysis each; match this worker's
@@ -125,7 +125,7 @@ test('失败状态展示与手动重试（真实 Worker）', async ({ page }) =>
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
-  await page.getByRole('button', { name: /Agent 工作台/ }).click()
+  await page.getByRole('button', { name: /经营调查/ }).click()
   // Another spec may have produced a newer analysis in the shared database;
   // select the seeded failed one explicitly instead of relying on ordering.
   await page.getByLabel('历史分析').selectOption(fixtures.failed_analysis_id)
@@ -152,7 +152,7 @@ test('知识库页面：新增、检索与停用（真实 API）', async ({ page
   await page.goto('/')
   await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
   await page.getByLabel('演示身份').selectOption('demo-approver')
-  await page.getByRole('button', { name: /运营知识库/ }).click()
+  await page.getByRole('button', { name: /知识与数据/ }).click()
 
   await page.getByLabel('知识标题').fill(title)
   await page.getByLabel('知识来源').fill(`e2e://acceptance/${marker}`)

@@ -12,8 +12,8 @@ test('Capture multi-store intelligence screenshots', async ({ page }) => {
   await expect(page.getByText('销售在增长，利润却没有跟上。')).toBeVisible()
 
   // 2. Go to data import page
-  await page.getByRole('button', { name: '数据导入' }).click()
-  await expect(page.getByRole('heading', { name: '数据导入', level: 1 })).toBeVisible()
+  await page.getByRole('button', { name: '知识与数据' }).click()
+  await expect(page.getByRole('heading', { name: '知识与数据', level: 1 })).toBeVisible()
 
   const ordersCsvPath = path.resolve('..', 'docs', 'examples', 'intelligence', 'orders.csv')
   const ordersContent = fs.readFileSync(ordersCsvPath, 'utf8')
@@ -45,6 +45,7 @@ test('Capture multi-store intelligence screenshots', async ({ page }) => {
   expect(inventoryResponse.ok(), await inventoryResponse.text()).toBeTruthy()
 
   // 3. Navigate to weekly intelligence page
+  await page.getByRole('button', { name: '库存建议' }).click()
   await page.getByRole('button', { name: '经营周报与库存' }).click()
   await expect(page.getByText('多店铺经营周报', { exact: true })).toBeVisible()
 

@@ -742,6 +742,71 @@ def create_app(settings: Settings | None = None, *, inline_jobs: bool | None = N
                 query = query.where(AuditLog.request_id == request_id)
             return {"items": [audit_view(row) for row in session.scalars(query).all()]}
 
+    def _proposal_payload(row, replayed: bool):
+        payload = recommendation_view(row, None)
+        payload["replayed"] = replayed
+        payload["margin_check"] = (row.body or {}).get("proposal", {}).get("margin_check")
+        return payload
+
+    @app.get("/api/workspace/overview", tags=["workspace"])
+    def workspace_overview(start_date: date | None = None, end_date: date | None = None, store_id: str | None = None, actor: Actor = Depends(identity)):
+        from .workspace import build_overview
+        with factory() as session:
+            return build_overview(session, actor.tenant_id, start_date, end_date, store_id)
+
+    @app.get("/api/workspace/campaigns", tags=["workspace"])
+    def workspace_campaigns(start_date: date | None = None, end_date: date | None = None, store_id: str | None = None, actor: Actor = Depends(identity)):
+        from .workspace import list_campaigns
+        with factory() as session:
+            return list_campaigns(session, actor.tenant_id, start_date, end_date, store_id)
+
+    @app.get("/api/workspace/access", tags=["workspace"])
+    def workspace_access(actor: Actor = Depends(identity)):
+        from .workspace import access_view
+        return access_view(actor, llm_configured=bool(llm), llm_provider=settings.llm_provider, llm_model=settings.llm_model)
+
+    @app.get("/api/workspace/demo-csv/{kind}", tags=["workspace"])
+    def workspace_demo_csv(kind: str, actor: Actor = Depends(identity)):
+        from .workspace import demo_csv
+        with factory() as session:
+            body, filename = demo_csv(session, actor.tenant_id, kind)
+        return PlainTextResponse(body, media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.get("/api/evals", tags=["workspace"])
+    def evals(limit: int = Query(default=20, ge=1, le=50), actor: Actor = Depends(identity)):
+        from .workspace import list_evals
+        with factory() as session:
+            return list_evals(session, actor.tenant_id, limit)
+
+    @app.post("/api/evals/offline", tags=["workspace"])
+    def evals_offline(request: Request, actor: Actor = Depends(identity)):
+        from .workspace import run_offline_eval
+        with factory.begin() as session:
+            if engine.dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            return run_offline_eval(session, actor, request.state.request_id)
+
+    def _run_proposal(builder, payload, request, actor):
+        with factory.begin() as session:
+            if engine.dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            row, replayed = builder(session, actor, request.state.request_id, payload)
+            return _proposal_payload(row, replayed)
+
+    from .proposals import PriceProposalInput, ProposalScope, create_budget, create_price_review, create_replenishment
+
+    @app.post("/api/proposals/replenishment", tags=["workspace"])
+    def propose_replenishment(payload: ProposalScope, request: Request, actor: Actor = Depends(identity)):
+        return _run_proposal(create_replenishment, payload, request, actor)
+
+    @app.post("/api/proposals/budget", tags=["workspace"])
+    def propose_budget(payload: ProposalScope, request: Request, actor: Actor = Depends(identity)):
+        return _run_proposal(create_budget, payload, request, actor)
+
+    @app.post("/api/proposals/price", tags=["workspace"])
+    def propose_price(payload: PriceProposalInput, request: Request, actor: Actor = Depends(identity)):
+        return _run_proposal(create_price_review, payload, request, actor)
+
     return app
 
 
