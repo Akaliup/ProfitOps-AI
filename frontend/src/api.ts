@@ -1,4 +1,4 @@
-import type { Analysis, Audit, Demo, Execution, ImportAdapter, ImportSummary, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope } from './types'
+import type { AccessView, Analysis, Audit, CampaignReport, Demo, EvalList, EvalReport, Execution, ImportAdapter, ImportSummary, InventoryReport, KnowledgeDocument, KnowledgeDocumentInput, KnowledgeSearch, Metrics, OpsSummary, Recommendation, Scope, WorkspaceOverview } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public requestId: string, public status: number, public payload?: unknown) { super(message) }
@@ -64,4 +64,24 @@ export const api = {
   previewImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '', adapter = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}/preview` : `/api/data/${kind}/preview`, token, text, filename, mapping, adapter),
   commitImport: (token: string, kind: 'orders' | 'operations' | 'ads' | 'inventory', text: string, filename: string, mapping = '', adapter = '') => csvRequest(kind === 'operations' ? `/api/imports/${kind}` : `/api/data/${kind}/commit`, token, text, filename, mapping, adapter),
   importTemplateUrl: (kind: 'orders' | 'operations' | 'ads' | 'inventory') => `/api/data/template/${kind}`,
+  workspace: (token: string, demo: Demo, scope: Scope) => request<WorkspaceOverview>(`/api/workspace/overview?${new URLSearchParams(scopeBody(demo, scope))}`, token),
+  campaigns: (token: string, demo: Demo, scope: Scope) => request<CampaignReport>(`/api/workspace/campaigns?${new URLSearchParams(scopeBody(demo, scope))}`, token),
+  inventory: (token: string, asOf: string, storeId = '') => request<InventoryReport>(`/api/inventory?as_of=${asOf}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}`, token),
+  access: (token: string) => request<AccessView>('/api/workspace/access', token),
+  evals: (token: string) => request<EvalList>('/api/evals', token),
+  runEval: (token: string) => request<EvalReport>('/api/evals/offline', token, { method: 'POST' }),
+  proposeReplenishment: (token: string, asOf: string, storeId = '') => request<Recommendation & { replayed?: boolean; margin_check?: { ok: boolean; text: string } | null }>('/api/proposals/replenishment', token, { method: 'POST', body: JSON.stringify({ as_of: asOf, ...(storeId ? { store_id: storeId } : {}) }) }),
+  proposeBudget: (token: string, demo: Demo, scope: Scope) => request<Recommendation & { replayed?: boolean }>('/api/proposals/budget', token, { method: 'POST', body: JSON.stringify(scopeBody(demo, scope)) }),
+  proposePrice: (token: string, storeId: string, sku: string, proposedPriceCents: number) => request<Recommendation & { replayed?: boolean; margin_check?: { ok: boolean; text: string } | null }>('/api/proposals/price', token, { method: 'POST', body: JSON.stringify({ store_id: storeId, sku, proposed_price_cents: proposedPriceCents }) }),
+  demoCsv: async (token: string, kind: 'orders' | 'inventory' | 'ads') => {
+    const headers = new Headers({ Authorization: `Bearer ${token}` })
+    const response = await fetch(`/api/workspace/demo-csv/${kind}`, { headers })
+    const text = await response.text()
+    if (!response.ok) {
+      let message = '演示 CSV 不可用'
+      try { message = JSON.parse(text)?.error?.message ?? message } catch { /* 文本错误 */ }
+      throw new ApiError(message, 'demo_csv_unavailable', response.headers.get('X-Request-ID') ?? '', response.status)
+    }
+    return text
+  },
 }

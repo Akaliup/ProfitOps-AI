@@ -38,8 +38,8 @@ export function AppSidebar({ page, pending, collapsed, mobileOpen, demo, identit
           <BarChart3 className='size-4' />
         </div>
         <div className={cn('grid min-w-0 flex-1 leading-tight', collapsed && 'md:hidden')}>
-          <span className='truncate text-sm font-semibold'>ProfitOps AI</span>
-          <span className='truncate text-xs text-muted-foreground'>跨境增长团队 · 演示</span>
+          <span className='truncate text-sm font-semibold text-[#F4F7F5]'>ProfitOps</span>
+          <span className='truncate text-[11px] tracking-wide text-[#8A9992]'>电商经营工作台</span>
         </div>
       </div>
 
@@ -88,7 +88,7 @@ export function AppSidebar({ page, pending, collapsed, mobileOpen, demo, identit
           <div className='flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold'>{isApprover ? '审' : '析'}</div>
           <div className={cn('grid min-w-0 flex-1 leading-tight', collapsed && 'md:hidden')}>
             <span className='truncate text-sm font-medium'>{identity?.name ?? '连接中'}</span>
-            <span className='truncate text-xs text-muted-foreground'>{isApprover ? '审批负责人' : '经营分析师'} · 本地演示</span>
+            <span className='truncate text-xs text-[#8A9992]'>{isApprover ? '审批负责人' : '经营分析师'} · 演示租户</span>
           </div>
         </div>
       </div>

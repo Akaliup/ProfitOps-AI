@@ -25,14 +25,20 @@ APPROVAL_SNAPSHOT_VERSION = 1
 
 
 class SimulationAction(StrictModel):
-    type: Literal["adjust_ad_budget", "create_review_task"]
+    type: Literal["adjust_ad_budget", "create_review_task", "simulate_replenishment", "simulate_price_review"]
     simulation: Literal[True] = True
     product_id: str
     sku: str
     adjustment_pct: int = Field(default=15, ge=1, le=30)
-    baseline_daily_budget: int = Field(ge=0)
-    proposed_daily_budget: int = Field(ge=0)
+    baseline_daily_budget: int = Field(default=0, ge=0)
+    proposed_daily_budget: int = Field(default=0, ge=0)
     source_period: dict
+    replenish_quantity: int = Field(default=0, ge=0)
+    line_count: int = Field(default=1, ge=1, le=500)
+    proposed_price_cents: int = Field(default=0, ge=0)
+    margin_ok: bool = True
+    margin_pct: float | None = None
+    margin_floor_pct: float = Field(default=28, ge=0, le=100)
 
 
 @dataclass
@@ -246,6 +252,39 @@ def create_recommendation(
     return RecommendationOutput(recommendation_id=recommendation.id, status=recommendation.status)
 
 
+def assert_margin_allows(action: dict, *, stage: str) -> None:
+    """Server-side gross-margin floor. A missing flag is not a failure.
+
+    Older ad-budget actions have no margin fields. Only an explicit
+    ``margin_ok: false`` blocks approval and simulation.
+    """
+    if not isinstance(action, dict) or action.get("margin_ok") is not False:
+        return
+    raise DomainError(
+        "margin_redline",
+        "毛利硬校验未通过，提案不可批准或模拟执行",
+        409,
+        {
+            "stage": stage,
+            "margin_pct": action.get("margin_pct"),
+            "margin_floor_pct": action.get("margin_floor_pct", 28),
+            "sku": action.get("sku"),
+            "simulation": True,
+        },
+        audit_action="recommendation.margin_blocked",
+    )
+
+
+def assert_simulation_only(action: dict) -> None:
+    if not isinstance(action, dict) or action.get("simulation") is False:
+        raise DomainError(
+            "simulation_required",
+            "只允许 simulation=true 的模拟动作，不会改价、改预算或采购",
+            409,
+            audit_action="execution.simulation_required",
+        )
+
+
 def decide(session: Session, recommendation_id: str, decision: str, reason: str, actor: Actor, request_id: str):
     require_role(actor, "approver")
     status = "approved" if decision == "approve" else "rejected"
@@ -257,6 +296,9 @@ def decide(session: Session, recommendation_id: str, decision: str, reason: str,
         raise DomainError("recommendation_not_found", "建议不存在", 404)
     if recommendation.status != "pending_approval":
         raise DomainError("invalid_transition", "只有待审批建议可以批准或拒绝", 409)
+    if decision == "approve":
+        assert_margin_allows(recommendation.action, stage="approve")
+        assert_simulation_only(recommendation.action)
     body = recommendation.body if isinstance(recommendation.body, dict) else {}
     snapshot = _approval_snapshot(session, recommendation, actor.tenant_id) if status == "approved" else None
     if snapshot is not None:
@@ -292,6 +334,10 @@ def decide(session: Session, recommendation_id: str, decision: str, reason: str,
 
 
 def simulate_action(action: SimulationAction) -> dict:
+    if action.simulation is not True:
+        raise ValueError("simulation 必须为 true")
+    if action.margin_ok is False:
+        raise ValueError("毛利红线未通过，拒绝模拟执行")
     if action.type == "adjust_ad_budget":
         if action.proposed_daily_budget > action.baseline_daily_budget:
             raise ValueError("模拟预算不能高于参考预算")
@@ -300,6 +346,23 @@ def simulate_action(action: SimulationAction) -> dict:
             "action_type": action.type, "sku": action.sku,
             "before": {"daily_budget": action.baseline_daily_budget},
             "after": {"daily_budget": action.proposed_daily_budget}, "currency": "USD",
+            "side_effect_count": 1, "external_calls": 0,
+        }
+    if action.type == "simulate_replenishment":
+        return {
+            "simulation": True,
+            "message": f"模拟执行完成：已生成 {action.sku} 等 {action.line_count} 个 SKU 的补货预览，数量 {action.replenish_quantity}。未向供应商下单。",
+            "action_type": action.type, "sku": action.sku,
+            "replenish_quantity": action.replenish_quantity, "line_count": action.line_count,
+            "side_effect_count": 1, "external_calls": 0,
+        }
+    if action.type == "simulate_price_review":
+        return {
+            "simulation": True,
+            "message": "模拟执行完成：仅保存调价复核预览，售价未改变，未连接店铺。",
+            "action_type": action.type, "sku": action.sku,
+            "proposed_price_cents": action.proposed_price_cents,
+            "margin_pct": action.margin_pct, "currency": "USD",
             "side_effect_count": 1, "external_calls": 0,
         }
     return {"simulation": True, "message": "模拟执行完成：已生成成本核查任务预览。", "sku": action.sku, "action_type": action.type, "side_effect_count": 1, "external_calls": 0}
@@ -316,6 +379,14 @@ def execution_output(execution: Execution, replayed=False):
 def execute_once(session: Session, recommendation_id: str, key: str, actor: Actor, request_id: str) -> ExecuteOutput:
     require_role(actor, "approver")
     key = scoped_idempotency_key(actor.tenant_id, key)
+    guarded = session.scalar(select(Recommendation).where(
+        Recommendation.id == recommendation_id,
+        Recommendation.tenant_id == actor.tenant_id,
+    ))
+    if guarded is None:
+        raise DomainError("recommendation_not_found", "建议不存在", 404)
+    assert_simulation_only(guarded.action)
+    assert_margin_allows(guarded.action, stage="execute")
     # First write serializes competing transactions on SQLite and locks the row on PostgreSQL.
     claimed = session.execute(update(Recommendation).where(
         Recommendation.id == recommendation_id, Recommendation.status == "approved",

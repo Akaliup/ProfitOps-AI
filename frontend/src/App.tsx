@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, CircleDollarSign, Database, Fingerprint, LoaderCircle, Megaphone, Play, RefreshCw, Search, ShieldCheck, Sparkles, Terminal, TriangleAlert, X, type LucideIcon } from 'lucide-react'
 import { api, ApiError } from './api'
-import type { Analysis, Audit, Demo, Execution, Identity, JobStatus, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope } from './types'
+import type { AccessView, Analysis, Audit, CampaignReport, Demo, EvalList, EvalReport, Execution, Identity, InventoryReport, JobStatus, KnowledgeContext, KnowledgeDocument, KnowledgeSearch, LLMConfig, LLMRun, Metrics, OpsSummary, Recommendation, Scope, WorkspaceOverview } from './types'
 import { dateTime, llmReasonLabels, llmStatusLabels, money, percent, signedMoney, statusLabels, terminationLabels } from './format'
 import { pages, type Page } from './navigation'
 import { cn } from './lib/utils'
@@ -9,6 +9,7 @@ import { AppSidebar } from './components/layout/app-sidebar'
 import { AppHeader } from './components/layout/app-header'
 import { IntelligencePage } from './components/intelligence-page'
 import { ImportPage } from './components/imports/import-page'
+import { AdsBoard, AssistantsView, EvalPanel, InventoryBoard, PriceCheckForm, SettingsView } from './components/workspace-views'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from './components/ui/card'
@@ -98,6 +99,13 @@ export default function App() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [workspace, setWorkspace] = useState<WorkspaceOverview | null>(null)
+  const [inventoryReport, setInventoryReport] = useState<InventoryReport | null>(null)
+  const [campaigns, setCampaigns] = useState<CampaignReport | null>(null)
+  const [access, setAccess] = useState<AccessView | null>(null)
+  const [evalReport, setEvalReport] = useState<EvalReport | null>(null)
+  const [evalHistory, setEvalHistory] = useState<EvalList | null>(null)
+  const [showWeekly, setShowWeekly] = useState(false)
   const [execution, setExecution] = useState<Execution | null>(null)
   const [reason, setReason] = useState('已复核证据，批准受控模拟')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -143,6 +151,10 @@ export default function App() {
         api.knowledgeDocuments(identity.token),
       ])
       if (sequence !== loadSequence.current) return
+      let board: WorkspaceOverview | null = null
+      try { if (demo.data_range) board = await api.workspace(identity.token, demo, scope) } catch { board = null }
+      if (sequence !== loadSequence.current) return
+      setWorkspace(board)
       setMetrics(summary); setAnalyses(history.items); setRecommendations(items.items); setAudits(logs.items)
       setDocuments(knowledgeDocs.items)
       setAnalysis(current => history.items.find(item => item.id === current?.id) ?? history.items[0] ?? null)
@@ -168,8 +180,32 @@ export default function App() {
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
-    if (page === 'ops' && isApprover) void loadOps()
+    if (page === 'runs' && isApprover) void loadOps()
   }, [page, isApprover, loadOps])
+  useEffect(() => {
+    if (!identity || !demo?.data_range || page !== 'inventory') return
+    let active = true
+    api.inventory(identity.token, demo.data_range.end_date, scope.storeId).then(value => { if (active) setInventoryReport(value) }).catch(() => { if (active) setInventoryReport(null) })
+    return () => { active = false }
+  }, [identity, demo, page, scope.storeId])
+  useEffect(() => {
+    if (!identity || !demo?.data_range || page !== 'ads') return
+    let active = true
+    api.campaigns(identity.token, demo, scope).then(value => { if (active) setCampaigns(value) }).catch(() => { if (active) setCampaigns(null) })
+    return () => { active = false }
+  }, [identity, demo, page, scope])
+  useEffect(() => {
+    if (!identity || page !== 'settings') return
+    let active = true
+    api.access(identity.token).then(value => { if (active) setAccess(value) }).catch(() => { if (active) setAccess(null) })
+    return () => { active = false }
+  }, [identity, page])
+  useEffect(() => {
+    if (!identity || page !== 'runs') return
+    let active = true
+    api.evals(identity.token).then(value => { if (active) setEvalHistory(value) }).catch(() => { if (active) setEvalHistory(null) })
+    return () => { active = false }
+  }, [identity, page])
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem('profitops-theme', theme)
@@ -206,7 +242,7 @@ export default function App() {
     if (!demo || !identity) return
     void action('analysis', async () => {
       const result = await api.start(identity.token, demo, scope)
-      setAnalysis(result); setPage('agent'); setNotice(result.replayed ? '该分析请求已存在，返回原分析记录' : '分析已启动，正在通过工具读取经营数据')
+      setAnalysis(result); setPage('investigate'); setNotice(result.replayed ? '该分析请求已存在，返回原分析记录' : '分析已启动，正在通过工具读取经营数据')
     })
   }
   function retryAnalysis() {
@@ -223,8 +259,24 @@ export default function App() {
       const value = await api.analysis(identity.token, id)
       setAnalysis(value)
       if (value.recommendation_id) setSelectedId(value.recommendation_id)
-      setPage('agent')
+      setPage('investigate')
       setNotice(`已打开分析 ${id.slice(0, 8)} 的执行轨迹。`)
+    })
+  }
+  function loadDemo(kind: 'orders' | 'inventory' | 'ads') {
+    if (!identity) return
+    void action(`demo-${kind}`, async () => {
+      const text = await api.demoCsv(identity.token, kind)
+      if (kind === 'ads') return
+      const preview = await api.previewImport(identity.token, kind, text, `workspace-${kind}.csv`)
+      if (!isApprover) {
+        setNotice(`预览 ${preview.accepted_rows} 行。分析师不能提交，请切换审批负责人。`)
+        return
+      }
+      const committed = await api.commitImport(identity.token, kind, text, `workspace-${kind}.csv`)
+      setDemo(await api.demo())
+      setNotice(committed.status === 'noop' ? '这份演示 CSV 已在账本中，未重复写入。' : `已提交 ${committed.accepted_rows} 行，批次和来源行已保存。`)
+      await refresh()
     })
   }
   function seed() {
@@ -298,7 +350,9 @@ export default function App() {
   const activePage = pages.find(item => item.id === page)!
   const renderButton = (label = '启动 Profit Agent') => <Button onClick={startAnalysis} disabled={!!busy || !metrics || busyStatuses.includes(analysis?.status ?? '')}>{busy === 'analysis' || busyStatuses.includes(analysis?.status ?? '') ? <LoaderCircle className='size-4 animate-spin' /> : <Sparkles className='size-4' />}{label}</Button>
 
-  return <div className='flex min-h-svh bg-background'>
+  return <div className='min-h-svh bg-background'>
+    <div className='po-banner'><span className='po-dot' aria-hidden='true' /><span><strong>演示账本</strong> · 金额为 USD 美分 · 全部动作为 simulation · 未连接真实店铺、广告、采购或支付</span></div>
+    <div className='flex min-h-[calc(100svh-36px)] bg-background'>
     <AppSidebar
       page={page}
       pending={pending}
@@ -332,10 +386,10 @@ export default function App() {
               <p className='text-sm text-muted-foreground'>{activePage.detail}</p>
             </div>
             <div className='flex flex-wrap items-center gap-2'>
-              <Button variant='outline' size='sm' onClick={() => { setError(''); if (page === 'ops') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}>
+              <Button variant='outline' size='sm' onClick={() => { setError(''); if (page === 'runs') void loadOps(); else void refresh() }} disabled={loading || opsLoading || !!busy}>
                 <RefreshCw className={cn('size-4', (loading || opsLoading) && 'animate-spin')} />刷新数据
               </Button>
-              {!['audit', 'knowledge', 'ops', 'imports'].includes(page) && renderButton()}
+              {['overview', 'investigate'].includes(page) && renderButton()}
             </div>
           </div>
 
@@ -350,7 +404,7 @@ export default function App() {
             <button type='button' className='rounded-sm opacity-70 transition-opacity hover:opacity-100' aria-label='关闭通知' onClick={() => setNotice('')}><X className='size-4' /></button>
           </div>}
 
-          {(page === 'overview' || page === 'agent') && <div className='flex flex-wrap items-center justify-between gap-3'>
+          {['overview', 'investigate', 'inventory', 'ads'].includes(page) && <div className='flex flex-wrap items-center justify-between gap-3'>
             <div className='flex flex-wrap items-center gap-2'>
               <label className='flex items-center gap-2 text-sm text-muted-foreground'>统计周期
                 <NativeSelect aria-label='统计周期' className='w-[170px]' value={scope.days} onChange={event => setScope({ ...scope, days: Number(event.target.value) })}>
@@ -451,6 +505,25 @@ export default function App() {
               </Table>
             </Card>
 
+            {workspace && <Card className='gap-0 overflow-hidden py-0'>
+              <SectionHeading title='分店贡献' description={workspace.stores_reconciled ? '分店销售额与利润加总等于当前总览。' : '分店合计与总览不一致，请先核对导入。'} action={<Badge variant='outline'>{workspace.currency}</Badge>} />
+              <Table>
+                <TableHeader><TableRow><TableHead>店铺</TableHead><TableHead>营收</TableHead><TableHead>利润</TableHead><TableHead>利润率</TableHead><TableHead>利润变化</TableHead></TableRow></TableHeader>
+                <TableBody>{workspace.stores.map(store => <TableRow key={store.id}>
+                  <TableCell><strong>{store.name}</strong><span className='block text-xs text-muted-foreground'>{store.marketplace}</span></TableCell>
+                  <TableCell className='tabular-nums'>{money(store.current.sales)}</TableCell>
+                  <TableCell className='tabular-nums'>{money(store.current.net_profit)}</TableCell>
+                  <TableCell className='tabular-nums'>{store.current.margin_pct == null ? '—' : `${store.current.margin_pct.toFixed(2)}%`}</TableCell>
+                  <TableCell className={cn('tabular-nums', store.profit_delta < 0 && 'text-destructive')}>{signedMoney(store.profit_delta)}</TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+              <p className='px-5 py-3 text-xs text-muted-foreground'>{workspace.note} {workspace.inventory.low ? `低于补货门槛 ${workspace.inventory.low} 个 SKU。` : '库存快照未导入时不显示安全线数量。'}</p>
+            </Card>}
+            {workspace && workspace.anomalies.length > 0 && <div className='grid gap-3'>{workspace.anomalies.map(item => <Card key={item.code} className='flex-row items-center gap-4 p-4'>
+              <div className='min-w-0 flex-1'><h3 className='text-sm font-semibold'>{item.title}</h3><p className='text-xs text-muted-foreground'>{item.text}</p></div>
+              <Button variant='outline' size='sm' onClick={() => setPage(item.target)}>{item.target === 'investigate' ? '查看调查' : item.target === 'inventory' ? '查看库存' : '查看广告'}</Button>
+            </Card>)}</div>}
+
             <div className='flex flex-wrap items-start gap-2 text-xs text-muted-foreground'>
               <Database className='mt-0.5 size-3.5 shrink-0' />
               <span className='flex-1'>净利润 = 销售额 − 折扣 − 退款 − 采购 − 广告 − 履约 − 平台费 − 其他可变成本。零分母显示“无可比基数”。</span>
@@ -458,7 +531,7 @@ export default function App() {
             </div>
           </div>}
 
-          {page === 'agent' && <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]'>
+          {page === 'investigate' && <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]'>
             <Card className='gap-0 self-start py-0'>
               <SectionHeading
                 title='Profit Agent'
@@ -539,7 +612,7 @@ export default function App() {
             </div>
           </div>}
 
-          {page === 'ops' && <div className='space-y-6'>
+          {page === 'runs' && <div className='space-y-6'>
             {!isApprover ? <Card className='p-5'><Empty title='需要审批负责人权限' text='Agent 运维视图包含跨任务的失败详情与模型成本，仅审批负责人可查看。请使用右上角切换为审批负责人。' /></Card> : <>
               <div className='flex flex-wrap items-center justify-between gap-3'>
                 <label className='flex items-center gap-2 text-sm text-muted-foreground'>统计窗口
@@ -632,15 +705,62 @@ export default function App() {
             </>}
           </div>}
 
-          {page === 'weekly' && identity && <IntelligencePage key={identity.token} token={identity.token} stores={demo?.stores ?? []} />}
+          {page === 'inventory' && <div className='space-y-4'>
+            <div className='flex flex-wrap gap-2'>
+              <Button variant='outline' onClick={() => setShowWeekly(value => !value)}>{showWeekly ? '收起经营周报' : '经营周报与库存'}</Button>
+            </div>
+            <InventoryBoard report={inventoryReport} busy={busy === 'replenish'} onPropose={() => {
+              if (!identity || !demo?.data_range) return
+              void action('replenish', async () => {
+                const result = await api.proposeReplenishment(identity.token, demo.data_range!.end_date, scope.storeId)
+                setSelectedId(result.id)
+                setPage('approvals')
+                setNotice(result.replayed ? '相同账本下的补货提案已存在。' : '补货提案已写入审批中心，尚未执行。')
+                await refresh()
+              })
+            }} />
+            {showWeekly && identity && <IntelligencePage key={identity.token} token={identity.token} stores={demo?.stores ?? []} />}
+          </div>}
 
-          {page === 'imports' && identity && <ImportPage
+          {page === 'assistants' && <AssistantsView onOpen={next => { setPage(next); setError('') }} onInvestigate={startAnalysis} />}
+          {page === 'ads' && <AdsBoard report={campaigns} busy={busy === 'budget'} onPropose={() => {
+            if (!identity || !demo) return
+            void action('budget', async () => {
+              const result = await api.proposeBudget(identity.token, demo, scope)
+              setSelectedId(result.id)
+              setPage('approvals')
+              setNotice(result.replayed ? '相同账本下的预算提案已存在。' : '预算提案已进入审批中心。真实广告预算未改变。')
+              await refresh()
+            })
+          }} />}
+          {page === 'settings' && <SettingsView access={access} />}
+
+          {page === 'knowledge' && identity && <Card className='p-4'>
+            <h2 className='text-base font-semibold'>演示数据</h2>
+            <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>订单和库存 CSV 按当前租户的店铺与 SKU 生成，预览和提交都走后端。广告 CSV 会返回拒绝，避免把活动花费再加进已有每日广告账单。</p>
+            <div className='mt-3 flex flex-wrap gap-2'>
+              <Button variant='outline' onClick={() => loadDemo('orders')} disabled={!!busy}>载入演示订单</Button>
+              <Button variant='outline' onClick={() => loadDemo('inventory')} disabled={!!busy}>载入演示库存</Button>
+              <Button variant='outline' onClick={() => loadDemo('ads')} disabled={!!busy}>检查广告 CSV</Button>
+            </div>
+          </Card>}
+          {page === 'knowledge' && identity && <ImportPage
             token={identity.token}
             isApprover={isApprover}
             onImported={() => { void refresh() }}
           />}
 
-          {page === 'approvals' && <div className='grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]'>
+          {page === 'approvals' && <div className='space-y-4'>
+            <PriceCheckForm stores={demo?.stores ?? []} busy={!!busy} onSubmit={(storeId, sku, cents) => {
+              if (!identity) return
+              void action('price', async () => {
+                const result = await api.proposePrice(identity.token, storeId, sku, cents)
+                setSelectedId(result.id)
+                setNotice(result.margin_check?.text ?? '调价校验已写入审批中心。')
+                await refresh()
+              })
+            }} />
+          <div className='grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]'>
             <Card className='gap-0 self-start overflow-hidden py-0'>
               <SectionHeading title='经营建议' description={`${pending} 项等待人工复核`} action={<Badge variant='secondary' className='tabular-nums'>{recommendations.length}</Badge>} />
               {!recommendations.length ? <div className='p-4'><Empty title='还没有待处理建议' text='先启动 Profit Agent，异常分析通过证据核验后会生成建议。' /></div> : recommendations.map(item => <button key={item.id} type='button' className={cn('block w-full border-t px-4 py-4 text-left transition-colors first:border-t-0 hover:bg-muted/50', selected?.id === item.id && 'bg-muted')} onClick={() => { setSelectedId(item.id); setExecution(null); setNotice('') }}>
@@ -708,11 +828,13 @@ export default function App() {
 
               <div className='border-b px-5 py-4'>
                 <div className='flex items-center gap-2'><h3 className='text-sm font-medium'>待执行的模拟动作</h3><Badge variant='outline' className='text-[10px]'>SIMULATION ONLY</Badge></div>
+                {selected.action.margin_ok === false && <div className='mt-3 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive'>毛利硬校验未通过。{selected.body.proposal?.margin_check?.text} 服务端会拒绝批准和模拟执行。</div>}
+                {selected.body.proposal?.diffs && <div className='mt-3 grid gap-2 sm:grid-cols-2'>{selected.body.proposal.diffs.map(diff => <div key={diff.item} className='rounded-lg border p-3 text-sm'><div className='text-xs text-muted-foreground'>{diff.item}</div><div className='text-muted-foreground line-through'>{diff.before}</div><div className='font-medium'>{diff.after}</div></div>)}</div>}
                 {selected.action.type === 'adjust_ad_budget' ? <div className='mt-3 flex items-center gap-6 rounded-lg border bg-muted/30 p-4'>
                   <div><span className='text-xs text-muted-foreground'>参考日预算</span><strong className='mt-1 block text-xl font-semibold tabular-nums'>{money(selected.action.baseline_daily_budget)}</strong></div>
                   <ArrowRight className='size-4 text-muted-foreground' />
                   <div><span className='text-xs text-muted-foreground'>模拟新预算</span><strong className='mt-1 block text-xl font-semibold tabular-nums'>{money(selected.action.proposed_daily_budget)}</strong></div>
-                </div> : <p className='mt-2 text-sm text-muted-foreground'>为 {selected.action.sku} 创建成本核查任务预览。</p>}
+                </div> : selected.action.type === 'simulate_replenishment' ? <p className='mt-2 text-sm text-muted-foreground'>为 {selected.action.sku} 等 {selected.action.line_count ?? 1} 个 SKU 生成补货预览，主 SKU 数量 {selected.action.replenish_quantity ?? 0}。不会向供应商下单。</p> : selected.action.type === 'simulate_price_review' ? <p className='mt-2 text-sm text-muted-foreground'>调价复核：拟售价 {money(selected.action.proposed_price_cents ?? 0)}，成交毛利率 {selected.action.margin_pct ?? '—'}% ，红线 {selected.action.margin_floor_pct ?? 28}%。不会修改售价。</p> : <p className='mt-2 text-sm text-muted-foreground'>为 {selected.action.sku} 创建成本核查任务预览。</p>}
                 <p className='mt-2 text-xs text-muted-foreground'>目标 SKU：{selected.action.sku}。该动作只写入模拟记录，不会调用广告、采购或支付系统。</p>
               </div>
 
@@ -734,7 +856,7 @@ export default function App() {
                   </label>
                   <div className='mt-3 flex justify-end gap-2'>
                     <Button variant='destructive' onClick={() => decide('reject')} disabled={!!busy || reason.trim().length < 2}><X className='size-4' />拒绝建议</Button>
-                    <Button onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2}><Check className='size-4' />批准建议</Button>
+                    <Button onClick={() => decide('approve')} disabled={!!busy || reason.trim().length < 2 || selected.action.margin_ok === false}><Check className='size-4' />{selected.action.margin_ok === false ? '不可通过（硬校验）' : '批准建议'}</Button>
                   </div>
                 </>}
                 {selected.approval_reason && <p className='mt-2 text-xs text-muted-foreground'>审批意见：{selected.approval_reason}</p>}
@@ -758,7 +880,7 @@ export default function App() {
 
               {(selected.execution || execution?.recommendation_id === selected.id) && <ExecutionResult result={execution?.recommendation_id === selected.id ? execution : selected.execution!} />}
             </Card> : <Card className='p-5'><Empty title='选择一条建议' text='建议会展示统计范围、证据、影响情景与审批状态。' /></Card>}
-          </div>}
+          </div></div>}
 
           {page === 'knowledge' && <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]'>
             <Card className='gap-0 self-start py-0'>
@@ -795,8 +917,17 @@ export default function App() {
             </Card>
           </div>}
 
-          {page === 'audit' && <Card className='gap-0 overflow-hidden py-0'>
-            <SectionHeading title='决策与执行轨迹' description={`最近 ${audits.length} 条事件 · 记录批准、拒绝、模拟、失败与重复请求`} action={<Badge variant='outline' className='gap-1'><Fingerprint className='size-3' />请求级追踪</Badge>} />
+          {page === 'runs' && <EvalPanel report={evalReport} history={evalHistory} busy={busy === 'eval'} onRun={() => {
+            if (!identity) return
+            void action('eval', async () => {
+              const result = await api.runEval(identity.token)
+              setEvalReport(result)
+              setEvalHistory(await api.evals(identity.token))
+              setNotice(`离线评测已写入审计：通过 ${result.passed} / ${result.total}，模型调用 ${result.llm_calls}。`)
+            })
+          }} />}
+          {page === 'runs' && <Card className='gap-0 overflow-hidden py-0'>
+            <SectionHeading title='审计日志' description={`最近 ${audits.length} 条事件 · 记录批准、拒绝、模拟、失败与重复请求`} action={<Badge variant='outline' className='gap-1'><Fingerprint className='size-3' />请求级追踪</Badge>} />
             <form className='flex flex-wrap items-end gap-2 border-b px-5 py-4' onSubmit={event => { event.preventDefault(); setAuditFilter(auditQuery.trim()) }}>
               <label className='flex flex-col gap-1.5 text-xs font-medium text-muted-foreground'>请求 ID<Input aria-label='按请求 ID 过滤' placeholder='精确匹配请求 ID' value={auditQuery} onChange={event => setAuditQuery(event.target.value)} /></label>
               <Button variant='secondary' type='submit'>筛选</Button>
@@ -822,6 +953,7 @@ export default function App() {
         <span>ProfitOps AI <span className='text-border'>/</span> 从数据到决策的完整闭环</span>
         <span className='flex items-center gap-1.5'><ShieldCheck className='size-3' />所有执行均为模拟 · {demo?.data_range ? '数据已接入' : '等待初始化'}</span>
       </footer>
+    </div>
     </div>
   </div>
 }

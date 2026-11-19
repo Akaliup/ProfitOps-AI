@@ -67,12 +67,18 @@ def tool_data(registry, name, arguments, context):
         stale_codes = {
             "approval_stale", "approval_snapshot_missing", "approval_scope_invalid",
         }
-        status = 409 if error.code in {"not_approved", "idempotency_conflict", *stale_codes, "action_changed"} else 500
+        conflict_codes = {
+            "not_approved", "idempotency_conflict", "action_changed",
+            "margin_redline", "simulation_required", *stale_codes,
+        }
+        status = 409 if error.code in conflict_codes else 500
         audit_action = {
             "action_changed": "execution.action_changed",
             "approval_stale": "execution.stale",
             "approval_snapshot_missing": "execution.stale",
             "approval_scope_invalid": "execution.stale",
+            "margin_redline": "recommendation.margin_blocked",
+            "simulation_required": "execution.simulation_required",
         }.get(error.code)
         raise DomainError(
             error.code, error.message, status, error.details, audit_action=audit_action,

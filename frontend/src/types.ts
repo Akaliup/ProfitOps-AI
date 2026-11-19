@@ -143,10 +143,23 @@ export interface Recommendation {
     knowledge?: KnowledgeContext | null;
     evidence: Evidence[]; primary_driver: Driver; recommendation: string;
     expected_impact: { kind: string; horizon_days: number; profit_improvement_min: number; profit_improvement_max: number; explanation: string };
-    risks: string[]; missing_information: string[]; assumptions: string[]; source: string;
+    risks: string[]; missing_information: string[];     assumptions: string[]; source: string;
     approval?: ApprovalSnapshot | null;
+    proposal?: {
+      kind?: string;
+      margin_check?: { ok: boolean; text: string; margin_pct?: number; floor_pct?: number };
+      diffs?: { item: string; before: string; after: string }[];
+      evidence_notes?: string[];
+      lines?: { sku: string; store_id: string; reorder_quantity: number; risk: string; coverage_days?: string | null }[];
+      campaigns_note?: string;
+    } | null;
   };
-  action: { type: string; simulation: boolean; sku: string; baseline_daily_budget: number; proposed_daily_budget: number };
+  action: {
+    type: string; simulation: boolean; sku: string;
+    baseline_daily_budget: number; proposed_daily_budget: number;
+    margin_ok?: boolean; margin_pct?: number | null; margin_floor_pct?: number;
+    replenish_quantity?: number; line_count?: number; proposed_price_cents?: number;
+  };
   approved_by: string | null; approval_reason: string | null; created_at: string; execution: Execution | null;
 }
 export interface Audit {
@@ -229,3 +242,43 @@ export interface WeeklyChatHistory {
   thread: {id: string; report_id: string; created_at: string} | null;
   items: WeeklyChatMessage[];
 }
+
+export interface WorkspaceOverview {
+  summary: Metrics
+  stores: { id: string; name: string; marketplace: string; current: Totals; previous: Totals; profit_delta: number }[]
+  stores_reconciled: boolean
+  inventory: { as_of: string | null; missing: boolean; low: number; watch: number; healthy: number; over: number; names: string[]; note: string }
+  campaigns: { count: number; weak: number; spend: number; attributed_sales: number; roas: number | null; threshold: number; note: string }
+  anomalies: { code: string; title: string; text: string; target: PageId }[]
+  currency: string
+  source: string
+  note: string
+}
+export type PageId = 'overview' | 'assistants' | 'investigate' | 'inventory' | 'ads' | 'knowledge' | 'approvals' | 'runs' | 'settings'
+export interface CampaignRow {
+  store_id: string; campaign_id: string; campaign_name: string;
+  ad_spend: number; attributed_sales: number; attributed_orders: number;
+  roas: number | null; previous_roas: number | null; previous_spend: number;
+  below_threshold: boolean; evidence_id: string;
+}
+export interface CampaignReport {
+  period: Period; items: CampaignRow[]; spend: number; attributed_sales: number;
+  roas: number | null; weak: number; threshold: number; currency: string; note: string;
+}
+export interface AccessView {
+  actor: { id: string; role: string; tenant_id: string }
+  enforced_by: string
+  columns: string[]
+  rows: { role: string; label: string; implemented: boolean; current: boolean; cells: boolean[]; note?: string }[]
+  integrations: { name: string; state: string; detail: string }[]
+  simulation: boolean
+  note: string
+}
+export interface EvalReport {
+  engine: string; llm_calls: number; external_calls: number;
+  passed: number; failed: number; total: number;
+  cases: { id: string; scene: string; ok: boolean; detail: string }[]
+  note: string
+}
+export interface EvalList { items: { id: string; created_at: string; outcome: string; actor: string; details: EvalReport }[]; note: string }
+export interface InventoryReport { as_of: string; items: InventoryRow[]; missing_inventory: boolean; coverage_note: string }
